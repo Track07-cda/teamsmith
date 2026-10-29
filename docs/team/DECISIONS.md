@@ -1996,3 +1996,11 @@ P387 候选 `f9edff1a6c90c755a147089a3be4cc008baa9b2a` 经 V112 独立实质评�
 不把该默认扩展到 `notify`、会议/Pulse knock 或 `outbox flush --now`，这些路径的草稿保护与显式人工逃生门分别保持。现有一般 delivery-guard 与 say 草稿场景需要通过 OpenSpec delta 精确修改，而非全局取消保护。help/输出不再把 `--now` 当作 say 的可选参数，旧 forced 审计仍需保留实际直投证据。
 
 影响：允许 P390 探索和后续独立提案/实现流程；本决定不授权跳过规格评审、直接改代码或在当前团队发送测试消息。
+
+### D208 · 接受指令上下文瘦身探索，现有项目升级须先保留自定义块内规则（2026-10-29）
+
+P389 探索 `3a32f85f8f20` 获接受进入 Propose。采用 AGENTS 共同短章程、PM 专属启动词、自包含 worker 派单红线、SKILL/references 详细手册的结构；不引入规则数据库或新生成器，不以字数/性能测试代替逐规则审查。
+
+纠正并记录三个升级事实：当前模板已含 begin/end，普通新 AGENTS 约 167 行；已有配置的 bootstrap 不执行 AGENTS writer；约 60 KB 是三类源正文总量，不是每轮固定注入量。`team init` 可无 force 替换已有 Teamsmith managed block并保留块外内容，但不是 AGENTS-only 或全事务命令，裸参数的 roster/session/docs/protected-branch 也必须与现有项目一致。
+
+本项目的 `AGENTS.md:49–76` 有 28 行/1,988 bytes 项目专属纪律位于 managed block 内。未来实际采纳前必须先把这些规则移到标记外并让用户预览 diff，再预览 init 的全部写入和明确参数；产品 Apply 不包含 live init、reload 或共享源采用。现有项目升级不能用 bootstrap 代替。
