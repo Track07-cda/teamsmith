@@ -628,7 +628,7 @@
 | V114 | team say提案独立评审 | dev3 | - | - | review |
 | P393 | team say默认直投实现 | dev | - | - | review |
 | P394 | Pi插件标记式关键回复探索 | dev2 | - | - | review |
-| V115 | 标记式关键回复独立架构复核 | dev3 | - | - | wip |
+| V115 | 标记式关键回复独立架构复核 | dev3 | - | - | review |
 | V116 | team say实现独立复验 | dev2 | - | - | wip |
 
 ## 当前里程碑
