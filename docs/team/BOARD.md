@@ -620,6 +620,7 @@
 | P387 | Agent Self-Reminder OpenSpec提案 | dev2 | - | - | review |
 | V112 | Self-Reminder提案独立评审 | dev3 | - | - | review |
 | P388 | Agent Self-Reminder MVP实现 | dev-bob | - | - | blocked |
+| P389 | 指令上下文与AGENTS瘦身 | dev3 | - | - | wip |
 
 ## 当前里程碑
 
