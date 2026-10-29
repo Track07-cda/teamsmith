@@ -9,6 +9,8 @@ deltas: -
 branch: task/V113-instruction-slimming
 deps: exact proposal/report tip 00f7d50e2879; P391 author dev3 must not verify this proposal
 
+Launch note (PM, 2026-10-29): the project's configured verify model `cline-pass/deepseek-v4.1-flash-1017:max` failed at process startup with `Unknown provider "cline-pass"`. PM authorizes a one-launch `--model openai/gpt-6.1-sol:xhigh` override for this independent review because that exact model is already running successfully in other seats. This does not change project config, the verify category, the candidate or the independent-review requirement.
+
 ## Verdict and scope
 
 You did not author P389/P391. Independently review exact candidate **`00f7d50e2879`** (proposal artifacts `b3a48b35`, report `00f7d50e`). Read the user's slimming request, P389/P391 reports, `docs/team/reviews/P389.md`, D208, all four change artifacts and the existing capabilities the design cites. Give **ACCEPT**, **NEEDS-CHANGES** or **REJECT** first in `docs/team/reports/V113-verify.md`. This is proposal review, not implementation verification or authorization to run live init.
