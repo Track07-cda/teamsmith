@@ -52,3 +52,20 @@ git diff --check
 Trial-archive only in a disposable copy outside the repository and validate all specs there; do not archive the real change. No full gate, live init, PM/worker restart, merge, push or release.
 
 The report leads with the chosen structure, exact artifacts, every P389 correction/boundary, validation results and any added-delta concern. Commit with Conventional Commits + P391 + `Agent: dev3`, leave the branch clean and notify PM for formal review.
+
+## V113 first-round rework (2026-10-29)
+
+V113's independent review at `f752109bd570` is NEEDS-CHANGES; PM's formal review is REWORK REQUIRED. Read `git show f752109bd570:docs/team/reports/V113-verify.md` and `docs/team/reviews/V113.md`. The design direction stands, but the exact proposal `00f7d50e2879` must not go to Apply. Preserve the original artifacts/history and make a small proposal-only correction on `task/P391-openspec`; no product/live changes.
+
+Close all six findings in the change artifacts and append the report:
+
+1. Replace every `references/watchdog.md` destination with the real homes: `references/protocol.md` §8 for mechanism/boundaries and `references/workflows.md` §D/§I for executable patrol/startup procedures. Check design and tasks, not just one occurrence.
+2. Move existing-project refresh guidance to `references/migration.md` §§1/2/2c/6, its existing home. In the same planned edit, correct migration §2 and §2c's current `team init (or team bootstrap)` / `init/bootstrap` statements: existing-config bootstrap does not run the AGENTS writer. `workflows.md` §A (new-project assembly) and daily SKILL retain only cross-links, not a second detailed home.
+3. Replace `bash skills/teamsmith/tests/install-shape.sh --flip` with two explicit valid commands: the full no-arg matrix and `bash skills/teamsmith/tests/install-shape.sh flip` (or `install flip`). V113 measured no-arg ✓165/✗0, `flip` ✓42/✗0, but `--flip` only ✓1/✗0 with no flip section. State that the arguments are section names, not flags.
+4. Add correction of `references/protocol.md` §9 to the edit plan: its capacity summary must match dispatch/current resolver, including MemAvailable and selected temp/worktree disk/inode floors in addition to swap/RAM+swap. Do not leave AGENTS pointing at an incomplete destination.
+5. Add two required preservation rows to design and the tasks 6.2 worksheet: verification's dual-gate division must remain in both SKILL.md and references/protocol.md; agent-adapters' SKILL frontmatter description, `## Agent adapters` section and deep-read/frozen wording remain declaration surfaces. Task 2.4 must explicitly preserve them while compressing surrounding detail.
+6. Clarify that ledger-ban uses the actual project `.pi/team/forbidden-names.txt`, not an assumed file inside a clean clone. V113's clone-relative path returned names=missing rc=3; only the real project names file returned names=ok hits=0 rc=0. Missing/SKIP is not a pass.
+
+Keep the nonblocking boundaries: FAST §6 proves printed prompt assertions but skips real launch; selected green is not full; trial archive is structural only; marker-shape and 28-line live-custom boundaries remain unchanged. No extra delta, runtime change, product edit or live init is authorized by this rework.
+
+Re-run the complete proposal acceptance set (strict change/all, status, read-only apply instructions, spec-refs, real-names ledger, diff check and disposable trial archive) on the new exact tip. Append a V113-rework section to `docs/team/reports/P391-dev3.md` mapping each finding to its correction with evidence. Commit with P391 + `Agent: dev3`, leave the branch clean and notify PM for focused V113 second-round review.
