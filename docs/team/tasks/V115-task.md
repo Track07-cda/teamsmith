@@ -48,3 +48,14 @@ D214 remains settled as A: transient stream visibility is accepted; final full c
 5. Required MODIFIED key-replies requirements (not contradictory ADDED-only), guide/spec/test migration, real product parser/writer/raw-stream evidence and all crash/fault cases. The new lifecycle probe is only literal API evidence, not a product implementation pass.
 
 Give **ACCEPT FOR PROPOSE**, **NEEDS-CHANGES** or **REJECT-APPROACH**, with exact remaining corrections. This is still not proposal or implementation approval. Only the V115 report changes; no live team/product/spec writes, full gate, merge, push or release. Run the same light checks, commit with V115 + `Agent: dev3`, and notify PM.
+
+## Third round: R1/R2 only (2026-10-29)
+
+The final corrected P394 candidate is **`683d591a3e91`**. Its appended “V115 第二轮定点修正” section preserves the previous 467 lines and changes only the two findings from your second round. Do not reopen the accepted lifecycle/identity/recovery/injection architecture or D214's A.
+
+Verify narrowly:
+
+1. R1: paired maximal backtick runs, exact-length closer, cross-line and cross-text-block spans, differing lengths inside a span, escaped openers, and unmatched openers that do not protect the rest of the message. The proposed product-parser cases must prove inline-only content is unchanged/no writer, inline+real-control deletes/publishes only the real line, and mutations removing inline protection or protecting unmatched-to-EOF fail. No full Markdown AST is required.
+2. R2: the future delta names the three real requirements — `Key replies are explicitly published from bounded stdin`, `Publication does not gate the normal answer or create work`, and `The key-conclusion duty is shipped on its instruction surfaces and held by the gate` — as MODIFIED. Purpose alignment must be explicitly handled outside delta-only merging, with a private trial archive and landed-text check at the authorized stage. Old manual duplicate-post/no-history-import/no-panel-session-read boundaries remain.
+
+Append a third-round verdict at the top and bottom of `docs/team/reports/V115-dev3.md`: **ACCEPT FOR PROPOSE**, **NEEDS-CHANGES** or **REJECT-APPROACH**. If accepted, P395 may write planning-only OpenSpec artifacts; this is not Apply approval. Run the light checks, commit only the V115 report with V115 + `Agent: dev3`, and notify PM. No product/spec/change/live-team writes, full gate, merge, push or release.
