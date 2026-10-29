@@ -1997,6 +1997,14 @@ P387 候选 `f9edff1a6c90c755a147089a3be4cc008baa9b2a` 经 V112 独立实质评�
 
 影响：允许 P390 探索和后续独立提案/实现流程；本决定不授权跳过规格评审、直接改代码或在当前团队发送测试消息。
 
+### D209 · `say` 默认立即投递采用 watch 优先、tmux 直发后备（2026-10-29）
+
+P390 探索 `ec78b6c622ad` 证明旧 `say --now` 的 forced 分支在 inbox-watch 路由之前，机械地把 now 默认值改成 1 会让已有零按键通道退化为直接打字。为落实 D207 而不回归 M30，默认 `say` 的精确语义定为：**可信活 watcher 时仍 durable inbox + spool、零按键；无 watcher 时才对已通过离线/死 pane/空 shell/边界检查的运行目标默认采用旧 forced 直发**。
+
+公开 `team say --now` 仍按用户决定移除，不保留别名；内部 helper 的私有 force 动作可以复用。watch 落地失败不得盲退直发，forced 回执不得冒称已确认模型收到。普通 Outbox 与真实 held/queued 失败路径保留，其他发送者及 `outbox flush --now` 不变。
+
+规格最小范围为 delivery-guard、notify-and-inbox、help-surface 三份 delta；help 的旗标兼容要求需要显式加入这一个退休例外。允许 P392 写提案，正式 ACCEPTED 与独立评审后才 Apply。
+
 ### D208 · 接受指令上下文瘦身探索，现有项目升级须先保留自定义块内规则（2026-10-29）
 
 P389 探索 `3a32f85f8f20` 获接受进入 Propose。采用 AGENTS 共同短章程、PM 专属启动词、自包含 worker 派单红线、SKILL/references 详细手册的结构；不引入规则数据库或新生成器，不以字数/性能测试代替逐规则审查。
