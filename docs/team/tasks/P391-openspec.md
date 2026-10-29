@@ -69,3 +69,14 @@ Close all six findings in the change artifacts and append the report:
 Keep the nonblocking boundaries: FAST §6 proves printed prompt assertions but skips real launch; selected green is not full; trial archive is structural only; marker-shape and 28-line live-custom boundaries remain unchanged. No extra delta, runtime change, product edit or live init is authorized by this rework.
 
 Re-run the complete proposal acceptance set (strict change/all, status, read-only apply instructions, spec-refs, real-names ledger, diff check and disposable trial archive) on the new exact tip. Append a V113-rework section to `docs/team/reports/P391-dev3.md` mapping each finding to its correction with evidence. Commit with P391 + `Agent: dev3`, leave the branch clean and notify PM for focused V113 second-round review.
+
+## Live screenshot correction: reply publication must not create a temp file (2026-10-29)
+
+The user supplied `/var/tmp/pi-clipboard-930f0ffc-be50-4238-9542-42cbc94eab43.png`: PM wrote `/tmp/pm-reply-...md`, ran `team reply post ... --stdin < /tmp/...`, then repeated the same answer. This is a real v0.3.4 usability defect in the instruction path, not a CLI limitation.
+
+Root cause: both v0.3.4 and current `templates/pm-prompt.md.tmpl:37` still say `--stdin < <file>`, while `references/protocol.md` §4b already gives the correct one-command form `team reply post ... --stdin <<'EOF' … EOF`. Add this same-class correction to the current proposal rework:
+
+- PM template must use the existing heredoc/stdin pattern and explicitly avoid creating a temporary file solely to publish a reply. Keep the full user-facing body, reader criteria, exclusions and the requirement to send that same body normally in the conversation; publication failure still does not withhold the answer.
+- Preserve the reply page and conversation as two distinct destinations; do not claim they are one operation or remove the reply-page duty. The correction removes the temporary-file/write step, not the required second destination.
+- Strengthen the existing key-replies/prompt fixture acceptance so the PM template's example uses heredoc stdin and cannot reintroduce `--stdin < <file>` or a publish-only temp-file workflow. Retain reader/parser-negative tests; no new product runtime or test framework.
+- Record this as instruction-text alignment with existing protocol behavior, not a new capability delta or reply-tool redesign. Include it in V113 second review.

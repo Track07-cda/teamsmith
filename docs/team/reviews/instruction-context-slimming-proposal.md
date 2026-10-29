@@ -37,3 +37,5 @@ V113's report `f752109bd570` is **NEEDS-CHANGES** and is adopted. The architectu
 Nonblocking boundaries also remain: FAST §6 proves printed prompt assertions but skips real launch; selected green is not full coverage; trial archive proves structure only; supported marker shapes and the 28-line live custom section remain explicit.
 
 P391 must append the proposal correction, then V113 performs a focused second review. The formal verdict stays REWORK REQUIRED until that evidence is accepted. No live init/reload, Apply, protected merge/push or release is authorized.
+
+Additional live evidence (2026-10-29): the user's screenshot shows PM writing a temporary reply file, posting it, then repeating the answer. v0.3.4 and current PM template still show `--stdin < <file>`, while protocol §4b already supports a one-command heredoc. P391 must align the PM template and existing key-replies fixture to heredoc stdin, explicitly avoiding a publish-only temp file while preserving both reply-page and conversation destinations and failure semantics. This is instruction alignment, not a reply-tool redesign or new delta.
