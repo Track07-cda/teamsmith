@@ -1024,3 +1024,6 @@ P385 PM/V111 verdict: REWORK REQUIRED, no Propose. PM reproduced Pi 1.4.0 sendMe
 
 ### 2026-10-28T05:19:59Z · from: user · re: P385
 用户继续明确（2026-10-28）：Reminder 在 Standby 中实际唤醒 PM 后，退出 Standby。请把“实际唤醒时自动解除 Standby；仅到期/入队或投递失败但未唤醒不提前解除；记录 reminder ID/source 审计；同批唤醒只解除一次”纳入 P385 最终报告增补。普通自动工作在唤醒后也恢复。
+
+### 2026-10-29T02:26:02Z · from: user · re: P390
+用户新决策（2026-10-29）：PM 通过 team say 向其他 agents 发消息时，默认不用 --now 导致传递不及时；要求 team say 默认就是现有 --now 行为，并移除 say 的 --now 参数。范围不扩到 notify、meeting、pulse 或 outbox flush --now。请按 P390 探索任务核查契约与测试，不直接实现。
