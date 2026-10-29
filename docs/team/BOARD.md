@@ -625,7 +625,8 @@
 | P391 | 指令上下文瘦身OpenSpec提案 | dev3 | - | - | review |
 | P392 | team say默认直投OpenSpec提案 | dev2 | - | - | review |
 | V113 | 指令瘦身提案独立评审 | verify | - | - | wip |
-| V114 | team say提案独立评审 | dev3 | - | - | wip |
+| V114 | team say提案独立评审 | dev3 | - | - | review |
+| P393 | team say默认直投实现 | dev | - | - | wip |
 
 ## 当前里程碑
 

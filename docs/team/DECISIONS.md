@@ -2005,6 +2005,14 @@ P390 探索 `ec78b6c622ad` 证明旧 `say --now` 的 forced 分支在 inbox-watc
 
 规格最小范围为 delivery-guard、notify-and-inbox、help-surface 三份 delta；help 的旗标兼容要求需要显式加入这一个退休例外。允许 P392 写提案，正式 ACCEPTED 与独立评审后才 Apply。
 
+### D210 · immediate-say 提案 ACCEPTED，允许本地 Apply（2026-10-29）
+
+P392 候选 `eb8250a26102` 经 V114 独立实质评审 `6f20747eb2ba` 为 ACCEPT，PM 正式提案评审 ACCEPTED。PM 独立复验 OpenSpec 20/20、规格引用/账本/diff 和一次性副本七份 requirement 合入后的 19/19。
+
+Apply 的约束不变：活 watch 优先且零按键，无 watch 的安全运行目标默认旧 forced 直发；公开 say --now 删除且两位置拒绝零副作用；已选 watch 失败不换道，initial enqueue failure 真实非零；direct 仅是一次尝试审计，不是模型确认或自动入队。其他发送者与 draft/outbox override 保持，旧 guard 覆盖必须迁移到真实 protected entry，真实 Pi 以真正草稿和模型请求证明。
+
+P393 由未参与探索/提案的 dev 在本地分支实现，之后另由非实现者 Verify。P391 的 SKILL.md 修改须等 P393 候选收妥后串行。最终归档还需单独对齐 delivery-guard Purpose；不允许 live-team 测试、protected merge/push、真实归档或发布。
+
 ### D208 · 接受指令上下文瘦身探索，现有项目升级须先保留自定义块内规则（2026-10-29）
 
 P389 探索 `3a32f85f8f20` 获接受进入 Propose。采用 AGENTS 共同短章程、PM 专属启动词、自包含 worker 派单红线、SKILL/references 详细手册的结构；不引入规则数据库或新生成器，不以字数/性能测试代替逐规则审查。
