@@ -72,3 +72,16 @@ git diff --check
 Run all accepted selected/non-FAST/real-Pi checks above with exact commands and complete logs. The full suite/PM merge gate is not replaced by these targeted results. Do not run live-team say, protected merge/push, real archive or release.
 
 The report leads with the implemented behavior and remaining boundaries. Include exact commits, changed files, parser/audit/queue before-after evidence, selected closure and actual not-run scope, mutation reds/restored greens, version-separated real-Pi requests/frames, and P391 ordering. Mark every accepted task done only with its evidence; independent verification remains unmarked for the later verifier. Commit with Conventional Commits + P393 + `Agent: dev`, leave the branch clean and notify PM. A different agent will independently Verify.
+
+## V116 R1: make the real `set -e` entrypoint reach the persistence diagnostic (2026-10-29)
+
+V116's independent report at `6203ecf41514` is PASS for the behavior matrix, with one small required follow-up before merge. `team` enables `set -euo pipefail`; `team_cmd_say` calls `team_send_guarded` as a bare command, so a nonzero `persist-failed` return exits before the new custom diagnostic case. Smoke ⑨c used only `set -u` and therefore asserted a branch the shipped entrypoint cannot reach. V116's shadow: `-u` prints the named say error, `-eu` prints nothing; the real CLI still returns 1 with the underlying named outbox lock failure and no typing, so the core failure contract is intact.
+
+Make a minimal P393 follow-up on `task/P393-team-say`, in a fresh same-task session:
+
+1. Capture the sender's return explicitly in `team_cmd_say` and allow the existing `persist-failed` outcome to reach its reporter under `set -e`. Preserve prior behavior for every other outcome/nonzero path; do not turn held/unknown failures into offline success or add a broad error framework.
+2. Change smoke ⑨c to run with `set -eu` (and pipefail where applicable) so the real shell semantics cover the named diagnostic, nonzero status, no queued/offline claim and zero keys/forced/entries. Run it against the pre-fix candidate first or retain V116's direct counterexample, then green after the fix. A scratch mutation restoring the bare call must make this named check red; restoration must go green.
+3. Reproduce the real unmodified CLI initial-enqueue failure used by V116 (actual outbox path regular file) and confirm it remains nonzero, named and zero-typing. Do not weaken that check to accept only the shadow.
+4. Re-run the focused 12b-pi family and relevant 12b section plus static/diff checks; no full suite, live-team say or additional behavior change. Append a V116-R1 section to `docs/team/reports/P393-dev.md` with exact commands/output and the new candidate tip.
+
+Only the existing P393 product/test/report paths may change. Commit with P393 + `Agent: dev`, leave the branch clean and notify PM for focused final verification. V116's broader PASS remains evidence for the unchanged behavior; no merge until this small diagnostic path is independently closed.
