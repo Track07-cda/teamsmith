@@ -624,6 +624,7 @@
 | P390 | team say默认立即投递并移除now | dev2 | - | - | review |
 | P391 | 指令上下文瘦身OpenSpec提案 | dev3 | - | - | wip |
 | P392 | team say默认直投OpenSpec提案 | dev2 | - | - | wip |
+| V113 | 指令瘦身提案独立评审 | verify | - | - | wip |
 
 ## 当前里程碑
 
