@@ -2029,6 +2029,14 @@ P394 与 PM 独立探针均证实 Pi 1.4.0 的 `message_update` 公开 API 不�
 
 不采用 provider_stream_event 的逐 provider 变异框架，也不要求上游 B 方案。V115 继续独立复核捕获/去重/恢复后，才可进入 OpenSpec Propose；本决定不授权实现或 live 团队试验。
 
+### D215 · 标记式关键回复探索收口，转义规则随 P395 强制进入提案（2026-10-29）
+
+P394 最终探索 `683d591a3e91` 经 V115 三轮独立复核 `ebeaba36`，R2 的真实 MODIFIED requirements/Purpose 处理及生命周期、身份、恢复、注入架构均获接受。唯一剩余项是反斜线转义后的 backtick 后缀 opener：物理 run 的首个反引号被转义不等于后缀失效。
+
+PM 接受探索进入 P395，条件是提案明确“代码区外先处理反斜线转义，再由未转义反引号形成 maximal opener；奇数反斜线只转义首个 tick，偶数不转义；未转义 run 不拆，span 内反斜线为普通内容”，并包含 V115 的 inline-only/inline+real 产品 parser 用例及整串忽略的变异红侧。独立提案评审必须核对该项；不再重复一轮完整探索。
+
+最小架构仍为 PM 定向扩展、窄 parser/offset、source 操作 journal、既有 writer/store；D214 的流式暂现和不确定不重发不变。只允许 planning-only Propose，正式提案 ACCEPTED 与独立审阅后才 Apply，P391 继续等待新回复契约。
+
 ### D208 · 接受指令上下文瘦身探索，现有项目升级须先保留自定义块内规则（2026-10-29）
 
 P389 探索 `3a32f85f8f20` 获接受进入 Propose。采用 AGENTS 共同短章程、PM 专属启动词、自包含 worker 派单红线、SKILL/references 详细手册的结构；不引入规则数据库或新生成器，不以字数/性能测试代替逐规则审查。
