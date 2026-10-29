@@ -622,11 +622,12 @@
 | P388 | Agent Self-Reminder MVP实现 | dev-bob | - | - | blocked |
 | P389 | 指令上下文与AGENTS瘦身 | dev3 | - | - | review |
 | P390 | team say默认立即投递并移除now | dev2 | - | - | review |
-| P391 | 指令上下文瘦身OpenSpec提案 | dev3 | - | - | wip |
+| P391 | 指令上下文瘦身OpenSpec提案 | dev3 | - | - | blocked |
 | P392 | team say默认直投OpenSpec提案 | dev2 | - | - | review |
 | V113 | 指令瘦身提案独立评审 | verify | - | - | review |
 | V114 | team say提案独立评审 | dev3 | - | - | review |
 | P393 | team say默认直投实现 | dev | - | - | wip |
+| P394 | Pi插件标记式关键回复探索 | dev2 | - | - | wip |
 
 ## 当前里程碑
 

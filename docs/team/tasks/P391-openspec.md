@@ -80,3 +80,7 @@ Root cause: both v0.3.4 and current `templates/pm-prompt.md.tmpl:37` still say `
 - Preserve the reply page and conversation as two distinct destinations; do not claim they are one operation or remove the reply-page duty. The correction removes the temporary-file/write step, not the required second destination.
 - Strengthen the existing key-replies/prompt fixture acceptance so the PM template's example uses heredoc stdin and cannot reintroduce `--stdin < <file>` or a publish-only temp-file workflow. Retain reader/parser-negative tests; no new product runtime or test framework.
 - Record this as instruction-text alignment with existing protocol behavior, not a new capability delta or reply-tool redesign. Include it in V113 second review.
+
+### Superseded by the user's marker-based reply direction (2026-10-29)
+
+The heredoc correction above is **withdrawn as the target workflow**. The user instead requires ordinary Pi responses with a special key-reply marker, captured by a Teamsmith Pi extension, with the marker removed from both Pulse and Pi display (D213). Do not finalize P391 with the old default `team reply post` duty or spend this rework polishing heredoc instructions. Pause the key-reply portion until P394 supplies the compatible design; the other V113 corrections may remain prepared but P391 must not go to Apply with a superseded reply contract.
