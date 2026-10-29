@@ -45,3 +45,20 @@ git diff --check
 ```
 
 Trial-archive only in a disposable copy. Commit with Conventional Commits + V113 + `Agent: verify`, leave the branch clean and notify PM. PM will reconcile this review with `docs/team/reviews/instruction-context-slimming-proposal.md`; no Apply until formal ACCEPTED.
+
+## Second round after six mechanical corrections (2026-10-29)
+
+The new exact P391 candidate is **`07266efaf617`** (proposal corrections `d33168b4`, report `07266efa`). Preserve the first-round NEEDS-CHANGES report and append a second-round verdict at the top and bottom of `docs/team/reports/V113-verify.md`. Use the same one-launch model override if a fresh session is needed because the configured verify provider remains unavailable.
+
+Focus on whether all six first-round findings are actually closed in the change artifacts:
+
+1. No destination points to nonexistent `references/watchdog.md`; pulse mechanism/procedure homes are protocol §8 and workflows §D/§I.
+2. Existing-project refresh is assigned to `references/migration.md` §§1/2/2c/6, and the same planned edit corrects its init-or-bootstrap wording; workflows §A/SKILL only cross-link.
+3. Acceptance uses no-arg `install-shape.sh` and section-name `install-shape.sh flip`, not the demonstrated false-green `--flip`. The author's clean flip 42/0 versus --flip 1/0 evidence may be checked, but an initial 41/1 run while committing during a fingerprinted fixture is not accepted evidence.
+4. The plan corrects protocol §9 itself to include MemAvailable and selected temp/worktree disk/inode floors.
+5. Design/tasks/delta preservation lists include verification's dual-gate SKILL+protocol duty and agent-adapters' SKILL description/section/deep-read/frozen declarations.
+6. Ledger-ban names come from the real project state, and missing/SKIP is not a pass.
+
+Also verify the later product redirect: the user chose D213 marker-based Pi key replies with marker removal in Pulse and Pi. The temporary heredoc correction was **not** included in this candidate, which is correct. Do not request it and do not treat the preserved old reply obligations as ready for implementation. P394 is exploring the replacement. Even if the six findings now pass, your verdict must distinguish **six corrections accepted** from **overall proposal still blocked on integrating D213/P394**; no Apply approval follows yet.
+
+Run the same structural/ledger/diff/trial-archive checks on the new exact tip. Only the V113 report changes. No live init, product/spec edits, full gate, merge, push or release. Commit with V113 + `Agent: verify` and notify PM.
