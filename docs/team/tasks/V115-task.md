@@ -34,3 +34,17 @@ Finish with the smallest architecture allowed into Propose under each display op
 Only versioned write: `docs/team/reports/V115-dev3.md`; scratch under `$HOME/.cache/V115/`. You may rerun existing scratch probes in a private copy, but no product/spec/change edits, live-team messages, real credentials, full gate, merge, push or release.
 
 Run `openspec validate --all --strict`, `spec-refs.sh --check`, real-project `ledger-ban.sh`, and `git diff --check`, recording actual output. Commit with V115 + `Agent: dev3`, leave the branch clean and notify PM.
+
+## Second round after identity/recovery rework (2026-10-29)
+
+The exact revised P394 candidate is **`40d6f63e`**. Read its appended §§一–九 with `git show 40d6f63e:docs/team/reports/P394-dev2.md`. Preserve the first-round report and append a second-round verdict at the top and bottom of `docs/team/reports/V115-dev3.md`. Use the same one-launch model override if a fresh session is needed.
+
+D214 remains settled as A: transient stream visibility is accepted; final full control lines must be cleaned from finalized transcript/history/Pulse/store. Do not reopen B or demand zero stream flash. Review whether the revision closes the actual first-round blockers without inventing a second reply framework:
+
+1. message_end staging → turn_end entry binding → settled eligibility; only latest current-activity candidate, later unmarked/failed/aborted supersession, branch/session scoping, and recovery of explicitly eligible-but-never-attempting records only.
+2. One source tuple/record and one attempting right before spawn; writer outcome mapping, unconfirmed candidate_no, process/receipt/journal failure as uncertain with no automatic retry. Identical bodies on distinct entries remain legal; no hash/current-page ownership.
+3. Cleanup on every assistant terminal state versus publication eligibility; full control lines removed on aborted/error/tool-use, partial-prefix abort boundary disclosed rather than guessed away. Parser offset fidelity, code/fence/quotation rules, multi-text-block/CRLF/UTF-8 and title derivation.
+4. Directed PM-only injection, actual project/state/session/tmux/PID identity evidence, duplicate-copy owner/CAS, update fingerprint, doctor's loaded-versus-on-disk distinction, first-injection restart versus already-loaded reload, custom adapter non-support. Check whether these are necessary or can be simplified without losing isolation.
+5. Required MODIFIED key-replies requirements (not contradictory ADDED-only), guide/spec/test migration, real product parser/writer/raw-stream evidence and all crash/fault cases. The new lifecycle probe is only literal API evidence, not a product implementation pass.
+
+Give **ACCEPT FOR PROPOSE**, **NEEDS-CHANGES** or **REJECT-APPROACH**, with exact remaining corrections. This is still not proposal or implementation approval. Only the V115 report changes; no live team/product/spec writes, full gate, merge, push or release. Run the same light checks, commit with V115 + `Agent: dev3`, and notify PM.
