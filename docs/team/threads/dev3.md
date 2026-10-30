@@ -267,3 +267,6 @@ V93判PARTIAL：行为全对，但候选在门禁上留了一处真红——`smo
 
 ### 2026-10-27T03:07:03Z · from: pm · re: P380
 V109 second-round FAIL on 779d9d32: both workflow branches lose a non-zero pi --version status when it prints a valid version. I appended the third rework contract to the main-checkout P380 brief: preserve/check the subprocess status before comparison on both branches, add the exit-42 red side and mutations, then freeze a new tip for focused third-round review.
+
+### 2026-10-30T07:19:20Z · from: pm · re: P391
+用户补充P391硬要求：今后init更新AGENTS只能改Teamsmith标记内的受管章节，其他章节不动；通用AGENTS与PM启动词须提醒PM，自定义规则只放标记外。任务书已更新，并指出legacy全局字符串替换不得误改标记外示例；若当前writer不足，只规划最小原位修正，不新建迁移系统/guard框架。P395已ACCEPTED，P391规划可据其衔接，不必等P396全量；仍须正式与独立定点复审后Apply。当前只追加任务输入，不要求你在V117任务中跨范围实施。
