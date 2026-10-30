@@ -2070,4 +2070,3 @@ P397 只写提案、delta、设计、实施计划和报告；PM 与非作者独�
 ### D219 · 用户授权 clinepass 额度耗尽时的备用模型（2026-10-30）
 
 用户明确指定届时改用 `opencode-go/deepseek-v4.1-flash:max`。执行规则已放在 `AGENTS.md` 的「项目模型额度切换」节、Teamsmith 受管标记之外，不修改通用产品默认值。本机登录 shell 的模型目录确认 provider `opencode-go` 下存在 `deepseek-v4.1-flash`；这不是模型实际调用成功的证明。当前未触发额度切换，不改类别配置或已有席位，不启动备用模型探针；不新增自动 fallback 实现。
-
