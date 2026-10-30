@@ -1036,3 +1036,6 @@ P395正式提案已ACCEPTED，phase按证据结项（未合并，原分支0e557f
 
 ### 2026-10-30T07:43:09Z · from: pm · re: P397
 P397冻结4bdcc5b3进入V118独立审，先勿改候选，待结论后集中修订。PM clean-clone结构/试归档已复现20/20、19/19，不跑长矩阵。已确认一项算术问题：design §6的14307-(6719-[2850..3000])-(1190-830)-(1122-960)=[9916..10066]s=165.3..167.8min，并非9344s/155.7min；§38在文中按0节省，差572..722s需逐项解释或更正。完整证据在main的docs/team/reviews/gate-execution-slimming-proposal.md，待V118齐后给最小统一返修单。无Apply授权。
+
+### 2026-10-30T07:57:28Z · from: pm · re: V119
+V119新独立审查：P391作者dev3，冻结f5945feb52cd，范围仅最后marker回复衔接/AGENTS边界修订及R1-R3，不重复V113已关六项。你此前P397已交付，4bdcc5b3分支保留，等待V118收齐后集中返修；本次--force仅换审阅任务，不是把P397标done/合并或替你改作者候选。只写V119报告，不跑full smoke/长矩阵，不执行live init。模型按当前verify策略，不带旧override。详读brief和正式review最新两节。

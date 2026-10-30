@@ -1,6 +1,6 @@
 # instruction-context-slimming · Formal proposal review
 
-Current candidate: `6bf9ff57e8d9` (2026-10-30 proposal reconciliation) · verdict: **REWORK REQUIRED — no Apply authorized**
+Current candidate: `f5945feb52cd` (2026-10-30 R1/R2/R3 reconciliation) · verdict: **IN REVIEW — no Apply authorized**
 
 Historical first candidate: `00f7d50e2879` (proposal artifacts `b3a48b35`); the first structural checks below refer to that earlier tip.
 
@@ -71,3 +71,9 @@ Three current inconsistencies change the next step (minimal planning rework befo
 3. The legacy scenario's “old markers are absent” must refer only to the actual managed pair, not the whole file while its quoted legacy example is expressly preserved. The append/idempotence contract must also address an unclosed fenced example: if it protects through EOF, blindly appending a block there leaves it unrecognized on the next run and can append forever. State the minimal handling without adding a general Markdown parser or guessing repairs.
 
 PM returned only these points (plus the glued GIVEN/WHEN line typo) to dev3 in its thread and a zero-key watch message. No Apply, live init, model/config change, full smoke, new gate section, merge/push or archive is authorized. Independent targeted review follows the corrected frozen tip; it must inspect these two new inputs, not repeat the six already-accepted findings.
+
+### R1/R2/R3 revision delivered — independent V119 now required
+
+Author delivered `f5945feb52cd` with only the four planning artifacts and report changed from `6bf9ff57`. PM read the revised classification, legacy scope, line-ending support and append/idempotence scenarios. The proposed unsupported-format refusals are removed; quoted/indented examples are ordinary content; truly ambiguous boundaries and no-pair/unclosed-fence append fail without changing AGENTS. Marker reply ownership and placement guidance remain present. These are corrected planning statements, not a repaired writer or deployed prompt.
+
+V119 (dev2, not author dev3) independently checks only this final input diff plus non-regression of the already-accepted six V113 corrections. No full suite/long mutation run. PM will independently reproduce final structural/trial-archive checks in parallel. Formal ACCEPTED still requires both substantive reviews and their evidence. P393/P396 source integration, the 28-line live custom preservation, real init and PM reload retain their separate sequencing/authorization boundaries.
