@@ -16,4 +16,16 @@ V117 is independently reviewing the exact artifact candidate. The author was ask
 - three real MODIFIED key-replies requirements and authorized canonical Purpose alignment;
 - real writer/Pi/fault evidence, P393 serialization and P391 dependency.
 
-PM's independent structural/trial-archive results and final verdict will be appended after V117 is reconciled.
+## Independently reproduced checks
+
+Clean clone: `$HOME/.cache/pm-skills-reviews/P395-8734bd93/candidate`.
+
+- change strict valid; all specs 19/19;
+- apply instructions ready with 14 tasks, all unchecked;
+- spec-refs and real-project ledger names pass; `git diff --check` and candidate status clean;
+- disposable-copy archive applies 5 additions and 4 modifications, then validates 19/19;
+- PM applied the proposed canonical Purpose edit only in that disposable copy and verified the three real modified requirement names occur exactly once, the directed-current-activity exception and no-history/no-panel-session-read boundaries are present, and the escaped-suffix requirement is present. The real change remains unarchived.
+
+Logs: `$HOME/.cache/pm-skills-reviews/P395-8734bd93/static-checks.log` and `trial-archive.log`. These prove structure and merge/Purpose hygiene only, not product behavior or final design acceptance.
+
+The final verdict remains pending V117 and the author's required delivery report.
