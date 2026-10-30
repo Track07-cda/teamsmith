@@ -1,9 +1,15 @@
 # Gate execution slimming · P397 proposal review
 
-verdict: **NEEDS-CHANGES** — no Apply authorization
-candidate: `be35c18b18bf` (`task/P397-gate-slimming-proposal`, author dev2); earlier freezes `3fdd1a8aebba` and `4bdcc5b375fb` retained
+verdict: **PENDING final correction-diff acceptance** — no Apply authorization
+candidate: `369c7d87a0b4` (`task/P397-gate-slimming-proposal`, author dev2); earlier freezes `be35c18b18bf`, `3fdd1a8aebba` and `4bdcc5b375fb` retained
 change: `gate-execution-slimming`
 independent review: V118 / verify (not the author)
+
+## Correction diff received — 369c7d87
+
+PM compared the four planning files against be35c18b. The six requested repairs are present: worker/PM-qualified case keys; the writer-acceptance premise on potential counts; retained/incidental census classification; scenarios aligned with the three declaration shapes; finite-limit qualification in THEN; and the whitespace-split reference and sidecar provenance correction. No runtime/test/workflow/canonical-spec change was delivered. These are closure candidates, not implementation or independently measured savings. V118 now checks only these corrections and their direct interactions; the eight closed items stay closed.
+
+Planning bytes remain frozen at 369c7d87. The author's report introduction says no trial archive was rerun, but its sections 3/4 record one trial archive. PM records that one reported execution, not zero, and requests a report-only correction. Supplementary report wording joins this frozen review input without triggering tests or another archive. PM will run only a small exact-tip case/reference probe and change-level validation; prior full structural and archive evidence is reused.
 
 ## Historical second-round answer — 3fdd1a8a
 

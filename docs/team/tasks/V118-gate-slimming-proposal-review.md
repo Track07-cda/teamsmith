@@ -12,11 +12,19 @@ status: todo
 
 判断 P397 的提案能否进入 Apply：是否真正减少重复工作而保留必要的错误发现能力，且成本与分片算法承诺能兑现。先给 ACCEPT / NEEDS-CHANGES，再给逐条证据和最小修订范围；不要把 OpenSpec 格式通过当成实质接受。
 
-第三轮冻结候选：`be35c18b18bf`，分支 `task/P397-gate-slimming-proposal`；第二轮 `3fdd1a8aebba` / 报告 `6df603101968`，第一轮 `4bdcc5b375fb` / 报告 `354b02dc76b3` 均保留作差异基线。交付报告 `docs/team/reports/P397-dev2.md`；规划文件 `openspec/changes/gate-execution-slimming/`。作者 dev2；你没有参与其编写。PM 正在并行做自己的检查。只审这份提案，不重新开展 P379 探索，不审/改 P396 产品实现。
+修正差异验收冻结候选：`369c7d87a0b4`；第三轮基线 `be35c18b18bf` / 裁定 `25e0a9fdec1a`。分支 `task/P397-gate-slimming-proposal`；第二轮 `3fdd1a8aebba` / 报告 `6df603101968`，第一轮 `4bdcc5b375fb` / 报告 `354b02dc76b3` 均保留作差异基线。交付报告 `docs/team/reports/P397-dev2.md`；规划文件 `openspec/changes/gate-execution-slimming/`。作者 dev2；你没有参与其编写。PM 正在并行做自己的检查。只审这份提案，不重新开展 P379 探索，不审/改 P396 产品实现。
 
 阅读顺序：AGENTS → 自己 thread → 本 brief → 提案四文件和交付报告 → `openspec/specs/verification/spec.md` 的真实要求 → 提案实际涉及的测试代码。参考 P379 的测量可通过 `git show task/P379-gate-simplification-explore:docs/team/reports/P379-dev2.md` 查；若该旧引用不成立，查本仓 refs，不以找不到当作通过。原始日志位置在作者报告与设计中；只读本项目证据，不扫其他项目会话或读取凭据。
 
-## 第三轮定点复评（本节优先）
+## 修正差异验收（本节优先）
+
+只验 `git diff be35c18b18bf 369c7d87a0b4 -- openspec/changes/gate-execution-slimming` 是否完整关闭你 R3-1 至 R3-6，及这些修改的直接矛盾；不要重审已关闭八项，不再开展一轮全案审查。先给 ACCEPT / NEEDS-CHANGES；若不接受，必须给出修正后仍存在的具体反例，而不是重复已修的旧描述。
+
+PM 已逐项核对：循环限定后是3/153/931，5/151/929只保留作反例；647/931有writer不提前拒收的静态前提；普查的包含关系只约束retained；两个场景与1.8三形状对齐；THEN包含既有限时条件；旧引用和sidecar出处已修。你独立确认这些结论即可。仅静态/小算术，不跑全量、长矩阵、安装矩阵、试归档或模型探针；既有结构/归档证据复用，PM只补单change结构检查。
+
+作者报告开头“没有重跑试归档”与§3/4一次回执矛盾，PM已要求仅修报告，规划仍冻结369c7d87。报告补充直接加入本次输入，不触发重测；无需等待该措辞更正才审规划。你保持原分支/模型/SID，只追加自己的V118报告，不改规划。
+
+## 第三轮定点复评（历史）
 
 只核对 PM 正式 review 的「Current answer — be35c18b」四组联动及证据措辞，八项已关闭内容不重开。PM 已读完整规划 diff 和报告；撤回耗时预测、七调用/六收窄臂的基本区分、tie-break 已落实。独立裁定：
 
