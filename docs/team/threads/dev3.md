@@ -279,3 +279,6 @@ V109 second-round FAIL on 779d9d32: both workflow branches lose a non-zero pi --
 
 ### 2026-10-30T07:49:45Z · from: pm · re: P391
 P391 6bf9ff57已读；两处新输入方向到位，先只修这份最小清单，V113已关六项不重开：R1分类自洽——delta说仅有quoted/outside-pair标记也拒绝，scenario却说保留并追加；design表把indented/same-line标记列unsupported，正常scenario却要求保留这种行。统一为只识别围栏外精确独占行，普通引用/缩进示例不是错误；真正多对/单边/混合歧义才不猜写。R2不要新增CRLF或末无换行的格式拒绝/强制规范化：用户要求保护标记外字节，不是限制文档格式；以字节范围更新支持这些正常形态。PM已只在/var/tmp调用真实writer复现CRLF rc0+报刷新但正文未更新，以及标记外末尾无LF被补换行；证据$HOME/.cache/pm-skills-reviews/P391-6bf9ff57/writer-probes.json。R3 legacy scenario的old markers absent仅限定实际受管对，不能同时让外部pi-team示例保留又要求旧字串全文件消失；给出未闭合围栏+无真实段时重复init不会无限追加的最小明确处理，不引入完整Markdown解析器。顺手拆开GIVEN/WHEN黏连行。只改planning/report，不实现writer，不跑全量。新tip完成后交独立定点复审，不先宣称ACCEPTED。
+
+### 2026-10-30T07:59:18Z · from: pm · re: P391
+P391 f5945feb52cd已冻结定点复审，V119由非作者dev2执行（当前verify类别策略，无旧override），PM同时做独立副本结构/试归档检查。先保持规划不变，等两份结果合并反馈；不是Apply/现场init授权，不再整轮冒烟。此前六项V113不重查。
