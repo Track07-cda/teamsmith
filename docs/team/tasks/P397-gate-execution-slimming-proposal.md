@@ -57,6 +57,10 @@ The previously in-flight P396 observation is now closed at §61b 5724s; the whol
 
 `3fdd1a8aebba` remains NEEDS-CHANGES. Read the R2 section at `git show 6df603101968:docs/team/reports/V118-verify.md` and the **three-part minimum return** in the latest PM review; it takes precedence over first-round background and reviewer remedies not adopted by PM. Eight prior items are closed. The actual seven boundary subfixtures and the two filtered loops must agree with declaration/witness semantics; no broader selector or extra table. Withdraw unsupported totals rather than inventing another time-per-dispatch conversion. Finish the existing deterministic, timeout, link and evidence-handoff wording in the same return. This is proposal-only on the same branch/model/session; no long measurement or fresh exploration. Submit one new clean tip for scoped non-author acceptance. Do not rework after that freeze without PM's return.
 
+## Third-round bounded text return after V118 R3
+
+`be35c18b18bf` remains NEEDS-CHANGES. Read only the R3 section via `git show 25e0a9fdec1a:docs/team/reports/V118-verify.md` and the six-part disposition in PM review, which takes precedence over historical return text. Fix R3-1 through R3-6 together; do not reopen accepted controls, parsing/routes scope, LPT choices or discarded remedies. Loop-qualified keys restore the intended 3/153/931 potential counts; 5/151/929 is the broken unqualified-key counterexample, not the post-fix target. Reuse existing structural/archive receipts; no repeat trial archive solely for this text repair, no long tests or renewed Explore. Check the correction diff and any directly changed spec structurally as needed. Preserve original model/SID; only confirmed quota exhaustion invokes D219 via PM. Submit one clean corrected tip/report, then freeze for scoped non-author and PM acceptance. No Apply authorization.
+
 ## Planning acceptance and handoff
 
 Use the configured absolute OpenSpec binary if it does not resolve in the login shell; report exact executable/commands and output tails:
