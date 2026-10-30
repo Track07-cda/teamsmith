@@ -1,0 +1,1 @@
+- 2026-10-30T07:23:18Z · `team board set V117 done` · OK：阶段 propose 的交付证据：提案审查记录 docs/team/reviews/pi-marker-key-replies-proposal.md（判定 ACCEPTED）

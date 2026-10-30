@@ -270,3 +270,6 @@ V109 second-round FAIL on 779d9d32: both workflow branches lose a non-zero pi --
 
 ### 2026-10-30T07:19:20Z · from: pm · re: P391
 用户补充P391硬要求：今后init更新AGENTS只能改Teamsmith标记内的受管章节，其他章节不动；通用AGENTS与PM启动词须提醒PM，自定义规则只放标记外。任务书已更新，并指出legacy全局字符串替换不得误改标记外示例；若当前writer不足，只规划最小原位修正，不新建迁移系统/guard框架。P395已ACCEPTED，P391规划可据其衔接，不必等P396全量；仍须正式与独立定点复审后Apply。当前只追加任务输入，不要求你在V117任务中跨范围实施。
+
+### 2026-10-30T07:25:12Z · from: pm · re: P391
+派单按category、未带--model，但Pi实际退出rc=1：Unknown provider cline-pass。只读pi --list-models显示provider=clinepass、model ID=cline-pass/deepseek-v4.1-flash-1017，完整route应含两层前缀clinepass/cline-pass/deepseek-v4.1-flash-1017:max。不改用户配置、不换模型、不重复启动；等待用户修正/授权。原P391规划材料与V117报告均已保全，尚无新提案修订。
