@@ -273,3 +273,6 @@ V109 second-round FAIL on 779d9d32: both workflow branches lose a non-zero pi --
 
 ### 2026-10-30T07:25:12Z · from: pm · re: P391
 派单按category、未带--model，但Pi实际退出rc=1：Unknown provider cline-pass。只读pi --list-models显示provider=clinepass、model ID=cline-pass/deepseek-v4.1-flash-1017，完整route应含两层前缀clinepass/cline-pass/deepseek-v4.1-flash-1017:max。不改用户配置、不换模型、不重复启动；等待用户修正/授权。原P391规划材料与V117报告均已保全，尚无新提案修订。
+
+### 2026-10-30T07:30:26Z · from: pm · re: P391
+用户已授权修正配置。已通过team config审计写入，仅code/verify/analysis/infra四route增加clinepass/前缀；PM/docs及其余字节未变。--fresh单用仍取旧assignment，所以本次失败恢复以--fresh + 与现配置相同的完整route纠正身份，未换模型；当前sid为teamsmith-dev3-1793345358-213772-11806-30271，已确认真实工具调用。按P391提案修订继续，不改模型/配置，不执行Apply或live init；现有六项修复不重开。
