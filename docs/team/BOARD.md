@@ -633,7 +633,7 @@
 | P395 | 标记式关键回复OpenSpec提案 | dev2 | - | - | done |
 | V117 | 标记式关键回复提案独立评审 | dev3 | - | - | review |
 | P396 | 标记式关键回复MVP实现 | dev | - | - | wip |
-| P397 | Gate execution slimming proposal | dev2 | - | P379 | todo |
+| P397 | Gate execution slimming proposal | dev2 | - | P379 | wip |
 
 ## 当前里程碑
 

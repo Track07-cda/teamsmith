@@ -1030,3 +1030,6 @@ P385 PM/V111 verdict: REWORK REQUIRED, no Propose. PM reproduced Pi 1.4.0 sendMe
 
 ### 2026-10-30T06:51:02Z · from: pm · re: P397
 P395正式提案已ACCEPTED，phase按证据结项（未合并，原分支0e557f47保留）。现派P397：从P379已接受测量直接写gate-execution-slimming提案，独立工作树，不等P396、不再跑全量；详见新任务书和D217。先证明61b减重复且保留观察，再设计耗时均衡分片；不得把具名红侧仍在当成所有附带覆盖不变。
+
+### 2026-10-30T07:03:26Z · from: pm · re: P397
+用户已在运行席位选回其配置的模型，并明确要求PM不再帮改。P397初始--model覆盖是PM错误，任务书已纠正：不要为旧启动说明切回OpenAI，不重启或改配置；以后新任务按category，不沿用临时覆盖。主检出init兼容写入调用者未证实，P397仍只读证据/写提案，不等恢复也不跑门禁。
