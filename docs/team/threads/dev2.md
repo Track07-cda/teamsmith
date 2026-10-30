@@ -1045,3 +1045,6 @@ V119协调：PM已修正自己任务书/正式review中的绝对私有家目录�
 
 ### 2026-10-30T08:18:03Z · from: pm · re: P397
 V119最终59fd12c00c8d已收齐，B1已关，main也已hits0；原报告/分支保留不标done。现在正式接回P397原分支4bdcc5b3的proposal-only集中返修，按更新brief与正式review四项裁决，V118完整报告git show354b02dc可读。不动P391，不跑full/长矩阵，不实现；不复制第二golden表，selected-set LPT确定性与不同decision可迁移要在delta中明示。模型按analysis当前policy，无旧OpenAI覆盖。新tip提交后再次独立审，未获Apply授权。
+
+### 2026-10-30T09:05:41Z · from: pm · re: P397 second-round return
+V118 R2 `6df603101968` 已收齐：八项已关闭，不重开。按正式review新增的“三项最小返修”接回原P397分支：真实七子夹具执行账（六条收窄，11个见证在未收窄代码中）、撤回跨轴总量及错误3300→3600推论、收妥tie-break/死链/表头与证据交接。不要把审阅者的约880s估算当新答案，它也用了不可比的未变异树读数。只收窄既有两个faults循环，不扩成七子夹具通用选择器；明确空fault选择与空检测声明不同，不引入第二表。PM已持久保存原算账脚本/输入/输出及校验和，下一审可按review路径直接读取，不为证据再跑长矩阵。原分支/模型/SID不变；若真额度耗尽上报原错，由PM按D219新模型+新SID切换。无Apply、full smoke、长变异、CI/现场init授权。提交新tip后停改，待定点独立复审。
