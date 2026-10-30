@@ -1,11 +1,15 @@
 # Gate execution slimming · P397 proposal review
 
 verdict: **NEEDS-CHANGES** — no Apply authorization
-candidate: `4bdcc5b375fb` (`task/P397-gate-slimming-proposal`, author dev2)
+candidate: `3fdd1a8aebba` (`task/P397-gate-slimming-proposal`, author dev2); first-round baseline `4bdcc5b375fb`
 change: `gate-execution-slimming`
 independent review: V118 / verify (not the author)
 
-## Answer so far
+## Current answer — second round at 3fdd1a8a
+
+The author has returned four planning files plus a report, no product/test/workflow changes. Restored behavior controls remain, no second golden table, per-decision-set LPT replaces cross-decision stability, and zero-benefit cross-section preparation is removed. However PM's full read finds the cost/scope correction still unfit for acceptance: six rows are narrowed but seven are priced; 1365 removed dispatches exceeds even the seven-arm faults-loop upper bound of 1106; the 3673..4093s estimate is constructed on the 5724s axis then subtracted from the 6719s axis to advertise 180.3..187.3min; and 3300s does not mathematically imply a 3600s timeout (the proposal's own isolated-61b closure is 1s). That total is **withdrawn as a reliable estimate pending correction**, not a speedup claim. V118 will independently adjudicate these counterexamples and the four-return closure without requiring the discarded remedies. Original first-round findings/evidence below are historical. No Apply, full smoke or long matrix is authorized for proposal review.
+
+## First-round answer and evidence
 
 This is a delivered proposal, not an implemented speedup. PM has read all four planning files and the author report. The projected ordinary shard 26.4min / routing shard 49.2min / serial full 155.7min are estimates, not observed post-change results. The 2026-10-30 interrupted gate contributes a closed 61b reading of 5724s, not a complete PASS. PM independently reproduced structural validation and a disposable trial archive in a clean clone: OpenSpec 20/20, spec-refs 121 references clean, real-names ledger clean, 29 unchecked implementation tasks, disposable archive +2/~2 and post-archive strict 19/19, all four target requirement headings unique, and the real candidate still clean/unarchived. Background job `p397-pm-proposal-validation` exited 0 in 81.6s. Its script and full log are under `$HOME/.cache/pm-skills-reviews/P397-4bdcc5b3/`; no smoke or long matrix ran. V118 was launched without --model on the configured verify route; its actual pane shows the correct provider/model and source-reading tool calls. The prior V113 report/branch remains unmerged and preserved; its review status was not forced to done.
 
@@ -38,6 +42,10 @@ The minimal return preserves V118's accepted routes boundaries, genuine same-sou
 V118 correctly found a ledger-ban hit in the PM-written brief's literal private home path. The pure candidate export passed the real-name scan; the failure was review metadata, not the author's product proposal. PM corrected V118/V119 commands to `"$HOME/.bun/bin/openspec"`; no executable/model changed. This does not retroactively turn V118's reported rc=1 into a pass. Corrected metadata receives its own scan.
 
 V119 delivered its final report at `59fd12c00c8d` and that branch remains retained/unmerged. PM explicitly returned dev2 to `task/P397-gate-slimming-proposal`, carrying the four-part return in metadata commit `f7f856d0`; its planning baseline remains `4bdcc5b3` until the author revises it. P397 rework launched on current analysis policy without a model override. The audited --force replaces only the delivered V119 seat assignment, not its branch or verdict. P391's separate author dev3 also resumed its narrow proposal-only return. No Apply dispatch.
+
+## Second-round review hand-back
+
+The completed V120 `d6771f073d10` report/branch is retained unmerged. PM explicitly hands verify back to original V118 for its second round on exact `3fdd1a8aebba`; --force is audited here and in the brief as replacement of that delivered seat assignment only. New dispatch follows current verify policy, without a stale model override. PM independently validates a disposable exact-tip clone in parallel; both conclusions remain required. The source-specific metadata copy does not authorize reviewer edits to planning files.
 
 ## Boundaries
 
