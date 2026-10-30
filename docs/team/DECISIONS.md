@@ -2066,3 +2066,8 @@ P397 只写提案、delta、设计、实施计划和报告；PM 与非作者独�
 正式接受 P391 最终提案 `03a05fce764b`（工件 `ee504509`），依据 V113/V119 已关闭发现、非作者 V120 `d6771f073d10` 的 ACCEPT 与 PM 独立 exact-tip 校验（OpenSpec 20/20、引用/真实名单扫描、原试归档组合证据）。唯一正式结论与三个非阻塞观察的落地处置见 `docs/team/reviews/instruction-context-slimming-proposal.md` 最末节；规格真源仍是 `openspec/changes/instruction-context-slimming/`。
 
 设计方向及用户要求已收口：短共享 AGENTS、分工明确的 PM/worker 指引，init 只更新精确受管边界，并提示 PM 把自定义规则放在外面。这不是瘦身或 writer 修复已经交付；25 个实施任务仍未完成。Apply 的前置仍是 tasks 1.1 要求的 P393/P396 指令整合基线，不趁提案通过另起分支重写并覆盖它们。用户尚未授权的 protected merge/push、现场 28 行搬移、init/reload 和真实归档均不包含在本决定中；未合并的提案/复审分支继续保留，不伪造 done。
+
+### D219 · 用户授权 clinepass 额度耗尽时的备用模型（2026-10-30）
+
+用户明确指定届时改用 `opencode-go/deepseek-v4.1-flash:max`。执行规则已放在 `AGENTS.md` 的「项目模型额度切换」节、Teamsmith 受管标记之外，不修改通用产品默认值。本机登录 shell 的模型目录确认 provider `opencode-go` 下存在 `deepseek-v4.1-flash`；这不是模型实际调用成功的证明。当前未触发额度切换，不改类别配置或已有席位，不启动备用模型探针；不新增自动 fallback 实现。
+

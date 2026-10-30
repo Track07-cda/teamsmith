@@ -194,3 +194,7 @@ bash <skill>/scripts/team watch --once        # run a single patrol tick
 | `docs/team/{BOARD,ROADMAP,OWNERSHIP,DECISIONS}.md` | PM | Board / milestones / ownership / decisions |
 | `.worktrees/<agent>/` | that agent | Long-lived worktree (sessions are keyed by cwd -- keep it stable) |
 <!-- teamsmith:end -->
+
+## 项目模型额度切换
+
+仅在明确确认 `clinepass` 额度耗尽时，PM 可将受影响任务切换到 `opencode-go/deepseek-v4.1-flash:max`，无需再次申请换模授权；不提前改变当前配置或运行席位，普通连接失败、超时或限流不等同额度耗尽。切换须记录原因，保留任务分支和已有证据，显式选择新模型并创建新 SID，不把旧模型会话续到新模型上。此条是项目规则，保留在 Teamsmith 受管标记之外。
