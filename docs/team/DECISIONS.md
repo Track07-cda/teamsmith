@@ -2060,3 +2060,9 @@ P389 探索 `3a32f85f8f20` 获接受进入 Propose。采用 AGENTS 共同短章�
 顺序为减少 61b 重复执行、消除 36/51/38 可证明重复的准备与观察、再按成本均衡 CI。31 个变异的具名报错与正常/恢复对照必须保留；缩小测试组丢掉的附带观察必须明列，不能把“每个变异仍能红”冒充全部覆盖等价。耗时只作参考，不提高超时，不默认挪到 nightly，不增加调度系统。
 
 P397 只写提案、delta、设计、实施计划和报告；PM 与非作者独立审查接受后才派 Apply。P396 可并行收尾，但任何后续共享测试文件实现须在候选冻结后串行集成。用户本次继续授权不含 protected merge/push、公开 CI 改动执行、真实归档或发布。
+
+### D218 · P391 指令瘦身与 init 受管边界提案正式 ACCEPTED，实施仍等整合基线（2026-10-30）
+
+正式接受 P391 最终提案 `03a05fce764b`（工件 `ee504509`），依据 V113/V119 已关闭发现、非作者 V120 `d6771f073d10` 的 ACCEPT 与 PM 独立 exact-tip 校验（OpenSpec 20/20、引用/真实名单扫描、原试归档组合证据）。唯一正式结论与三个非阻塞观察的落地处置见 `docs/team/reviews/instruction-context-slimming-proposal.md` 最末节；规格真源仍是 `openspec/changes/instruction-context-slimming/`。
+
+设计方向及用户要求已收口：短共享 AGENTS、分工明确的 PM/worker 指引，init 只更新精确受管边界，并提示 PM 把自定义规则放在外面。这不是瘦身或 writer 修复已经交付；25 个实施任务仍未完成。Apply 的前置仍是 tasks 1.1 要求的 P393/P396 指令整合基线，不趁提案通过另起分支重写并覆盖它们。用户尚未授权的 protected merge/push、现场 28 行搬移、init/reload 和真实归档均不包含在本决定中；未合并的提案/复审分支继续保留，不伪造 done。

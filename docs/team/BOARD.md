@@ -636,7 +636,7 @@
 | P397 | Gate execution slimming proposal | dev2 | - | P379 | wip |
 | V118 | 测试瘦身提案独立审查 | verify | - | P397 | review |
 | V119 | 指令瘦身与AGENTS边界提案定点复审 | dev2 | - | P391 | review |
-| V120 | P391 final S1-S4 diff independent review | verify | - | - | wip |
+| V120 | P391 final S1-S4 diff independent review | verify | - | - | review |
 
 ## 当前里程碑
 
