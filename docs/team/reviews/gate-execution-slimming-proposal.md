@@ -1,11 +1,11 @@
 # Gate execution slimming · P397 proposal review
 
 verdict: **NEEDS-CHANGES** — no Apply authorization
-candidate: `3fdd1a8aebba` (`task/P397-gate-slimming-proposal`, author dev2); first-round baseline `4bdcc5b375fb`
+candidate: `be35c18b18bf` (`task/P397-gate-slimming-proposal`, author dev2); earlier freezes `3fdd1a8aebba` and `4bdcc5b375fb` retained
 change: `gate-execution-slimming`
 independent review: V118 / verify (not the author)
 
-## Current answer — second round at 3fdd1a8a
+## Historical second-round answer — 3fdd1a8a
 
 The author has returned four planning files plus a report, no product/test/workflow changes. Restored behavior controls remain, no second golden table, per-decision-set LPT replaces cross-decision stability, and zero-benefit cross-section preparation is removed. However PM's full read finds the cost/scope correction still unfit for acceptance: six rows are narrowed but seven are priced; 1365 removed dispatches exceeds even the seven-arm faults-loop upper bound of 1106; the 3673..4093s estimate is constructed on the 5724s axis then subtracted from the 6719s axis to advertise 180.3..187.3min; and 3300s does not mathematically imply a 3600s timeout (the proposal's own isolated-61b closure is 1s). That total is **withdrawn as a reliable estimate pending correction**, not a speedup claim. V118 will independently adjudicate these counterexamples and the four-return closure without requiring the discarded remedies. Original first-round findings/evidence below are historical. No Apply, full smoke or long matrix is authorized for proposal review.
 
@@ -56,6 +56,21 @@ Independent report `6df603101968` confirms all three PM counterexample groups; e
 3. **Finish existing deterministic/text/evidence details (M6–M8).** Tie-break equal-cost keys by key ascending and equal-weight shards by shard number ascending. Correct the one renamed requirement link and duplicate table header; clarify unfinished-budget detection vs completed-run duration without a new guard. Preserve actual reproducible analysis/handoff evidence through a stable pointer plus checksum or a small committed report attachment—not a second runtime golden table. The author evidence already exists, and PM has persisted `matrix.sh`, `lpt.py`, `costs.tsv`, `t0.log` plus checksums at `$HOME/.cache/pm-skills-reviews/P397-3fdd1a8a/`; absence from the reviewer's own worktree is not evidence that it vanished when a session ended. The future census must likewise be handed over and accessible to Verify. No new test entry point, cache service, mass raw-log commit or full rerun just to repair prose.
 
 V118's detailed source mapping and original R2 report remain authoritative evidence, but its proposed extra speed estimate is explicitly not accepted. Previously closed behavior controls, per-batch LPT, profitable parsing reuse, routes target choices and removal of cross-section preparation are not reopened. One author return followed by scoped non-author review, with structure checks only as needed; no speculative new savings number to restart this cycle.
+
+## Current answer — be35c18b, scoped third review
+
+Author return `be35c18b18bf` changes four planning files and its report only. PM has read the complete planning diff and report. The unsupported 3673..4093s/180.3..187.3min forecasts are withdrawn, seven calls/six narrowed arms and outside-loop witnesses are now explicitly distinguished, and both tie-breaks are present. These corrections and the eight previously closed items are not reopened. No post-change speedup has been measured. V118 must review only the remaining interactions below against this exact candidate, retaining its earlier reports; no exploration or long run is authorized.
+
+PM source-only probes on this exact commit found:
+
+1. **Loop identity is missing from case keys.** Both faults arrays contain `positional-model` and `data-provider`. The three unqualified `template-unbound` keys select worker `positional-model:launch`, `data-sid:preview`, `data-provider:preview` plus PM `positional-model:launch`, `data-provider:preview`: five cases, not the intended three. Qualify keys by the existing worker/PM loop (no generic selector), consistently across declaration shape, examples, tasks and counts. Also the worker writer can reject a template and `continue` before dispatch: 647/931 are source-derived potential-work counts under stated premises, not empirical executions/savings for every mutated tree. Keep actual counting in the already-planned Apply census, not a new probe matrix or invented seconds estimate.
+2. **Coverage handoff must distinguish retained from intentionally discarded observations.** tasks 4.3 and design 2.7 require declaration ids to include every observed pre-filter FAIL, yet design explicitly retires incidental observation width. Inventory all observed ids, then account for retained mandatory detections and explicitly discarded incidental observations; do not silently lose an existing named detection, and do not require every discarded incidental FAIL as a runtime declaration. This is one-time review evidence, not a second runtime table/guard.
+3. **Empty case selection and empty detection ids are still mixed in two scenarios.** Removing one of several ids is not an empty detection declaration; removing a selectable case does not empty the separate detection-id column. Use an explicitly empty detection-id list for its red example, an unchanged nonempty id list whose witness no longer fails for missing detection, and an empty case list with witnesses outside the two loops for the legitimate green example. Align with tasks 1.8; no new mechanism is requested.
+4. **Timeout exception and split reference.** Scope identical stale-table verdicts to runs completing within existing finite limits, leaving unfinished-run attribution explicit. The first renamed requirement reference still says `runs the assertions\nit declares` across a line break: the author's line-by-line grep misses it, although references at lines 64/140 are correct. PM independently normalized whitespace in `git show be35c18b:.../spec.md` and confirmed this. Correct that one reference; the author's M7-closed claim is not accepted.
+
+The report/design also say four analysis sidecars were committed, but `git ls-tree -r be35c18b -- docs/team/reports/P397-dev2/` is empty. Accessible checksummed PM evidence plus the committed script appendix satisfy the agreed handoff alternative; correct the provenance wording rather than force a mass raw-log commit. The existing cache remains `$HOME/.cache/pm-skills-reviews/P397-3fdd1a8a/author-evidence/`.
+
+V118 should independently adjudicate these specific counterexamples and prescribe one minimal text repair if needed, without reviving retired remedies or requiring another long test. Keep author planning frozen while reviewing, and report ACCEPT/NEEDS-CHANGES on the exact candidate; a structural pass is not semantic acceptance. No Apply authorization.
 
 ## Boundaries
 

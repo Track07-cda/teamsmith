@@ -12,11 +12,22 @@ status: todo
 
 判断 P397 的提案能否进入 Apply：是否真正减少重复工作而保留必要的错误发现能力，且成本与分片算法承诺能兑现。先给 ACCEPT / NEEDS-CHANGES，再给逐条证据和最小修订范围；不要把 OpenSpec 格式通过当成实质接受。
 
-第二轮冻结候选：`3fdd1a8aebba`，分支 `task/P397-gate-slimming-proposal`；第一轮 `4bdcc5b375fb` 与报告 `354b02dc76b3` 保留作差异基线。交付报告 `docs/team/reports/P397-dev2.md`；规划文件 `openspec/changes/gate-execution-slimming/`。作者 dev2；你没有参与其编写。PM 正在并行做自己的检查。只审这份提案，不重新开展 P379 探索，不审/改 P396 产品实现。
+第三轮冻结候选：`be35c18b18bf`，分支 `task/P397-gate-slimming-proposal`；第二轮 `3fdd1a8aebba` / 报告 `6df603101968`，第一轮 `4bdcc5b375fb` / 报告 `354b02dc76b3` 均保留作差异基线。交付报告 `docs/team/reports/P397-dev2.md`；规划文件 `openspec/changes/gate-execution-slimming/`。作者 dev2；你没有参与其编写。PM 正在并行做自己的检查。只审这份提案，不重新开展 P379 探索，不审/改 P396 产品实现。
 
 阅读顺序：AGENTS → 自己 thread → 本 brief → 提案四文件和交付报告 → `openspec/specs/verification/spec.md` 的真实要求 → 提案实际涉及的测试代码。参考 P379 的测量可通过 `git show task/P379-gate-simplification-explore:docs/team/reports/P379-dev2.md` 查；若该旧引用不成立，查本仓 refs，不以找不到当作通过。原始日志位置在作者报告与设计中；只读本项目证据，不扫其他项目会话或读取凭据。
 
-## 第二轮最小复评范围（本节优先）
+## 第三轮定点复评（本节优先）
+
+只核对 PM 正式 review 的「Current answer — be35c18b」四组联动及证据措辞，八项已关闭内容不重开。PM 已读完整规划 diff 和报告；撤回耗时预测、七调用/六收窄臂的基本区分、tie-break 已落实。独立裁定：
+
+- 不带循环身份的 `<模板>:<模式>` 是否使 `template-unbound` 实际选中五项而非三项；最小处理仅需现有 worker/PM 两循环命名空间。检查 writer 先拒绝后 continue 对 647/931 静态推导的适用前提，不把理论可排除调用量当实测。
+- 普查全部实测 FAIL 与运行时必检声明如何对账；4.3 的声明包含全部实测 id 是否与明示丢弃附带观察矛盾。只要求一次性交接证据分类，不造第二张黄金表或通用选择器。
+- 两个场景仍混淆删一条 id、清空 id、删用例；与 1.8 的三种红/绿形状一致即可。陈旧成本的结论等同性需带既有限时例外。
+- 第一处旧 requirement 名被换行拆开，逐行 grep 未发现：请正规化空白后核对，勿沿用作者的 M7 已闭合结论。四份 sidecar 未被 git 跟踪，已有校验和副本与正文脚本附录可用；纠正来源措辞即可，不扩原始日志提交。
+
+第三轮沿用当前 V118 模型与 SID，只恢复原任务；不更改类别配置、不加历史模型 override。PM 从 be35c18b 带入规划四文件与作者报告，并同步审查 brief/review；这是 PM 管理的冻结输入，不是你获权修改规划。你仍只追加自己的 V118 报告。只做静态/小算术和必要结构校验，不跑全量或长矩阵。
+
+## 第二轮最小复评范围（历史背景）
 
 四项 PM 裁决见 `docs/team/reviews/gate-execution-slimming-proposal.md`：保留前后行为对照，不建第二张黄金表，按批 LPT、不要求跨决策集稳定，删除零收益跨段准备。不能把第一轮被 PM 明确舍弃的替代方案重新当成必改。下面七题是第一轮背景，不重做已关闭的探索。
 
