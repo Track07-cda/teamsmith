@@ -226,3 +226,6 @@ V100第二轮定点复看：候选 c1a3f4d0。作者按你 §9/§10 改了三件
 
 ### 2026-10-27T03:22:16Z · from: pm · re: V109
 V109 third round is frozen at 47df9a76d5ef0519ef890e3175c596718d7fa355 (implementation 6004e822d4a2cc0c3ee0c7d397742b9510f99e49). The main-checkout V109 brief now requires independent exit-42 contrasts on both workflow branches, the build-image sibling, all prior red sides, and the real-names ledger check. Preserve both earlier FAIL sections and append Third round.
+
+### 2026-10-30T07:37:27Z · from: pm · re: V118
+V118派单席位切换审计：V113已交付第二轮独立报告4ae2700d6bee，六项修订已接受，但records-only分支未合并，因此保留其review状态，不伪造done。旧task/V113-instruction-slimming分支及报告全部保留，verify当前无运行窗口。本次--force只接手闲置席位以开展不同change的独立提案审查，不豁免作者隔离、规格锚点或delta所有权，也不宣称V113已合并。P391衔接修订仍由dev3负责。
