@@ -37,7 +37,7 @@ The minimal return preserves V118's accepted routes boundaries, genuine same-sou
 
 V118 correctly found a ledger-ban hit in the PM-written brief's literal private home path. The pure candidate export passed the real-name scan; the failure was review metadata, not the author's product proposal. PM corrected V118/V119 commands to `"$HOME/.bun/bin/openspec"`; no executable/model changed. This does not retroactively turn V118's reported rc=1 into a pass. Corrected metadata receives its own scan.
 
-P397 rework is queued for author dev2 **after V119 is delivered**; do not interrupt the independent P391 review or mix the two changes in one worktree. The original `task/P397-gate-slimming-proposal` stays frozen at `4bdcc5b3` until that explicit hand-back. No Apply dispatch.
+V119 delivered its final report at `59fd12c00c8d` and that branch remains retained/unmerged. PM explicitly returned dev2 to `task/P397-gate-slimming-proposal`, carrying the four-part return in metadata commit `f7f856d0`; its planning baseline remains `4bdcc5b3` until the author revises it. P397 rework launched on current analysis policy without a model override. The audited --force replaces only the delivered V119 seat assignment, not its branch or verdict. P391's separate author dev3 also resumed its narrow proposal-only return. No Apply dispatch.
 
 ## Boundaries
 
