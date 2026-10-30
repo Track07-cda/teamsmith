@@ -1042,3 +1042,6 @@ V119新独立审查：P391作者dev3，冻结f5945feb52cd，范围仅最后marke
 
 ### 2026-10-30T08:13:08Z · from: pm · re: V119
 V119协调：PM已修正自己任务书/正式review中的绝对私有家目录，用等价$HOME命令；注入这两个PM文件的小提交4779bcc4和当前tip不改任何P391规划。不要把这种PM元数据命中算作者候选缺陷；可定点重跑ledger，不重做结构检查。P397的V118已交NEEDS-CHANGES，四项集中裁决和更新brief只在main待接回；先完成V119，勿在当前P391分支动P397。
+
+### 2026-10-30T08:18:03Z · from: pm · re: P397
+V119最终59fd12c00c8d已收齐，B1已关，main也已hits0；原报告/分支保留不标done。现在正式接回P397原分支4bdcc5b3的proposal-only集中返修，按更新brief与正式review四项裁决，V118完整报告git show354b02dc可读。不动P391，不跑full/长矩阵，不实现；不复制第二golden表，selected-set LPT确定性与不同decision可迁移要在delta中明示。模型按analysis当前policy，无旧OpenAI覆盖。新tip提交后再次独立审，未获Apply授权。

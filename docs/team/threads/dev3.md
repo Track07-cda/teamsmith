@@ -282,3 +282,6 @@ P391 6bf9ff57已读；两处新输入方向到位，先只修这份最小清单�
 
 ### 2026-10-30T07:59:18Z · from: pm · re: P391
 P391 f5945feb52cd已冻结定点复审，V119由非作者dev2执行（当前verify类别策略，无旧override），PM同时做独立副本结构/试归档检查。先保持规划不变，等两份结果合并反馈；不是Apply/现场init授权，不再整轮冒烟。此前六项V113不重查。
+
+### 2026-10-30T08:18:03Z · from: pm · re: P391
+P391定点返修已解冻：V119最终59fd12c00c8d，报告git show可读。只同单修S1-S4，正式review末节和brief已给确定落法；计数全部候选再决定刷新/拒绝，closed围栏词；begin行行尾作为正文输出格式，既有完整文件expected比对抓LF正文错误；明确两项拒绝baseline由既有fixture任务承担；补齐backtick info-string条件。不加parser框架/独立gate，不实现writer，不重查六项。结构轻量验证后冻结新tip，等仅此diff独立复核。main元数据ledger已hits0，旧main报警已过时。

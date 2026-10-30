@@ -1,6 +1,6 @@
 # instruction-context-slimming · Formal proposal review
 
-Current candidate: `f5945feb52cd` (2026-10-30 R1/R2/R3 reconciliation) · verdict: **IN REVIEW — no Apply authorized**
+Current candidate: `f5945feb52cd` (2026-10-30 R1/R2/R3 reconciliation) · verdict: **NEEDS-CHANGES — no Apply authorized**
 
 Historical first candidate: `00f7d50e2879` (proposal artifacts `b3a48b35`); the first structural checks below refer to that earlier tip.
 
@@ -79,3 +79,11 @@ Author delivered `f5945feb52cd` with only the four planning artifacts and report
 V119 (dev2, not author dev3) independently checks only this final input diff plus non-regression of the already-accepted six V113 corrections. No full suite/long mutation run. PM will independently reproduce final structural/trial-archive checks in parallel. Formal ACCEPTED still requires both substantive reviews and their evidence. P393/P396 source integration, the 28-line live custom preservation, real init and PM reload retain their separate sequencing/authorization boundaries.
 
 PM final frozen-tip structural check is now independently PASS: background `p391-pm-final-proposal-validatio` exit 0; strict validation 20/20, apply metadata ready with 25 unchecked tasks, spec-refs 121/0 undeclared, real-name ledger hits=0/names=ok, disposable archive +2 requirements followed by 19/19, five final boundary/placement scenario headings unique, original change still present and clean. Log and script: `$HOME/.cache/pm-skills-reviews/P391-f5945feb/`. No smoke/install matrix/live init ran. This does not replace V119's substantive verdict.
+
+### V119 delivered: one narrow return, no architecture reopening
+
+V119 `59fd12c00c8d` independently returns NEEDS-CHANGES on frozen `f5945feb52cd`; report available via `git show 59fd12c00c8d:docs/team/reports/V119-dev2.md`. Its prior PM-metadata ledger blocker B1 is closed on the review branch (hits=0); PM main also passed hits=0 after `0ec4c4b7`. The report's remaining reference to old main `baf5850e` is historical, not an outstanding main failure.
+
+PM consolidates S1–S4 into the same minimal proposal correction: (1) scan every eligible delimiter candidate before deciding, require one unambiguous supported pair for refresh and explicitly refuse multiple candidates rather than implying the scanner stops at the first; qualify the append example as a closed fence, leaving the unclosed-fence refusal unchanged; (2) choose the existing begin-delimiter line's LF/CRLF as the replacement body's terminator, including mixed-ending files, preserve both delimiter lines/outside bytes, and strengthen the existing expected-file comparison so an LF-only body inserted in a CRLF block goes red without adding a separate gate; (3) point the existing tasks at the already-specified ambiguity/unclosed-fence baseline fixtures; (4) complete the already-cited narrow backtick-fence rule's info-string condition, without a generic Markdown parser or shared parsing framework.
+
+Dev3 remains P391's proposal author. Only its existing four artifacts/report change; the six V113 corrections, accepted marker lifecycle and live-adoption permissions stay settled. Independent follow-up inspects this diff, not another full proposal/fixture matrix. V119's completed review branch is retained while dev2 returns to P397 rework; no Apply is authorized.

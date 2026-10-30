@@ -96,3 +96,11 @@ Put a short durable custom-placement instruction in the generic AGENTS template 
 Reuse and replace/strengthen the existing outside-preservation/legacy/idempotence predicates rather than stacking new process guards. Include a falsifiable mutation of the existing writer that overwrites or globally substitutes outside text, plus restore-green. Reviewer checks actual final files and rendered PM guidance, not a keyword-only assurance. The recent 28-line loss/recovery is the regression evidence, not a rule to embed that project's 28 lines in the product template.
 
 No live AGENTS/custom-rule relocation, init/bootstrap, model change, restart, merge, push, full smoke or archive is authorized by this clarification. P391 remains Propose until formal PM and independent targeted re-review ACCEPT the revised exact artifacts.
+
+## V119 final minimal return (2026-10-30)
+
+Freeze `f5945feb52cd` is NEEDS-CHANGES; read `git show 59fd12c00c8d:docs/team/reports/V119-dev2.md` and the final section of PM's formal review. B1 is closed; its reference to old main is historical (main also now scans clean). R1/R2/R3 direction and V113's six corrections remain accepted. Do not re-explore or implement the writer.
+
+Amend only the existing proposal/design/tasks/delta/report to close S1–S4 together: count all eligible delimiter candidates before deciding to refresh/refuse, clarify that the example eligible for append has a closed fence, make the body's terminator choice explicit for mixed endings (existing begin-line terminator), and have the existing expected-file/CRLF comparison detect an incorrectly LF-only inserted body. Map ambiguity/unclosed-fence baseline assertions to existing fixture tasks; complete the narrow backtick-fence info-string condition already referenced. Strengthen/replace existing fixture predicates rather than add a gate, generic parser or golden table. Preserve every outside byte and both current delimiter lines; legacy delimiter conversion remains only the explicit two-line exception.
+
+Run only the lightweight planning validation and disposable spec trial, not full smoke/install matrix/model mutation runs. Report exact revised tip and the few changed passages. Independent follow-up is this diff only; no Apply/live init/reload/merge authority follows.
