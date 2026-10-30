@@ -4,7 +4,7 @@ Candidate under review: `8734bd93c1c8` · Status: **UNDER REVIEW — no Apply au
 
 PM has read the complete proposal, design, tasks and all four delta specs. The design follows D213–D215: marked normal PM answers, a directed PM extension, narrow parser/source journal, existing writer/store, final settled eligibility, one automatic attempt, no hash recovery, and final cleanup with the accepted transient stream flash.
 
-V117 is independently reviewing the exact artifact candidate. The author was asked to supply the initially missing `docs/team/reports/P395-dev2.md`; formal acceptance requires that delivery report and a clean final tip in addition to V117 and PM's checks. No implementation, live-team marker, canonical-spec edit, archive or protected merge is authorized at this checkpoint.
+V117 is independently reviewing the exact artifact candidate. The author subsequently delivered `docs/team/reports/P395-dev2.md` at final tip `0e557f47803ee75e2d7d951d93ef79d1a82245fc`; PM verified the branch is clean and `8734bd93..0e557f47` makes no change under `openspec/changes/pi-marker-key-replies/`, so V117's frozen artifact review remains valid. The report records its own final-check log and preserves the earlier missing-report state honestly. No implementation, live-team marker, canonical-spec edit, archive or protected merge is authorized at this checkpoint.
 
 ## PM review focus
 
