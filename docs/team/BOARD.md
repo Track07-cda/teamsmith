@@ -631,7 +631,8 @@
 | V115 | 标记式关键回复独立架构复核 | dev3 | - | - | review |
 | V116 | team say实现独立复验 | dev2 | - | - | review |
 | P395 | 标记式关键回复OpenSpec提案 | dev2 | - | - | review |
-| V117 | 标记式关键回复提案独立评审 | dev3 | - | - | wip |
+| V117 | 标记式关键回复提案独立评审 | dev3 | - | - | review |
+| P396 | 标记式关键回复MVP实现 | dev | - | - | wip |
 
 ## 当前里程碑
 

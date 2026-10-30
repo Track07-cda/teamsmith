@@ -1,6 +1,6 @@
 # pi-marker-key-replies · Formal proposal review
 
-Candidate under review: `8734bd93c1c8` · Status: **UNDER REVIEW — no Apply authorized**
+Candidate under review: `8734bd93c1c8` · verdict: **ACCEPTED**
 
 PM has read the complete proposal, design, tasks and all four delta specs. The design follows D213–D215: marked normal PM answers, a directed PM extension, narrow parser/source journal, existing writer/store, final settled eligibility, one automatic attempt, no hash recovery, and final cleanup with the accepted transient stream flash.
 
@@ -28,4 +28,12 @@ Clean clone: `$HOME/.cache/pm-skills-reviews/P395-8734bd93/candidate`.
 
 Logs: `$HOME/.cache/pm-skills-reviews/P395-8734bd93/static-checks.log` and `trial-archive.log`. These prove structure and merge/Purpose hygiene only, not product behavior or final design acceptance.
 
-The final verdict remains pending V117 and the author's required delivery report.
+## Final PM verdict — ACCEPTED for local Apply
+
+V117's independent substantive review at `1a9892055124` is **ACCEPT**, with no new delta or remaining correction. It independently checked the escaped-suffix rule, lifecycle/attempt/recovery design, cleanup failures, PM injection feasibility, exact requirement/Purpose handling and real-evidence plan, and reproduced the structural/trial checks. PM reconciles that review with the complete read-through and the independent results above and formally accepts this exact proposal.
+
+P395's final delivery report is at `0e557f47803ee75e2d7d951d93ef79d1a82245fc`, with no artifact changes after the reviewed candidate and a clean branch. All 14 implementation tasks remain unchecked; this verdict is not a functional claim.
+
+P396 may implement the proposal on a local task branch based on that final tip, with a different author and later independent Verify. Parser/source and PM-injection slices may proceed first. Shared `SKILL.md`/guide migration must wait until accepted P393 has landed and been merged into the implementation branch; do not overwrite or duplicate its say changes. P391 remains blocked until the new capture path and instruction contract are integrated.
+
+The authorized archive still requires the exact canonical Purpose edit and landed-text check; this proposal verdict does not perform it. No protected merge/push, live-team marker/restart/reload, real-model autonomy call, real archive or release is authorized.

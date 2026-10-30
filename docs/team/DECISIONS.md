@@ -2037,6 +2037,14 @@ PM 接受探索进入 P395，条件是提案明确“代码区外先处理反斜
 
 最小架构仍为 PM 定向扩展、窄 parser/offset、source 操作 journal、既有 writer/store；D214 的流式暂现和不确定不重发不变。只允许 planning-only Propose，正式提案 ACCEPTED 与独立审阅后才 Apply，P391 继续等待新回复契约。
 
+### D216 · 标记式关键回复提案正式 ACCEPTED，允许本地 Apply（2026-10-30）
+
+P395 精确工件 `8734bd93c1c8a768b9787e8b44e1d82c2ea98455` 经 V117 独立实质评审 `1a9892055124` 为 ACCEPT，PM 正式评审 ACCEPTED。最终报告 tip `0e557f47803ee75e2d7d951d93ef79d1a82245fc` 与受审工件一致且分支干净；PM 与 V117 均独立复验 strict、规格引用、真实名单、diff 和带 Purpose 落地核查的副本试归档。
+
+P396 可由不同作者在本地分支实施。先做 parser/source 与 PM 注入，再在完成 P393 的共享 SKILL.md 落地后迁移指令，禁止覆盖/重复 say 改动。三阶段资格、source 一次尝试、转义后缀 parser、完整控制行清理、不确定不重发、真实 PM 身份和真实 writer/private Pi 证据均为验收硬边界。
+
+本决定不表示功能已实现，不允许 protected merge/push、live-team marker/restart/reload、真实模型自主调用、真实归档或发布。归档仍须执行候选中的 canonical Purpose 定点编辑与成文复核。
+
 ### D208 · 接受指令上下文瘦身探索，现有项目升级须先保留自定义块内规则（2026-10-29）
 
 P389 探索 `3a32f85f8f20` 获接受进入 Propose。采用 AGENTS 共同短章程、PM 专属启动词、自包含 worker 派单红线、SKILL/references 详细手册的结构；不引入规则数据库或新生成器，不以字数/性能测试代替逐规则审查。
