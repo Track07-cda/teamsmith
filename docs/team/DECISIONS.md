@@ -2052,3 +2052,11 @@ P389 探索 `3a32f85f8f20` 获接受进入 Propose。采用 AGENTS 共同短章�
 纠正并记录三个升级事实：当前模板已含 begin/end，普通新 AGENTS 约 167 行；已有配置的 bootstrap 不执行 AGENTS writer；约 60 KB 是三类源正文总量，不是每轮固定注入量。`team init` 可无 force 替换已有 Teamsmith managed block并保留块外内容，但不是 AGENTS-only 或全事务命令，裸参数的 roster/session/docs/protected-branch 也必须与现有项目一致。
 
 本项目的 `AGENTS.md:49–76` 有 28 行/1,988 bytes 项目专属纪律位于 managed block 内。未来实际采纳前必须先把这些规则移到标记外并让用户预览 diff，再预览 init 的全部写入和明确参数；产品 Apply 不包含 live init、reload 或共享源采用。现有项目升级不能用 bootstrap 代替。
+
+### D217 · P397 测试瘦身进入正式提案，不等待 P396 全量门禁（2026-10-30）
+
+用户要求继续推进测试瘦身，并询问是否必须等 dev 当前全量冒烟结束。无需等待：P397 由 P379 原探索者 dev2 在独立工作树规划，复用已接受的 d54b7692 探索与现有日志，不改 P396 冻结树、不启动第二轮全量。P379 的测量审查见 docs/team/reviews/P379.md；当前全量现场见 $HOME/.cache/P396/full-gate/。
+
+顺序为减少 61b 重复执行、消除 36/51/38 可证明重复的准备与观察、再按成本均衡 CI。31 个变异的具名报错与正常/恢复对照必须保留；缩小测试组丢掉的附带观察必须明列，不能把“每个变异仍能红”冒充全部覆盖等价。耗时只作参考，不提高超时，不默认挪到 nightly，不增加调度系统。
+
+P397 只写提案、delta、设计、实施计划和报告；PM 与非作者独立审查接受后才派 Apply。P396 可并行收尾，但任何后续共享测试文件实现须在候选冻结后串行集成。用户本次继续授权不含 protected merge/push、公开 CI 改动执行、真实归档或发布。

@@ -1027,3 +1027,6 @@ P385 PM/V111 verdict: REWORK REQUIRED, no Propose. PM reproduced Pi 1.4.0 sendMe
 
 ### 2026-10-29T02:26:02Z · from: user · re: P390
 用户新决策（2026-10-29）：PM 通过 team say 向其他 agents 发消息时，默认不用 --now 导致传递不及时；要求 team say 默认就是现有 --now 行为，并移除 say 的 --now 参数。范围不扩到 notify、meeting、pulse 或 outbox flush --now。请按 P390 探索任务核查契约与测试，不直接实现。
+
+### 2026-10-30T06:51:02Z · from: pm · re: P397
+P395正式提案已ACCEPTED，phase按证据结项（未合并，原分支0e557f47保留）。现派P397：从P379已接受测量直接写gate-execution-slimming提案，独立工作树，不等P396、不再跑全量；详见新任务书和D217。先证明61b减重复且保留观察，再设计耗时均衡分片；不得把具名红侧仍在当成所有附带覆盖不变。
