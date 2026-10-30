@@ -635,7 +635,7 @@
 | P396 | 标记式关键回复MVP实现 | dev | - | - | wip |
 | P397 | Gate execution slimming proposal | dev2 | - | P379 | review |
 | V118 | 测试瘦身提案独立审查 | verify | - | P397 | wip |
-| V119 | 指令瘦身与AGENTS边界提案定点复审 | dev2 | - | P391 | todo |
+| V119 | 指令瘦身与AGENTS边界提案定点复审 | dev2 | - | P391 | wip |
 
 ## 当前里程碑
 
