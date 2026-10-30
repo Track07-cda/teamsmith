@@ -31,7 +31,7 @@ status: todo
 只做规划审查、源码阅读、算术/小型受控反例、结构校验和一次性副本试归档。不跑全量 smoke、不再跑95分钟矩阵，不改测试/产品/实际工作流，不发真实消息测试，不操作当前团队状态。
 
 必须运行并记录精确命令和结果：
-- `/home/yikdata/.bun/bin/openspec validate --all --strict`
+- `"$HOME/.bun/bin/openspec" validate --all --strict`
 - `bash skills/teamsmith/tests/spec-refs.sh --check`
 - `bash skills/teamsmith/tests/ledger-ban.sh --names-file <真实主项目 .pi/team/forbidden-names.txt绝对路径>`（名单不存在是阻塞，不能省略名单算通过）
 - 在自己 `/var/tmp` 的一次性 OpenSpec 副本上试 archive，再 strict validate；真 change 不归档。

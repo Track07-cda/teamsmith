@@ -1,6 +1,6 @@
 # Gate execution slimming · P397 proposal review
 
-status: IN REVIEW — no Apply authorization
+verdict: **NEEDS-CHANGES** — no Apply authorization
 candidate: `4bdcc5b375fb` (`task/P397-gate-slimming-proposal`, author dev2)
 change: `gate-execution-slimming`
 independent review: V118 / verify (not the author)
@@ -22,7 +22,22 @@ This is a delivered proposal, not an implemented speedup. PM has read all four p
 - The implementation plan currently starts every slice with a full smoke, adds a separate full old matrix census and new full matrix, then full final gates plus independent repeats. That schedule needs explicit justification against selected-per-change/full-at-final discipline and existing persistent evidence.
 - Check exact delta/scenario compatibility, restored/pass-count comparisons, complete rollback write sets and the real subtraction count for any new self-check. The change must reduce execution, not build a second testing control plane.
 
-No issue is declared resolved by this checklist. V118 must independently give its verdict and counterexamples; PM will reconcile them with clean-copy validation before any formal ACCEPTED.
+V118 delivered NEEDS-CHANGES at `354b02dc76b3`. PM has read the complete 385-line report and adopts its counterexamples, not every proposed remedy. Candidate planning files remain unchanged and structurally valid; they are not substantively acceptable yet.
+
+## Consolidated return: four changes, not ten new guards
+
+1. **Execution scope and controls (B1/B6/B7/B9).** Declare the actual selection granularity, including the positive and PM-side loops left outside the two faults loops. Do not call the other 24 unchanged group bodies case-narrowed or price work that still executes as deleted. Retain the full pre-mutation and restored green behavior controls; hashes/status cannot replace the latter. A finite existing timeout still reports an unfinished run, not a performance quality verdict; completed arms are not red merely for being slow. Withdraw the overclaim that deleting any one id of a multi-id declaration must make the arm red. Preserve the intended named fault detections and explicitly account for discarded incidental observations; prove loss of the actual detection/empty declaration is caught. Do **not** add a committed second golden census table simply to protect the first table: one-time empirical inventory and independent review are handoff evidence, not a new test-management subsystem.
+2. **One deterministic slicing model (B2/B3/B8).** PM chooses ordinary per-batch LPT: assignment is deterministic for the same complete decision-key set, committed cost table and N, independent of path order or wall clock. Different decision sets may legitimately move a key; remove the unsolicited stable-across-every-push promise rather than add a fixed-universe packing/seed mechanism. All shards must derive the same full decision set before filtering k/N; own keys form an exact disjoint union. Empty shards are legal, especially for narrow sets. Costs cover every potentially selected key (including 36 and 61b), and a present but incomplete table names missing selected rows; a wholly absent table retains the explicit old-hash fallback. Price each final shard's needs/prologue work as well as own work. This is a proposed-rule clarification within this change, not permission to change live CI.
+3. **Only profitable shared work (B5/B10/N10).** Correct selector parsing from 11→1 to 11→3: share the nine unchanged real-tree reads, not the two variant-tree reads separated by a source mutation. Remove the §28/§38 cross-section preparation plan altogether: V118 measured 0.03s and the proposal priced zero benefit, so additional lifecycle is unjustified. Keep the valid routes narrowing; identify its three unmeasured targets by existing evidence or an explicitly bounded Apply measurement, never leave an unassigned census placeholder.
+4. **Evidence and cost discipline (B4/N1/N4–N8).** Withdraw unreconciled 155.7/49.2-minute figures, distinguish mutation-tree from normal-tree readings, recompute same-axis totals including full restored behavior and unfiltered loops. Do not claim the 60-minute CI blocker is closed until evidence supports it. Reuse saved per-arm logs first; only a named missing measurement may need a bounded rerun. Keep one available baseline, per-change selected checks and final frozen-candidate full acceptance—not a full gate before every slice. Correct the 11-versus-12 witness count and selected-key ordering, attach accessible raw-evidence paths, and keep measured/derived/estimated numbers visibly separate. No timeout increase, new timing gate or extra baseline service.
+
+The minimal return preserves V118's accepted routes boundaries, genuine same-source parsing reuse, complete write/rollback scope and clean spec surgery. V118's B7 counterexample is valid; its proposed second-table remedy is not required. Per-batch LPT deliberately replaces the unneeded cross-decision stability promise rather than inheriting the fixed-universe recommendation. Both choices must be visible to independent re-review; they are not hidden waivers.
+
+### PM-owned review-brief correction
+
+V118 correctly found a ledger-ban hit in the PM-written brief's literal private home path. The pure candidate export passed the real-name scan; the failure was review metadata, not the author's product proposal. PM corrected V118/V119 commands to `"$HOME/.bun/bin/openspec"`; no executable/model changed. This does not retroactively turn V118's reported rc=1 into a pass. Corrected metadata receives its own scan.
+
+P397 rework is queued for author dev2 **after V119 is delivered**; do not interrupt the independent P391 review or mix the two changes in one worktree. The original `task/P397-gate-slimming-proposal` stays frozen at `4bdcc5b3` until that explicit hand-back. No Apply dispatch.
 
 ## Boundaries
 

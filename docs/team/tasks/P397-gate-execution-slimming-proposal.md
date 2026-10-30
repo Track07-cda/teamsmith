@@ -45,6 +45,14 @@ Produce concise proposal/design/spec delta/tasks, not a new catalogue/manual. In
 - Acceptance recipes using existing or explicitly proposed commands: same environment before/after costs (reference-only), selected behavioral union/ownership, each mutation's named red/control/restore, real failures/skips/invalid runs, clean candidate fingerprint and independent non-author verification. Full acceptance is later, once per frozen candidate, not at Propose or every small repair.
 - Minimal rollback to previous selector/matrix/workflow behavior; no production/live-team adoption in Apply. State separate authorization for protected merge/push/CI changes.
 
+## Consolidated PM return after V118 (2026-10-30)
+
+`4bdcc5b375fb` is NEEDS-CHANGES, not Apply-ready. Read the complete independent report via `git show 354b02dc76b3:docs/team/reports/V118-verify.md` and PM's four-part disposition in `docs/team/reviews/gate-execution-slimming-proposal.md` before revising. The counterexamples are adopted, but not every suggested fix: PM retains restored behavioral controls, rejects a second golden declaration-protection table, chooses deterministic per-decision-set LPT rather than an unnecessary stable-across-all-pushes promise, and removes the 0.03-second cross-section sharing plan. Encode the resulting exact semantics in the existing delta/design/tasks, not a second process document. Consolidate numerical/evidence corrections with those edits. Do not reopen accepted routes/write-set/rollback conclusions or rerun full smoke/long matrices in Propose.
+
+Do not interrupt V119 to do this rework. Dev2 currently owns that independent P391 review in a separate branch; finish and deliver it first. PM then explicitly returns this task's preserved original branch and amended brief. This is the same P397 proposal, not a new exploration or permission for concurrent changes to both branches. Future launch follows current category policy, not the obsolete initial OpenAI override; preserve the configured underlying model and report any stale assignment mismatch instead of substituting a provider.
+
+The previously in-flight P396 observation is now closed at §61b 5724s; the whole gate was interrupted and is not PASS. Reuse original per-arm logs rather than re-measure that completed matrix merely for a census; missing raw measurements remain named gaps and projections remain estimates. Independent re-review of the corrected frozen proposal and PM acceptance are still required before Apply.
+
 ## Planning acceptance and handoff
 
 Use the configured absolute OpenSpec binary if it does not resolve in the login shell; report exact executable/commands and output tails:

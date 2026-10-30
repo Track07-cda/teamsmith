@@ -29,7 +29,7 @@ V113 第二轮 `4ae2700d6bee` 已接受六项修正：真实链接、migration.m
 只做源码/规格逐条对照、规划结构验证、必要的私有小反例及一次性副本试归档。**不跑 full smoke、install-shape 全矩阵、模型变异矩阵，不实现 writer，不执行真实项目 init，不操作其它项目或会话。** 不因主机 PATH 缺 openspec 安装软件或改变环境。
 
 独立检出上实际运行并给原始命令/结果：
-- `/home/yikdata/.bun/bin/openspec validate --all --strict`（已有绝对路径；版本应报告）
+- `"$HOME/.bun/bin/openspec" validate --all --strict`（已有绝对路径；版本应报告）
 - `bash skills/teamsmith/tests/spec-refs.sh --check`
 - `bash skills/teamsmith/tests/ledger-ban.sh --names-file <真实主项目 .pi/team/forbidden-names.txt绝对路径>`；missing/skip 不算通过
 - `git diff --check`
