@@ -1,6 +1,8 @@
 # instruction-context-slimming · Formal proposal review
 
-Candidate: `00f7d50e2879` (proposal artifacts `b3a48b35`) · verdict: **REWORK REQUIRED — no Apply authorized**
+Current candidate: `6bf9ff57e8d9` (2026-10-30 proposal reconciliation) · verdict: **REWORK REQUIRED — no Apply authorized**
+
+Historical first candidate: `00f7d50e2879` (proposal artifacts `b3a48b35`); the first structural checks below refer to that earlier tip.
 
 PM has read the complete proposal, design, tasks and init-skill delta. The proposal follows D208: shared short AGENTS, PM-specific startup, self-contained worker safety/delivery prompt, detailed SKILL/references, no new rule generator, and ordinary init managed-block replacement with explicit boundaries.
 
@@ -57,3 +59,15 @@ PM preserved V117's accepted report/branch, switched dev3's clean worktree back 
 The user explicitly requested the config correction. At 07:27Z PM backed up config to `/var/tmp/pm-skills-model-route-fix.2Y29wG/config.sh.before` and used the single audited config writer to update four route prefixes only. Byte comparison proved every other config byte unchanged, including PM/docs values. `bash -lc '/home/yikdata/.bun/bin/pi --list-models'` confirms provider `clinepass` and model ID `cline-pass/deepseek-v4.1-flash-1017`.
 
 An initial --fresh-only recovery still selected the failed assignment's old model string (preview and actual launch, rc=1). Source `cmd-agents.sh:1138–1195` confirms a matching assignment retains its complete model when no differing explicit override is supplied, even with --fresh. PM corrected that failed identity with --fresh and the exact now-configured route `clinepass/cline-pass/deepseek-v4.1-flash-1017:max`; this is a route repair, not a different model or blanket override. The exact-model preview was asserted before launching. Actual SID `teamsmith-dev3-1793345358-213772-11806-30271` now runs that route; the live pane shows provider/model and initial git/read tool calls in the preserved P391 branch. P391 is in progress on planning rework, not accepted/Apply. No running P397/other seat was changed. Ordinary new tasks continue to use category policy without --model.
+
+## 2026-10-30 candidate 6bf9ff57 — final input reconciliation needs a narrow correction
+
+PM read all four revised artifacts and the appended author report. Marker reply instructions now consume P395/P396 rather than the old explicit-post flow, and AGENTS/PM both carry the custom-placement duty. The six V113 corrections stay closed. No product source was changed. The author reports structural checks; PM has not claimed a new independent structural pass on this tip.
+
+Three current inconsistencies change the next step (minimal planning rework before independent targeted review):
+
+1. The delta simultaneously says quoted-only marker occurrences are unsupported and says such a file keeps its text and gains a block. The design's input table likewise calls indented/same-line occurrences unsupported while its valid preservation fixture contains them. Only the actual recognized delimiters decide a managed range; ordinary quoted/indented examples must not become failures merely by containing marker text.
+2. CRLF and a missing final newline are ordinary text formats, not user-authorized reasons to refuse an update. Fix byte-range preservation rather than force normalization or add format guards. PM independently invoked the real writer only on private `/var/tmp` files: CRLF returned 0 and reported a refresh without installing the new body; an outside custom tail without a final LF gained a byte. Evidence: `$HOME/.cache/pm-skills-reviews/P391-6bf9ff57/writer-probes.json`. These prove the writer needs a correction; they do not justify rejecting these formats.
+3. The legacy scenario's “old markers are absent” must refer only to the actual managed pair, not the whole file while its quoted legacy example is expressly preserved. The append/idempotence contract must also address an unclosed fenced example: if it protects through EOF, blindly appending a block there leaves it unrecognized on the next run and can append forever. State the minimal handling without adding a general Markdown parser or guessing repairs.
+
+PM returned only these points (plus the glued GIVEN/WHEN line typo) to dev3 in its thread and a zero-key watch message. No Apply, live init, model/config change, full smoke, new gate section, merge/push or archive is authorized. Independent targeted review follows the corrected frozen tip; it must inspect these two new inputs, not repeat the six already-accepted findings.

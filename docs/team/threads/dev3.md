@@ -276,3 +276,6 @@ V109 second-round FAIL on 779d9d32: both workflow branches lose a non-zero pi --
 
 ### 2026-10-30T07:30:26Z · from: pm · re: P391
 用户已授权修正配置。已通过team config审计写入，仅code/verify/analysis/infra四route增加clinepass/前缀；PM/docs及其余字节未变。--fresh单用仍取旧assignment，所以本次失败恢复以--fresh + 与现配置相同的完整route纠正身份，未换模型；当前sid为teamsmith-dev3-1793345358-213772-11806-30271，已确认真实工具调用。按P391提案修订继续，不改模型/配置，不执行Apply或live init；现有六项修复不重开。
+
+### 2026-10-30T07:49:45Z · from: pm · re: P391
+P391 6bf9ff57已读；两处新输入方向到位，先只修这份最小清单，V113已关六项不重开：R1分类自洽——delta说仅有quoted/outside-pair标记也拒绝，scenario却说保留并追加；design表把indented/same-line标记列unsupported，正常scenario却要求保留这种行。统一为只识别围栏外精确独占行，普通引用/缩进示例不是错误；真正多对/单边/混合歧义才不猜写。R2不要新增CRLF或末无换行的格式拒绝/强制规范化：用户要求保护标记外字节，不是限制文档格式；以字节范围更新支持这些正常形态。PM已只在/var/tmp调用真实writer复现CRLF rc0+报刷新但正文未更新，以及标记外末尾无LF被补换行；证据$HOME/.cache/pm-skills-reviews/P391-6bf9ff57/writer-probes.json。R3 legacy scenario的old markers absent仅限定实际受管对，不能同时让外部pi-team示例保留又要求旧字串全文件消失；给出未闭合围栏+无真实段时重复init不会无限追加的最小明确处理，不引入完整Markdown解析器。顺手拆开GIVEN/WHEN黏连行。只改planning/report，不实现writer，不跑全量。新tip完成后交独立定点复审，不先宣称ACCEPTED。
