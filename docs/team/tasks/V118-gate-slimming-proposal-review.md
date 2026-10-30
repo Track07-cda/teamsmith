@@ -5,7 +5,7 @@ category: verify
 phase: verify
 change: gate-execution-slimming
 specs: verification
-deltas: -（只审查，不写 delta）
+deltas: -
 status: todo
 
 ## 问题与冻结输入
