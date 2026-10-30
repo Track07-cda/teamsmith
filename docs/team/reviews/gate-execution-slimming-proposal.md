@@ -7,7 +7,7 @@ independent review: V118 / verify (not the author)
 
 ## Answer so far
 
-This is a delivered proposal, not an implemented speedup. PM has read all four planning files and the author report. The projected ordinary shard 26.4min / routing shard 49.2min / serial full 155.7min are estimates, not observed post-change results. The 2026-10-30 interrupted gate contributes a closed 61b reading of 5724s, not a complete PASS. The author reports structural validation and a disposable trial archive; PM independent reproduction is pending.
+This is a delivered proposal, not an implemented speedup. PM has read all four planning files and the author report. The projected ordinary shard 26.4min / routing shard 49.2min / serial full 155.7min are estimates, not observed post-change results. The 2026-10-30 interrupted gate contributes a closed 61b reading of 5724s, not a complete PASS. The author reports structural validation and a disposable trial archive; PM independent reproduction is pending. Its script and full log are under `$HOME/.cache/pm-skills-reviews/P397-4bdcc5b3/` and do not run smoke or the long matrix. V118 was launched without --model on the configured verify route; its actual pane shows the correct provider/model and source-reading tool calls. The prior V113 report/branch remains unmerged and preserved; its review status was not forced to done.
 
 ## Substantive acceptance questions
 
