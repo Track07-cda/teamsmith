@@ -72,6 +72,8 @@ The report/design also say four analysis sidecars were committed, but `git ls-tr
 
 V118 should independently adjudicate these specific counterexamples and prescribe one minimal text repair if needed, without reviving retired remedies or requiring another long test. Keep author planning frozen while reviewing, and report ACCEPT/NEEDS-CHANGES on the exact candidate; a structural pass is not semantic acceptance. No Apply authorization.
 
+PM independently validated exact `be35c18b18bf` in a disposable clean clone: `p397-pm-third-validation` exited 0 in 28.3s. Change strict/all strict 20/20, spec-refs 121/0 undeclared, actual main-project names ledger hits=0/names=ok, 29 Apply tasks still unchecked, and no product/test/workflow diff against the initial planning candidate. Disposable archive produced +2/~2 and post-archive strict 19/19; all four target headings were unique and the real change remained unarchived. The same source-only probe reproduced the five-versus-three unqualified selection and the line-wrapped old reference; structural green does not close them. Script/full log/frozen planning export and author-evidence checksums remain at `$HOME/.cache/pm-skills-reviews/P397-be35c18b/`. Only this job's own scratch was removed. No smoke, long matrix, installation or live operation ran.
+
 ## Boundaries
 
 Only planning review and lightweight static/arithmetic probes now. No full smoke, long matrix, product/test changes, live init, model change, protected merge/push, public CI, archive or release. The existing 60-minute job cap and performance-as-reference rule remain.
