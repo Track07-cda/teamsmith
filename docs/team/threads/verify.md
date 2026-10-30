@@ -229,3 +229,6 @@ V109 third round is frozen at 47df9a76d5ef0519ef890e3175c596718d7fa355 (implemen
 
 ### 2026-10-30T07:37:27Z · from: pm · re: V118
 V118派单席位切换审计：V113已交付第二轮独立报告4ae2700d6bee，六项修订已接受，但records-only分支未合并，因此保留其review状态，不伪造done。旧task/V113-instruction-slimming分支及报告全部保留，verify当前无运行窗口。本次--force只接手闲置席位以开展不同change的独立提案审查，不豁免作者隔离、规格锚点或delta所有权，也不宣称V113已合并。P391衔接修订仍由dev3负责。
+
+### 2026-10-30 · from: pm · re: V120
+V120 --force 席位切换审计：V118 已交付 NEEDS-CHANGES（354b02dc76b3），分支/报告保留且未合并，不标 done；原作者 dev2 正在独立 worktree 修 P397。现在闲置 verify 接 P391 小 diff 独立复核，未参与 P391 写作，冻结 03a05fce764b。只看 V119 S1–S4 的收口与直接回归，不重跑旧六项/长矩阵，不重开架构。按当前 verify 配置启动，不带历史模型 override；本次 fresh 是新任务，不是改变同任务模型/SID。
