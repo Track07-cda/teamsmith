@@ -9,6 +9,8 @@ deltas: key-replies, pm-lifecycle, memory-and-deps, verification
 branch: task/P396-mvp
 deps: exact accepted proposal/report tip 0e557f47803ee75e2d7d951d93ef79d1a82245fc; formal proposal review ACCEPTED and V117 ACCEPT; D213–D216; P393 SKILL.md serialization
 
+Launch note (PM, 2026-10-30): the first Apply launch selected the configured `cline-pass/deepseek-v4.1-flash-1017:max` and Pi exited with `Unknown provider "cline-pass"`. PM authorizes a one-launch `openai/gpt-6.1-sol:xhigh` override for this implementation; project config, category and task scope are unchanged.
+
 ## Start and scope
 
 You are the implementation owner, not the proposal author or independent verifier. Work only in your own seat/worktree on `task/P396-mvp`, initially based on exact P395 final tip `0e557f47`. Read AGENTS, your thread, this brief, OWNERSHIP, `references/openspec.md`, the complete accepted change artifacts, formal review, V117's report (`git show 1a9892055124:docs/team/reports/V117-dev3.md`), and the relevant existing Pi/writer code. Use `openspec instructions apply --change pi-marker-key-replies --json` as the plan.
