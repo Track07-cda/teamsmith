@@ -1,6 +1,6 @@
 # P396 · unexpected main-checkout writes during the full gate
 
-time: 2026-10-30T06:53Z · owner: pm · status: CONTAINED / origin under investigation
+time: 2026-10-30T06:53Z · owner: pm · status: ATTRIBUTION RESOLVED — user confirms manual team init
 
 ## Answer and next step
 
@@ -26,4 +26,8 @@ Dev's report at `188e8d41` and `$HOME/.cache/P396/incident-0651/` identify the f
 
 The observed write set also includes local skill/extension installation, inbox/review ignore files and report/review keep files; preserve the full timestamp manifest in `incident-0651/state.txt`. No contents of credentials were read. The absolute credential-file path appended to .gitignore is a separate init rendering issue, not evidence of token disclosure. Replacing the managed AGENTS block is the existing contract and already tracked by P389/P391; classify the lost in-block project rules as the known adoption risk, not a newly discovered change in semantics.
 
-No recovery/restart has been performed. The earlier suspicion of fixture root escape is not established and must not be reported as the cause. Next: bound the evidence to an unknown init-compatible writer, present the minimal recovery diff and obtain authorization before any restore/delete. Do not restart the full gate, run live init/bootstrap/reload, or commit the unexpected file changes.
+## User confirmation — attribution resolved
+
+The user subsequently confirmed: “我刚才手动执行了一次team init”. The observed write set is therefore attributed to that user operation, not to P396's test fixture or an unidentified unauthorized writer. Stop origin investigation; do not revert or delete the user's init results. The full gate was stopped by PM as a precaution before this confirmation, not by a demonstrated test isolation failure. The stopped run remains incomplete, not PASS; do not rerun it wholesale.
+
+The remaining adoption issue is the already known P389/P391 risk: the managed AGENTS refresh replaced 28 lines of in-block project rules and rendered default session/roster into the document while preserving config. Prepare a read-only preservation/correction diff if needed, but any write to restore/move those rules or change generated docs requires user authorization. Do not conflate the intended init operation with authorization to discard its results or enable/restart capture. No recovery/restart has been performed.
