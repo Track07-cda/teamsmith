@@ -55,6 +55,8 @@ OKN=0; BADN=0
 case_ok()  { OKN=$((OKN + 1)); printf '  ✓ %s\n' "$*"; }
 case_bad() { BADN=$((BADN + 1)); printf '  ✗ %s\n' "$*"; }
 one_line() { printf '%s' "$1" | tr '\n' '|' | cut -c1-220; }
+# 这些扫描只查夹具树，不测本机用户名解析；给每次扫描固定用户名（含旧面副本）。
+fixture_ban() { TEAM_SMOKE_FIXTURE=1 bash "$@" --user p239fixtureuser; }
 
 # ── 归属声明：表头 ledger-scan 行 + 它的 patterns ─────────────────────────────────────────
 BAN_HEAD="$(awk -F'\t' '/^# ledger-scan:/{ v = $0; sub(/^# ledger-scan:[[:space:]]*/, "", v); sub(/[[:space:]]*$/, "", v); print v; exit }' "$TABLE")"
@@ -139,7 +141,7 @@ printf '# 他项目名单（夹具）\nfixture-peer\n' >"$BRANCH/.pi/team/forbid
 printf '# 报告（夹具）\n\n干净：家目录占位 <home>/work/example\n' >"$BRANCH/docs/team/reports/leak-report.md"
 LEAK_DIR="/home"; LEAK_NAME="leakprobe"
 
-OUT="$(bash "$BAN" --all --root "$BRANCH" --names-file "$BRANCH/.pi/team/forbidden-names.txt" 2>&1)"; RC=$?
+OUT="$(fixture_ban "$BAN" --all --root "$BRANCH" --names-file "$BRANCH/.pi/team/forbidden-names.txt" 2>&1)"; RC=$?
 if [ "$RC" = "0" ] && printf '%s\n' "$OUT" | grep -qF 'hits=0' && ! printf '%s\n' "$OUT" | grep -qF ': [home]'; then
   case_ok "③ 干净报告（只有占位符 <home>）→ rc=0 hits=0"
 else
@@ -149,7 +151,7 @@ fi
 printf '# 报告（夹具）\n\n干净：家目录占位 <home>/work/example\n泄漏：%s/%s/work/secret\n' \
   "$LEAK_DIR" "$LEAK_NAME" >"$BRANCH/docs/team/reports/planted-report.md"
 
-OUT="$(bash "$BAN" --all --root "$BRANCH" --names-file "$BRANCH/.pi/team/forbidden-names.txt" 2>&1)"; RC=$?
+OUT="$(fixture_ban "$BAN" --all --root "$BRANCH" --names-file "$BRANCH/.pi/team/forbidden-names.txt" 2>&1)"; RC=$?
 if [ "$RC" = "1" ] && printf '%s\n' "$OUT" | grep -qF 'docs/team/reports/planted-report.md:4: [home]' \
    && printf '%s\n' "$OUT" | grep -qF 'hits=1' && ! printf '%s\n' "$OUT" | grep -qF "$LEAK_NAME"; then
   case_ok "③ 植入家目录字面量 → 红并点名 docs/team/reports/planted-report.md:4（原文被遮蔽）"
@@ -162,8 +164,8 @@ fi
 MAINLIKE="$TMP/mainlike-tree"; mkdir -p "$MAINLIKE/docs/team/reports" "$MAINLIKE/.pi/team"
 cp "$BRANCH/.pi/team/forbidden-names.txt" "$MAINLIKE/.pi/team/forbidden-names.txt"
 printf '# 主检出样的账本（没有本分支的新报告文件）\n' >"$MAINLIKE/docs/team/reports/existing-report.md"
-OUT_B="$(bash "$BAN" --all --root "$BRANCH" --names-file "$BRANCH/.pi/team/forbidden-names.txt" 2>&1)"
-OUT_M="$(bash "$BAN" --all --root "$MAINLIKE" --names-file "$MAINLIKE/.pi/team/forbidden-names.txt" 2>&1)"
+OUT_B="$(fixture_ban "$BAN" --all --root "$BRANCH" --names-file "$BRANCH/.pi/team/forbidden-names.txt" 2>&1)"
+OUT_M="$(fixture_ban "$BAN" --all --root "$MAINLIKE" --names-file "$MAINLIKE/.pi/team/forbidden-names.txt" 2>&1)"
 if printf '%s\n' "$OUT_B" | grep -qF 'hits=1' && printf '%s\n' "$OUT_M" | grep -qF 'hits=0'; then
   case_ok "③ 假绿对照：同一份报告——本分支树 hits=1 / 不含它的树 hits=0（所以在主检出跑扫不到本分支新文件）"
   printf '      对照行：%s\n' "$(printf '%s\n' "$OUT_M" | grep -a '^ledger-ban: root=' | tail -1)"
@@ -213,7 +215,7 @@ FACE="$TMP/non-md-face"; mkdir -p "$FACE/docs/team/ledger" "$FACE/.pi/team"
 printf '# 他项目名单（夹具）\nfixture-peer\n' >"$FACE/.pi/team/forbidden-names.txt"
 printf '# 干净账本（夹具）\n\n- 他项目占位：<peer>\n' >"$FACE/docs/team/board.md"
 printf 'branch\ttip\tdate\nfixture-peer-branch\tabc123\t2026-01-01\n' >"$FACE/docs/team/ledger/planted.tsv"
-OUT="$(bash "$BAN" --all --root "$FACE" --names-file "$FACE/.pi/team/forbidden-names.txt" 2>&1)"; RC=$?
+OUT="$(fixture_ban "$BAN" --all --root "$FACE" --names-file "$FACE/.pi/team/forbidden-names.txt" 2>&1)"; RC=$?
 if [ "$RC" = "1" ] && printf '%s\n' "$OUT" | grep -qF 'docs/team/ledger/planted.tsv:2: [names]' \
    && printf '%s\n' "$OUT" | grep -qF 'hits=1'; then
   case_ok "⑥ 账本面覆盖非 .md：ledger/*.tsv 里的名字 → 红并点名 planted.tsv:2（同一棵树里的 .md 是干净的）"
@@ -230,7 +232,7 @@ if [ "$(grep -cF -- "$OLD_PAT" "$OLDFACE/ledger-ban.sh")" = "1" ]; then
     "$OLDFACE/ledger-ban.sh" >"$OLDFACE/new" && mv "$OLDFACE/new" "$OLDFACE/ledger-ban.sh"
   if [ "$(grep -cF -- "$OLD_NEW" "$OLDFACE/ledger-ban.sh")" = "1" ]; then
     # 旧面副本只拷了 ledger-ban.sh + lib/tmp-root.sh → 指回真库（P309：解析器不在，创建者会具名失败）
-    OUT="$(TEAM_TMP_SKILL_DIR="$SKILL_DIR" bash "$OLDFACE/ledger-ban.sh" --all --root "$FACE" --names-file "$FACE/.pi/team/forbidden-names.txt" 2>&1)"; RC=$?
+    OUT="$(TEAM_TMP_SKILL_DIR="$SKILL_DIR" fixture_ban "$OLDFACE/ledger-ban.sh" --all --root "$FACE" --names-file "$FACE/.pi/team/forbidden-names.txt" 2>&1)"; RC=$?
     if [ "$RC" = "0" ] && printf '%s\n' "$OUT" | grep -qF 'hits=0' \
        && ! printf '%s\n' "$OUT" | grep -qF 'planted.tsv'; then
       case_ok "⑥ 假绿对照：账本面退回「只扫 *.md」→ 同一棵树、同一个植入 hits=0（假绿就是这么来的）"
