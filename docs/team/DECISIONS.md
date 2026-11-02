@@ -2096,3 +2096,14 @@ P398交由未编写该提案的dev3，只做tasks §1的61b瘦身及必要准备
 gates 工作流只在 push 到 main 时触发，推 dev 不会消耗 CI 分钟，也不会产生一次公开红。
 
 2026-11-02 补记：用户选择公开仓承载 dev 后，要求删除 internal 远端。已 `git remote remove origin`、main 改跟 `public/main`、`.pi/team/config.sh` 的 `TEAM_REMOTE` 由 `origin` 改为 `public`（该键不允许命令写，直接改项目配置），此后 dev 只推 public。GitHub 上 `teamsmith-internal` 仓库本身未删除：本机 gh 未登录，无法从这里删除远端仓库。
+
+### D223 · 合并批次与两处工具面事实（2026-11-02）
+
+用户批准合并流程后，PM 按 `references/workflows.md` F 节（本地 squash + 该任务评审记录里的原始门禁命令）依次落地：P381 e8bf8eca、P380 d85c5cbf（含 V109 指出的注释补丁）、P382 48425a1a、P384、P393 3c47f660。每个任务合完即 `board set done` + `close` + 删分支，并把 dev 镜像到 public。P393 合并时在三处夹具文档/参数行冲突，按"两边都要"解（P380 的运行时版本解析 + P393 的脏框 A/B），没有丢任一侧。
+
+P383 内容已合（a71b3499），但门禁红在**夹具假红**：`key-replies.sh` 对 `.pi/team/state` 整棵树取哈希，而 Pulse 与每次 `team` 调用都会追加遥测，活项目上必然红；`docs/team/inbox/` 同理（每回合收尾追加一行）。P399 把守卫收窄到真正会被夹具污染的产品数据（编号回复存储），保留"写一个字节必红"的负对照，属减法。P383 的 done 待 P399 落地后补一次绿跑。
+
+工具面两处事实：① 本机 openspec 升到 1.16.0 后 `--strict` 把"需求文本 >500 字符"判失败，19 个 spec 全红（226 条警告），而 CI 镜像钉 1.8.0，故只有本地红；门禁改用 `~/.cache/openspec-1.8.0` 跑，全局 1.16.0 未动，是否正式升版（抬 CI pin + 拆分长需求）另议。② P396 的 assignment 记录里留着早前显式的 OpenAI 模型，`--fresh` 不会换模型；本次按 code 类别策略显式给 `clinepass/cline-pass/deepseek-v4.1-flash-1017:max`，属"同策略纠正"而非换模型。
+
+另记一条 PM 自己的操作缺陷：`cmd | tail` 会吞掉退出码，曾让一条红在门禁里被读成过得去；此后跑门禁一律先捕 rc 再看输出。
+
