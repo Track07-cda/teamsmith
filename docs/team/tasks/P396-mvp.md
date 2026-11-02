@@ -77,3 +77,15 @@ git diff --check
 Run the accepted parser/source/private-Pi and existing reply/UI/pty selections with exact commands/output. Once the tree and report are settled, run the full `bash skills/teamsmith/tests/smoke.sh` once as a background delivery gate with complete host-side logs and an unchanged tree. Any red/timeout/missing required evidence is reported and fixed or returned BLOCKED, never converted to SKIP/pass or deleted coverage.
 
 The report leads with implemented behavior and remaining boundaries; include exact commits, changed files, commands/counts, parser/mutation red-green, writer/crash evidence, private Pi identities/frames/history, P393 merge tip and instruction integration, full-gate fingerprint/result, and explicit not-run independent/live/real-model/public-CI scope. Commit the final report and leave the branch clean before notifying PM. Independent Verify is a separate task; no merge/push/archive/release.
+
+## 追加切片（2026-11-02，P393 已合入 main 后）
+
+P393（say 默认直达、退休 `--now`）与 P380/P381/P382/P384 已合入 main；此前"等 P393 落地再改共享指令"的阻塞已解除。本切片只做**指令迁移**，不重做已验收的解析器/捕获实现：
+
+1. `skills/teamsmith/SKILL.md`、`skills/teamsmith/references/*.md`、`skills/teamsmith/templates/pm-prompt.md.tmpl` 里把"先 `team reply post` 再正常回复"的旧默认，换成**标记捕获**：正常在 Pi 里回答，完整回复末尾带约定标记，由插件捕获入关键回复页；`team reply post` 只作手工回填/恢复入口。
+2. 标记语法、去重与失败恢复以已接受的 `openspec/changes/pi-marker-key-replies/` 为准，不得另立一套措辞。
+3. 消除与 P393 的冲突面：say 的那部分指令保持已合入的样子，不覆盖。
+4. 断言要能变红：文档契约测试里必须有一条"指令里重新出现'先 post 再回复'的默认步骤 → 红"，以及一条"标记约定被写入 SKILL 与 PM 模板 → 绿"。
+5. 不跑全量 smoke；改完跑 `openspec validate --all --strict`、`bash skills/teamsmith/tests/spec-refs.sh --check`、相关选段（含 key-replies 段），提交推分支并写报告补充节。
+
+边界不变：不改产品插件代码（已验收）、不动真实团队的回复存储、不做现场启用/归档/发布。
