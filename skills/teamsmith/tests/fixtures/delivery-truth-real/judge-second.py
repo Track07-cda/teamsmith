@@ -10,7 +10,10 @@ P163 F1：只对「由 run-case.sh 清空过、且只跑过一次」的现场出
   * 现场缺 run.json 运行戳（旧现场 / 从没跑过 run-case.sh）；
   * run.json.case / run_id 与现场不符；
   * run.json.mode != verdict（host 路线是人工观察，不作为判据）；
-  * run.json.pi_version != 0.99.2（判据版本钉死）；
+  * P380：run.json.pi_version 不是**具体版本号**（例如写成 `latest`），或 runtime_requested 与它矛盾
+    （请求 host / 别的版本号）；即判据不再钉死某个版本，但必须记录实际跑的那一个；
+  * P380：现场 `pi-version.txt`（容器里 `pi --version` 的实测值）不等于 run.json.pi_version
+    —— 记录值必须是真跑值；两者不符就是可见的不兼容，不是把一个旧钉版当通过；
   * 判据读的事件文件里 run_start 标记不是**恰好一条**（P197：集合相等会吞掉同 ID 的重复标记），
     或它不在**第一行**，或它的 run 与 run.json.run_id 不一致（跨次累积）；
   * run-start.txt 缺 / 空 / 里面的 run= 戳不是本次 run id（P197：P194-F1，单次运行戳必须被核）；
@@ -25,7 +28,9 @@ import re
 import sys
 
 ROOT = pathlib.Path(os.environ.get('P163_EVIDENCE') or pathlib.Path(__file__).resolve().parent.parent)
-VERDICT_RUNTIME = '0.99.2'
+# P380：判据不再钉死某个版本，但只接受**具体版本号**。`latest` 这类别名不能出现在记录里：
+# 它说的是「查的时候是什么」，而不说「这一次跑的是什么」。
+VERSION_RE = re.compile(r'^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$')
 SCENE_FILES = ('dev-events.jsonl', 'requests.jsonl')
 
 
@@ -85,8 +90,19 @@ def load_scene(name):
         refuse(name, 'run.json.run_id 缺失')
     if run.get('mode') != 'verdict':
         refuse(name, f"run.json.mode={run.get('mode')!r} 是人工观察（host 路线），不作为判据")
-    if run.get('pi_version') != VERDICT_RUNTIME:
-        refuse(name, f"run.json.pi_version={run.get('pi_version')!r} != 判据版本 {VERDICT_RUNTIME}")
+    requested = run.get('runtime_requested')
+    if requested == 'host':
+        refuse(name, 'run.json.runtime_requested=host：宿主路线是人工观察，不出判据')
+    version = run.get('pi_version')
+    if not isinstance(version, str) or not VERSION_RE.match(version):
+        refuse(name, f"run.json.pi_version={version!r} 不是具体版本号（记录必须是被真正跑起来的那个运行时，"
+                     f"不是 latest 之类的别名）")
+    if requested and requested != 'latest':
+        if not isinstance(requested, str) or not VERSION_RE.match(requested):
+            refuse(name, f"run.json.runtime_requested={requested!r} 既不是 latest 也不是具体版本号")
+        if requested != version:
+            refuse(name, f"run.json.runtime_requested={requested} != pi_version={version}"
+                        f"（请求的版本和记录的版本对不上）")
     started = float(run.get('started_at') or 0)
     if started <= 0:
         refuse(name, 'run.json.started_at 缺失/非正数')
@@ -106,9 +122,10 @@ def load_scene(name):
             refuse(name, f'现场里有早于本次运行的文件 {f.relative_to(scene)}（没有清空现场）')
     ver = scene / 'pi-version.txt'
     got = ver.read_text().strip() if ver.is_file() else '缺失'
-    if got != VERDICT_RUNTIME:
-        refuse(name, f'pi-version.txt={got!r} != {VERDICT_RUNTIME}')
-    return scene
+    if got != version:
+        refuse(name, f'pi-version.txt={got!r} != run.json.pi_version={version!r}'
+                     f'（记录的版本必须等于容器里实测的 pi --version；不符就是可见的不兼容，不是通过）')
+    return scene, version
 
 
 def main(argv):
@@ -118,7 +135,7 @@ def main(argv):
         return 2
     failed = 0
     for name in names:
-        scene = load_scene(name)
+        scene, version = load_scene(name)
         events = [json.loads(x) for x in (scene / 'dev-events.jsonl').read_text().splitlines()]
         marker = 'P138-SECOND-' + name
         received = [e for e in events if e['event'] == 'message_end' and e.get('message', {}).get('role') in ('user', 'custom')
@@ -128,7 +145,7 @@ def main(argv):
         backend = backend_count == 1
         settles = [e for e in events if e['event'] == 'agent_settled']
         empty = bool(settles) and all(e['editor'] == '' and e['idle'] for e in settles)
-        print(f'{name}: second_received={len(received)} backend={int(backend)} backend_requests={backend_count} settled={len(settles)} settle_editors_empty={int(empty)}')
+        print(f'{name}: pi={version} second_received={len(received)} backend={int(backend)} backend_requests={backend_count} settled={len(settles)} settle_editors_empty={int(empty)}')
         ok = empty and len(received) == 1 and backend and any(e['ts'] > received[0]['ts'] for e in settles)
         print('PASS second say delivered' if ok else 'FAIL second say stranded despite idle empty editor')
         failed += not ok

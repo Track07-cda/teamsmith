@@ -16,7 +16,10 @@
 #                   Node security set (Brotli decoder OOB write / TLS hostname bypasses)
 #   bun 1.3.14      the version that reproduces the committed scripts/panel/panel.js byte-for-byte
 #                   (smoke 26-a rebuilds it and compares)
-#   pi 0.86.0       tests/skill-load.mjs imports pi's own skill parser (dist/core/skills.js)
+#   pi              the latest published release: the suite's real-Pi paths (and tests/skill-load.mjs,
+#                   which imports pi's own skill parser) must judge current Pi, not a remembered one.
+#                   The version is resolved ONCE per CI run (`.github/workflows/gates.yml` → `resolve-pi`)
+#                   and passed here as `--build-arg PI_VERSION=<x.y.z>`; see the pi layer below.
 #   openspec 1.8.0  `openspec validate --all --strict` (the first half of the gate)
 #
 # The suite still runs with CI set by the caller: nothing here special-cases a CI environment.
@@ -77,42 +80,70 @@ RUN curl -fsSL "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERS
  && rm -rf /tmp/bun /tmp/bun.zip \
  && [ "$(bun --version)" = "${BUN_VERSION}" ]
 
-# --- pi + openspec (pinned npm packages) ---------------------------------------------------
+# --- pi (latest, resolved once per run) + openspec (pinned) --------------------------------
 # P135/P103: install with `--ignore-scripts` and run the one skipped installer that matters as
 # its own process, after npm has exited. Letting npm run every lifecycle script during the
 # install made esbuild's postinstall (`node install.js`) exec the binary it had just hardlinked
 # and die with ETXTBSY — a red image build, not a test red. The still-open write handle rides in
 # the forked child's fd table while npm is mid-install; run once npm is gone, there is none. The
-# race is removed, not retried and not hidden. What the flag skips in these two pinned trees
-# (measured on npm 11.16.0 / node 24.19.0, the versions below): esbuild (run explicitly — it
-# replaces bin/esbuild's JS shim with the platform ELF and self-checks with `--version`),
-# protobufjs (only prints a version-scheme warning), @google/genai (an `echo` no-op) and
-# openspec (only prints its opt-in shell-completion tip). Pins are untouched.
+# race is removed, not retried and not hidden. What the flag skips in these two trees (measured
+# on npm 11.16.0 / node 24.19.0, the versions below): esbuild when a tree ships it (run explicitly
+# in its own layer below — it replaces bin/esbuild's JS shim with the platform ELF and self-checks
+# with `--version`), protobufjs (only prints a version-scheme warning), @google/genai (an `echo`
+# no-op) and openspec (only prints its opt-in shell-completion tip). openspec stays pinned.
 #
-# The ELF assertion at the end is what makes that install provable rather than assumed
+# The ELF assertion in that layer is what makes the installer provable rather than assumed
 # (P103): with esbuild 0.28.2 an un-replaced shim is a 9,350 B JS script and the replaced
 # binary is an 11,427,952 B static ELF — both are executable and both print `0.28.2`, so the
 # `--version` check alone passes in either state. The magic bytes are the difference, and
 # they are what turns `--ignore-scripts` + a silently ineffective installer into a red build.
-ARG PI_VERSION=0.86.0
+# P380: pi 1.4.0 (the first latest this image installed) no longer vendors esbuild at all, so the
+# layer below says which of the two situations it is instead of asserting a fact that has no
+# subject. When a future pi brings esbuild back, the installer and its ELF assertion run again.
+# P380: the static pi pin is gone. `PI_VERSION=latest` is what a plain local build installs; the CI
+# workflow resolves the published version once (a separate `resolve-pi` job whose output every shard
+# consumes) and passes it here as `--build-arg PI_VERSION=<x.y.z>`, so all shards install the same
+# runtime and a release landing mid-run cannot give two shards two different ones. The install layer's
+# cache key is that ARG, so a resolved exact version invalidates the layer whenever the release moves;
+# `latest` on a bare local build *can* be served from an older cached layer, which is why local builds
+# go through `ci/build-image.sh` (it resolves first) and why the gate prints and compares the version
+# it is actually running (workflow gate step, and the build script's post-build assertion). A stale
+# layer is therefore red, never silent.
+ARG PI_VERSION=latest
 ARG OPENSPEC_VERSION=1.8.0
 RUN npm install -g --no-fund --no-audit --ignore-scripts \
       "@earendil-works/pi-coding-agent@${PI_VERSION}" \
       "@fission-ai/openspec@${OPENSPEC_VERSION}" \
  && npm cache clean --force >/dev/null 2>&1 \
  && command -v pi >/dev/null && command -v openspec >/dev/null \
- && esbuild_install="$(find "$(npm root -g)" -path '*/esbuild/install.js' -print -quit)" \
- && [ -n "$esbuild_install" ] \
- && node "$esbuild_install" \
- && esbuild_bin="$(dirname "$esbuild_install")/bin/esbuild" \
- && [ -x "$esbuild_bin" ] \
- && [ "$(head -c 4 "$esbuild_bin" | od -An -tx1 | tr -d ' \n')" = "7f454c46" ] \
- && "$esbuild_bin" --version
+ && pi --version > /etc/teamsmith-pi-version && cat /etc/teamsmith-pi-version
+
+# Post-install of a skipped esbuild installer, only when the installed trees ship one (P135/P103).
+# Both branches are named: an absent esbuild is a fact about these trees (measured: pi 1.4.0 has no
+# esbuild and its bundle never mentions it), not a silent pass of an assertion that could not run.
+RUN esbuild_install="$(find "$(npm root -g)" -path '*/esbuild/install.js' -print -quit)" \
+ && if [ -n "$esbuild_install" ]; then \
+      node "$esbuild_install" \
+      && esbuild_bin="$(dirname "$esbuild_install")/bin/esbuild" \
+      && [ -x "$esbuild_bin" ] \
+      && [ "$(head -c 4 "$esbuild_bin" | od -An -tx1 | tr -d ' \n')" = "7f454c46" ] \
+      && "$esbuild_bin" --version; \
+    else \
+      printf 'ci/Containerfile: no esbuild in the installed pi/openspec tree (pi %s) — nothing to post-install\n' "$(cat /etc/teamsmith-pi-version)"; \
+    fi
 
 # The suite's skill-load fixture imports pi's parser; a global install is not resolvable from the
-# mounted checkout's module graph, so point PI_DIST at the pinned copy explicitly.
-ENV PI_DIST=/usr/local/lib/node_modules/@earendil-works/pi-coding-agent/dist/core/skills.js
-RUN [ -f "$PI_DIST" ]
+# mounted checkout's module graph, so PI_DIST has to name it explicitly. P380: `ci/pi-skills-path.mjs`
+# resolves that module from the installed package by capability (it imports every `skills.js` and
+# keeps the one exporting `loadSkillsFromDir` + `formatSkillsForPrompt`), so a release that moves the
+# file still works and a release that stops exporting those functions fails HERE, naming candidates,
+# instead of surfacing as a puzzling skill-load skip.
+COPY ci/pi-skills-path.mjs /usr/local/lib/pi-skills-path.mjs
+RUN skills="$(node /usr/local/lib/pi-skills-path.mjs "$(npm root -g)/@earendil-works/pi-coding-agent")" \
+ && [ -n "$skills" ] \
+ && ln -s "$skills" /usr/local/lib/pi-skills.js \
+ && [ -f /usr/local/lib/pi-skills.js ]
+ENV PI_DIST=/usr/local/lib/pi-skills.js
 
 # No usage telemetry from the gate (the CLI prints a note otherwise and would phone home).
 ENV OPENSPEC_TELEMETRY=0

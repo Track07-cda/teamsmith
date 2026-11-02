@@ -5,7 +5,9 @@
 #   ① 现场单次性：读 run-case.sh 写的 run.json 运行戳，并在每个判据读的事件文件第一行写
 #      run_start 标记；judge-second.py 靠这一对证据（+ run-start.txt 单次运行戳，P197）拒绝旧现场 /
 #      跨次累积的现场。
-#   ② 版本透传：P163_MODE/P163_PI_VERSION 由 run-case.sh 决定（host = 人工观察，judge 拒绝出判据）。
+#   ② 版本透传：P163_MODE/P163_PI_VERSION 由 run-case.sh 决定（host = 人工观察，judge 拒绝出判据；
+#     P380：判据路线的版本不再钉死，run-case.sh 解析/安装最新版并把**解析出的具体版本**传进来，
+#     本文件只把它写进现场；实测值由 `pi --version` 写进 pi-version.txt，两者由 judge 核对）。
 set -euo pipefail
 [ "${P138_CONTAINER:-}" = 1 ] || { echo 'refused: container only'; exit 64; }
 CASE=${1:-watch-dirty}; L=/evidence/logs/$CASE
@@ -46,7 +48,19 @@ cleanup() {
   rm -rf "$R"
 }
 trap cleanup EXIT
-CLI=${P138_PI_CLI:-/usr/local/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js}
+# P380：pi 的 CLI 路径从**装好的那个包**解析（它的 package.json 的 `bin.pi`），不写死某个版本的
+# dist 布局；`P138_PI_PKG` 由 run-case.sh 传（判据运行时 = /runtime/…，宿主观察路线 = 宿主的包目录）。
+if [ -n "${P138_PI_CLI:-}" ]; then
+  CLI=$P138_PI_CLI
+elif [ -n "${P138_PI_PKG:-}" ]; then
+  [ -f "$P138_PI_PKG/package.json" ] || { echo "refused: P138_PI_PKG 里没有 package.json：$P138_PI_PKG" >&2; exit 65; }
+  bin=$(node -p 'require(process.argv[1]).bin.pi' "$P138_PI_PKG/package.json") \
+    || { echo "refused: $P138_PI_PKG/package.json 没有 bin.pi" >&2; exit 65; }
+  CLI="$P138_PI_PKG/$bin"
+else
+  echo 'refused: 需要 P138_PI_CLI 或 P138_PI_PKG（run-case.sh 传后者）' >&2; exit 65
+fi
+[ -f "$CLI" ] || { echo "refused: pi CLI 不在 $CLI" >&2; exit 65; }
 printf '#!/bin/sh\nexec node %q "$@"\n' "$CLI" > "$R/bin/pi"; chmod +x "$R/bin/pi"
 export PATH="$R/bin:$PATH"
 python3 - "$R/agentdir/models.json" <<'PY'
@@ -71,6 +85,15 @@ TEAM_REQUIRE_MAGIC_CONTEXT=0
 EOF
 git add .; git commit -qm init; git worktree add -qb task/P138 .worktrees/dev
 WT="$R/proj/.worktrees/dev"
+# P380 诊断开关（默认**关**，保持真实工作树的形状）：设成 1 时给 worker 分支一个本地 upstream
+# （`branch.task/P138.remote=.` → 指本仓 main，无远端、不联网）。它用来把两件事分开：
+#   ①「第二封 say 在最新 Pi 上能不能送达」（开这个开关）；
+#   ②「team-notify 的 git 探测把 git 的 stderr 漏到 pane、产品把那一行读成框内草稿」（默认形态）。
+# 默认不设：真实的任务分支（`git worktree add -b task/...`）本来就没有 upstream，那才是要测的形状。
+if [ "${P163_BRANCH_UPSTREAM:-0}" = 1 ]; then
+  git -C "$WT" config branch.task/P138.remote .
+  git -C "$WT" config branch.task/P138.merge refs/heads/main
+fi
 TEAM=(bash "$SKILL/scripts/team")
 "${TEAM[@]}" paths > "$L/paths.txt"
 pi --version > "$L/pi-version.txt"

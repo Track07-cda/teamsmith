@@ -6,16 +6,21 @@
 # 2026-10-20 C4 里**已经真跑过**的那次宿主侧检查固化成可重跑的入口：它执行的是工作流**自己的**
 # `run:` 块（不是对 YAML 的再解释），只把两个 GitHub 表达式换成环境值、把 `docker` 换成记录 argv 的桩。
 #
-# 只验三件已经成立过的行为（不建解析框架、不建矩阵）：
+# 只验四件已经成立过的行为（不建解析框架、不建矩阵）：
 #   ① 有效基点 + 特殊文件名（换行 / 空格 / 引号+反斜杠）→ 路径逐字节到达容器的套件参数，
 #      且容器命令里带 `--floor --paths "$@"`；
 #   ② 基点不可解析（空 / 全零 / 不在仓里）→ 一条 `::warning::` + 退回**全套**（命令里没有 `--floor`）；
 #   ③ 底层执行失败（docker rc≠0）→ 这一步照旧非 0（失败不被 `|| true` 之类吞掉）。
+#   ④ P380：版本比较是**可执行**的，且**两条到容器的路**（`--floor --paths` 与退回全套）都被覆盖。
+#      容器命令把比较交给 `ci/check-pi-version.sh`（`"$PI_EXPECT_VERSION"` 与现场 `pi --version`），
+#      本段用**受控 pi** 真的把每一支跑起来：相等 → rc=0 并打印实测值；不等 → 非 0 且点名两边。每支另有
+#      一条影子断言：把比较从容器命令里删掉，同一份「不等」输入必须逃过去 —— 证明那条红由比较产生，不是
+#      字符串长得像。删掉比较（整条或只留 printf）或删掉任一支的 `-e PI_EXPECT_VERSION` 都会点名变红。
 #
 # 用法：
 #   bash skills/teamsmith/tests/workflow-entry.sh [--tree <仓库根>]
 # 退出码：
-#   0 = 三条行为都成立；1 = 有不成立项（逐条 ✗ 并点名）；2 = 缺前提（打印 SKIP（条件不满足）——
+#   0 = 四条行为都成立；1 = 有不成立项（逐条 ✗ 并点名）；2 = 缺前提（打印 SKIP（条件不满足）——
 #   **跳过不是通过**）：检出里没有 `.github/workflows/gates.yml`（产品面检出不含 CI 源码）或宿主没有 git。
 # 不写工作树：全部落在 $TMPDIR 下的私有根里，退出时删掉自己的根（失败可 TEAM_TMP_KEEP=1 保留现场）。
 set -uo pipefail
@@ -101,8 +106,11 @@ chmod +x "$STUB/docker"
 
 run_block() { # <argv 日志> <stub rc> <before> <sha> → 跑一次工作流的 run 块
   local log="$1" rc="$2" before="$3" sha="$4"
+  # P380：PI_EXPECT_VERSION 是工作流 step env 里的解析结果；这里给一个可辨认的值，
+  # 让 ④ 能断言它真的到了容器 argv，而不是只写在 YAML 里。
   ( cd "$REPO" && PATH="$STUB:$PATH" DOCKER_ARGV="$log" STUB_RC="$rc" \
       GH_BEFORE="$before" GH_TIP="$sha" TEAM_CI_TMP_ROOT="$TMP/ci-tmp" \
+      PI_EXPECT_VERSION="$WF_PI_VERSION" \
       bash "$BLOCK" )
 }
 argv_field() { # <argv 日志> <下标> → 第 N 个参数（NUL 分隔，逐字节）
@@ -112,6 +120,13 @@ argv_field() { # <argv 日志> <下标> → 第 N 个参数（NUL 分隔，逐�
     i=$((i + 1))
   done < "$log"
   return 1
+}
+argv_env_value() { # <argv 日志> <变量名> → `-e VAR=…` 这个元素的值（没有就空）
+  local log="$1" var="$2" a
+  while IFS= read -r -d '' a; do
+    case "$a" in "$var="*) printf '%s' "${a#*=}"; return 0 ;; esac
+  done < "$log"
+  return 0
 }
 argv_index_of() { # <argv 日志> <精确值> → 下标（用于找 `_` 这类固定占位符）
   local log="$1" want="$2" i=0 a
@@ -123,6 +138,8 @@ argv_index_of() { # <argv 日志> <精确值> → 下标（用于找 `_` 这类�
 }
 
 # ── ① 有效基点 + 特殊文件名：路径逐字节到达容器的套件参数 ───────────────────────────────────────
+# P380：工作流 step env 从 `resolve-pi` 拿到的值；④ 断言它真的到了容器 argv。
+WF_PI_VERSION="9.9.9"
 REPO="$TMP/repo"; mkdir -p "$REPO/skills/teamsmith/tests"
 cp "$WF" "$REPO/gates.yml"   # 只为让临时仓库里有一个受版本控制的文件
 git -C "$REPO" init -q -b main
@@ -203,5 +220,105 @@ if [ "$RC3" -ne 0 ]; then
 else
   bad "workflow-entry ③：容器执行失败后这一步仍退 0（失败被吞了）"
 fi
+
+# ── ④ P380：版本比较是可执行的，且**两条到容器的路都**透传并真的比较 ───────────────────────────
+# 工作流的 run 块有两条路：有可解析基点时 `--floor --paths "$@"`（changed-path），基点不可解析时退回全套
+# （没有 `--floor`）。两条都必须把本轮解析出的 pi 版本交给容器并真的比较 —— 只覆盖其中一条时，删掉另一条的
+# 透传不会有任何断言看得见（V109 的补充）。
+SANDBOX="$TMP/sandbox"; SANDBOX_REPO="$TMP/sandbox-repo"
+mkdir -p "$SANDBOX" "$TMP/ci-tmp"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "${STUB_PI_VERSION:?}"\nexit "${STUB_PI_EXIT:-0}"\n' > "$SANDBOX/pi"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$SANDBOX/openspec"
+chmod +x "$SANDBOX/pi" "$SANDBOX/openspec"
+rm -rf "$SANDBOX_REPO"; cp -a "$REPO" "$SANDBOX_REPO"
+mkdir -p "$SANDBOX_REPO/ci" "$SANDBOX_REPO/skills/teamsmith/tests"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$SANDBOX_REPO/skills/teamsmith/tests/smoke.sh"
+chmod +x "$SANDBOX_REPO/skills/teamsmith/tests/smoke.sh"
+if [ -f "$TREE/ci/check-pi-version.sh" ]; then
+  cp "$TREE/ci/check-pi-version.sh" "$SANDBOX_REPO/ci/check-pi-version.sh"
+else
+  bad "workflow-entry ④：检出里没有 ci/check-pi-version.sh（工作流的两条路都要调它）"
+fi
+# 与工作流里 `docker run … -e PI_EXPECT_VERSION=… -e TMPDIR=… bash -c '<命令>' _ <路径…>` 同一环境。
+run_container_cmd() { # <命令> <受控 pi 报的版本> <argv 里的 PI_EXPECT_VERSION（空 = 没有 -e）> [pi 的退出码]
+  # 期望值**取自记录的 argv**，不是取自本脚本的记忆：工作流若不再 `-e PI_EXPECT_VERSION=…`，容器里就没有
+  # 这个变量（真实容器里 `set -u` 会让命令直接失败；这里照原样不设），行为断言因此自己变红。
+  # 第四个参数让受控 pi「报对版本但自己失败」—— V109 第三处：`"$(pi --version)"` 当参数会把它的退出码丢掉。
+  local cmd="$1" ver="$2" expected="$3" pi_exit="${4:-0}"
+  local envs=(PATH="$SANDBOX:$PATH" STUB_PI_VERSION="$ver" STUB_PI_EXIT="$pi_exit" SHARD_SLICE="1/4")
+  [ -z "$expected" ] || envs+=(PI_EXPECT_VERSION="$expected")
+  ( cd "$SANDBOX_REPO" || return 1
+    mkdir -p "$TMP/ci-tmp/$ver-$pi_exit" || return 1
+    env "${envs[@]}" TMPDIR="$TMP/ci-tmp/$ver-$pi_exit" bash -c "$cmd" _ )
+}
+
+check_pi_branch() { # <分支标签> <argv 日志>
+  local label="$1" log="$2" cmd rc out shadow expected
+  expected="$(argv_env_value "$log" PI_EXPECT_VERSION)"
+  if [ "$expected" = "$WF_PI_VERSION" ]; then
+    ok "workflow-entry ④[$label]：解析出的 pi 版本作为 PI_EXPECT_VERSION 进了容器 argv"
+  else
+    bad "workflow-entry ④[$label]：容器 argv 里的 PI_EXPECT_VERSION=${expected:-<缺失>}，期望 $WF_PI_VERSION（这一支没把版本交给运行时）"
+  fi
+  cmd="$(argv_field "$log" "$(( $(argv_index_of "$log" -c) + 1 ))")"
+  if [ -z "$cmd" ]; then
+    bad "workflow-entry ④[$label]：取不出容器的 bash -c 命令（这一步的形状变了？）"
+    return 0
+  fi
+  case "$cmd" in
+    *'ci/check-pi-version.sh'*) ok "workflow-entry ④[$label]：容器命令把版本比较交给可执行检查 ci/check-pi-version.sh（不是内联比对）" ;;
+    *) bad "workflow-entry ④[$label]：容器命令没有调用 ci/check-pi-version.sh（比较被内联或删掉了）" ;;
+  esac
+  out="$(run_container_cmd "$cmd" "$WF_PI_VERSION" "$expected" 2>&1)"; rc=$?
+  if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -qF "pi $WF_PI_VERSION (resolved for this run: $WF_PI_VERSION)"; then
+    ok "workflow-entry ④[$label]：受控 pi=$WF_PI_VERSION → 整条容器命令 rc=0，并打印实测值与解析值"
+  else
+    bad "workflow-entry ④[$label]：受控 pi=$WF_PI_VERSION 没有通过（rc=$rc）：$(printf '%s' "$out" | tail -2 | tr '\n' ' ')"
+  fi
+  out="$(run_container_cmd "$cmd" 0.0.0 "$expected" 2>&1)"; rc=$?
+  if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qF 'pi 0.0.0' && printf '%s' "$out" | grep -qF "$WF_PI_VERSION"; then
+    ok "workflow-entry ④[$label]：受控 pi=0.0.0（≠解析值）→ 整条容器命令 rc=$rc，并点名两边"
+  else
+    bad "workflow-entry ④[$label]：版本不等没有让容器命令变红/没有点名两边（rc=$rc）：$(printf '%s' "$out" | tail -2 | tr '\n' ' ')"
+  fi
+  # V109 第三处：受控 pi **报对版本但自己退出 42** → 必须先被拒（保留退出码、点名）、不打印「比较成功」。
+  out="$(run_container_cmd "$cmd" "$WF_PI_VERSION" "$expected" 42 2>&1)"; rc=$?
+  if [ "$rc" -eq 42 ] \
+     && printf '%s' "$out" | grep -qF '::error::' \
+     && printf '%s' "$out" | grep -qF '42' \
+     && ! printf '%s' "$out" | grep -qF "pi $WF_PI_VERSION (resolved for this run"; then
+    ok "workflow-entry ④[$label]：受控 pi 报对版本但退出 42 → 整条容器命令 rc=42 并点名，且没有打印「比较成功」"
+  else
+    bad "workflow-entry ④[$label]：pi --version 的退出码没有被保留/点名（rc=$rc）：$(printf '%s' "$out" | tail -2 | tr '\n' ' ')"
+  fi
+  # 影子（第三处）：删掉「检查 pi 自己退出码」那一段（V109 的变异形式：留下读取、不做检查）→ 同一份
+  # 「退出 42」输入必须逃过去。否则上面那条红不是由保留退出码产生的。
+  STATUS_SHADOW="$(printf '%s' "$cmd" | sed 's#if \[ "$pi_rc" -ne 0 \]; then.*fi; ##')"
+  if [ "$STATUS_SHADOW" = "$cmd" ]; then
+    bad "workflow-entry ④[$label]：状态影子没生效（容器命令里找不到「检查 pi 退出码」那一段；形状变了，影子要跟着改）"
+  else
+    out="$(run_container_cmd "$STATUS_SHADOW" "$WF_PI_VERSION" "$expected" 42 2>&1)"; rc=$?
+    if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -qF "pi $WF_PI_VERSION (resolved for this run"; then
+      ok "workflow-entry ④[$label]：状态影子（删掉退出码检查）在「退出 42」输入上 rc=0 —— 上面那条红确实由保留退出码产生"
+    else
+      bad "workflow-entry ④[$label]：状态影子仍然 rc=$rc：说明那条红不是由保留退出码决定的"
+    fi
+  fi
+  # 影子：删掉那条比较 → 同一份「不等」输入必须逃过。否则上面那条红不是由比较决定的（V109 的形状）。
+  shadow="$(printf '%s' "$cmd" | sed 's#bash ci/check-pi-version.sh[^;]*;##')"
+  if [ "$shadow" = "$cmd" ]; then
+    bad "workflow-entry ④[$label]：影子没生效（容器命令里找不到要删的那条比较；形状变了，影子要跟着改）"
+  else
+    out="$(run_container_cmd "$shadow" 0.0.0 "$expected" 2>&1)"; rc=$?
+    if [ "$rc" -eq 0 ]; then
+      ok "workflow-entry ④[$label]：影子（删掉比较）在同一份不等输入上 rc=0 —— 上面那条红确实由比较产生"
+    else
+      bad "workflow-entry ④[$label]：影子（删掉比较）仍然 rc=$rc：说明那条红不是比较决定的"
+    fi
+  fi
+}
+
+check_pi_branch "changed-path" "$TMP/argv-valid.bin"
+check_pi_branch "full-suite" "$TMP/argv-bad.bin"
 
 summary

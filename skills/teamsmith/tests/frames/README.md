@@ -173,4 +173,6 @@ bash skills/teamsmith/tests/pm-box-real.sh --frame skills/teamsmith/tests/frames
 - 判据/门禁：`bash skills/teamsmith/tests/delivery-truth.sh --section foreign --mutations`
   （真进程 `team say`：零按键、帧逐字节不变、队列 + durable 收件箱都在、可见报告；两向 off-by-one；
   红侧 = 把产品的 queued 报告影子掉 → 「可见报告」必须红、安全断言保持绿）。
-- 真 Pi 复现配方（判据版本钉死 0.99.2）：`skills/teamsmith/tests/fixtures/delivery-truth-real/`（见其 README）。
+- 真 Pi 复现配方（运行时默认解析并安装**最新版**、记录实际版本；历史版本可显式指定）：
+  `skills/teamsmith/tests/fixtures/delivery-truth-real/`（见其 README）。本目录的 `pi-0.99.2-*` / `pi-1.0.0-*`
+  是**回放帧**（当时录制下来的真帧），不是运行时钉版。

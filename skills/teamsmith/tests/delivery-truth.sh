@@ -18,6 +18,7 @@
 #   panel    panel.outbox.impeded / impediments 在 JSON / 纯文本 / TUI 上只读呈现，观察不改队列
 #   judge    判据本体（fixtures/delivery-truth-real/judge-second.py）的单次运行戳（P197）：
 #            run_start 恰好一条 / 在第一行 / run 与 run.json 一致；run-start.txt 存在/非空/run= 一致。
+#            P380：不再钉版本，改为要具体版本号且与现场 pi-version.txt 实测值相等（另拒 observation）。
 #            合成现场（不跑真 Pi、不进容器）；--mutations 把「恰好一条」影子回旧的集合相等 → 同 ID 重复必须被吞
 #
 # 输出契约：每条断言一行 `✓` / `✗` / `· finding` / `· skip`；段末 `== <n> <段名> 结果 == ✓ x ✗ y`；
@@ -1085,6 +1086,10 @@ JSON
 # 不进容器、不碰 tmux）：run_start 标记必须恰好一条 / 在第一行 / run 与 run.json.run_id 一致；
 # run-start.txt 必须存在、非空、run= 与本次 run id 一致。--mutations 把「恰好一条」影子回旧的
 # 集合相等（sorted({…})）→ 同 ID 的重复标记必须被吞成一条（红），证明条数检查是承重的。
+#
+# P380（版本）：判据不再钉死 0.99.2，改为「run.json.pi_version 必须是具体版本号、且等于现场
+# pi-version.txt 的实测值」。下面用 0.99.2 的合成现场作为**历史版本仍可判**的正向对照，另加
+# 四条红侧：版本写成 latest / 现场实测值与记录不符 / mode=observation / 请求版本与记录不符。
 judge_scene() { # <evidence-dir> <case> <run-id>
   mkdir -p "$1/logs/$2"
   P197_CASE="$2" P197_RID="$3" python3 - "$1/logs/$2" <<'PY'
@@ -1096,7 +1101,7 @@ mark = {'event': 'run_start', 'run': rid, 'ts': now}
 marker = 'P138-SECOND-' + case
 (L / 'run.json').write_text(json.dumps({
     'case': case, 'run_id': rid, 'rev': 'HEAD', 'rev_full': '0' * 40,
-    'pi_version': '0.99.2', 'mode': 'verdict', 'started_at': now}, indent=1, sort_keys=True) + '\n')
+    'pi_version': '0.99.2', 'runtime_requested': '0.99.2', 'mode': 'verdict', 'started_at': now}, indent=1, sort_keys=True) + '\n')
 (L / 'pi-version.txt').write_text('0.99.2\n')
 (L / 'run-start.txt').write_text(f'P163 case={case} run={rid} mode=verdict runtime=0.99.2\n')
 (L / 'dev-events.jsonl').write_text('\n'.join(json.dumps(x) for x in [
@@ -1142,13 +1147,27 @@ elif kind == 'empty-stamp':
     (L / 'run-start.txt').write_text('\n')
 elif kind == 'wrong-stamp':
     (L / 'run-start.txt').write_text('P163 case=x run=ffffffffffff mode=verdict runtime=0.99.2\n')
+elif kind == 'nonconcrete-version':
+    run = json.loads((L / 'run.json').read_text())
+    run['pi_version'] = 'latest'
+    (L / 'run.json').write_text(json.dumps(run, indent=1, sort_keys=True) + '\n')
+elif kind == 'observed-mismatch':
+    (L / 'pi-version.txt').write_text('9.9.9\n')
+elif kind == 'observation':
+    run = json.loads((L / 'run.json').read_text())
+    run['mode'] = 'observation'
+    (L / 'run.json').write_text(json.dumps(run, indent=1, sort_keys=True) + '\n')
+elif kind == 'requested-mismatch':
+    run = json.loads((L / 'run.json').read_text())
+    run['runtime_requested'] = '0.99.1'
+    (L / 'run.json').write_text(json.dumps(run, indent=1, sort_keys=True) + '\n')
 else:
     raise SystemExit(f'unknown mutation {kind}')
 PY
 }
 
 section_judge() {
-  begin "judge（恰好一条 / 第一行 / run 一致 / run-start.txt 被核；红侧标记 5 + 戳 3 + 影子）"
+  begin "judge（单次运行戳 + P380 版本记录/实测一致；红侧标记 5 + 戳 3 + 版本/观测 4 + 影子）"
   local J="$SKILL_DIR/tests/fixtures/delivery-truth-real/judge-second.py"
   local CASE="tmux-p163-p197-synth" RID="aabbccddeeff" E="$TMP/judge-evidence" M="$TMP/judge-mutations"
   local rc rc2 out out2 before after miss want
@@ -1196,6 +1215,11 @@ section_judge() {
   judge_red "缺 run-start.txt" no-stamp '缺 run-start.txt'
   judge_red "run-start.txt 为空" empty-stamp '是空的'
   judge_red "run-start.txt 的 run 不是本次" wrong-stamp '不是本次运行的戳' "'ffffffffffff'"
+  # P380：判据不钉版本，但拒绝别名、观测模式、记录与实测不符、请求与记录不符。
+  judge_red "版本写成 latest" nonconcrete-version '不是具体版本号'
+  judge_red "现场实测版本与记录不符" observed-mismatch 'pi-version.txt' "'9.9.9'" "'0.99.2'"
+  judge_red "observation 现场" observation '人工观察'
+  judge_red "请求版本与记录不符" requested-mismatch 'runtime_requested=0.99.1' '!= pi_version=0.99.2'
 
   # ③ 影子：把「恰好一条」改回集合相等 → 同 ID 重复被吞（PASS）；真判据在同一现场拒绝
   if [ "$MUTATIONS" = "1" ]; then
