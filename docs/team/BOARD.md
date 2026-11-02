@@ -638,6 +638,7 @@
 | V119 | 指令瘦身与AGENTS边界提案定点复审 | dev2 | - | P391 | review |
 | V120 | P391 final S1-S4 diff independent review | verify | - | - | review |
 | P398 | 61b 变异测试执行瘦身（首片） | dev3 | - | P397 | dropped |
+| P399 | 关键回复隔离守卫的比对范围（夹具假红） | dev | - | - | todo |
 
 ## 当前里程碑
 
