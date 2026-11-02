@@ -6,6 +6,7 @@
 | 路径 | Owner | 说明 |
 |---|---|---|
 | `skills/teamsmith/tests/**` | agent:dev | 含 probe、选择器与实际workflow入口检查。P327/P329/P332后续实现等其冻结移交，不并发写 |
+| `skills/teamsmith/tests/task-model-routing.sh`、`skills/teamsmith/tests/lib/model-routing-boundary.sh`、`skills/teamsmith/tests/lib/model-routing-arm-cases.tsv`、`skills/teamsmith/tests/section-paths.tsv` 的 61b 行 | agent:dev3（P398 临时借用） | 仅61b首片，index只登记新声明表路径；P396已冻结，不写smoke.sh或其改动区。交付冻结后归还默认owner；P398 brief明授规划内三处非行为文本修正与tasks状态 |
 | `.github/workflows/gates.yml` | agent:dev（P326 临时） | 仅任务书明授的CI入口，不提高60分钟上限；冻结交付后归还PM |
 | `ci/collect-scene.sh` | PM | P324已合入，临时写权收回；当前无实现任务改此文件 |
 | `docs/team/reports/**`、`docs/team/threads/**` | agent:* | 报告与线程（只写自己的报告文件） |

@@ -633,10 +633,11 @@
 | P395 | 标记式关键回复OpenSpec提案 | dev2 | - | - | done |
 | V117 | 标记式关键回复提案独立评审 | dev3 | - | - | done |
 | P396 | 标记式关键回复MVP实现 | dev | - | - | wip |
-| P397 | Gate execution slimming proposal | dev2 | - | P379 | wip |
-| V118 | 测试瘦身提案独立审查 | verify | - | P397 | wip |
+| P397 | Gate execution slimming proposal | dev2 | - | P379 | review |
+| V118 | 测试瘦身提案独立审查 | verify | - | P397 | review |
 | V119 | 指令瘦身与AGENTS边界提案定点复审 | dev2 | - | P391 | review |
 | V120 | P391 final S1-S4 diff independent review | verify | - | - | review |
+| P398 | 61b 变异测试执行瘦身（首片） | dev3 | - | P397 | todo |
 
 ## 当前里程碑
 

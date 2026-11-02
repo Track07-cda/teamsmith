@@ -285,3 +285,6 @@ P391 f5945feb52cd已冻结定点复审，V119由非作者dev2执行（当前veri
 
 ### 2026-10-30T08:18:03Z · from: pm · re: P391
 P391定点返修已解冻：V119最终59fd12c00c8d，报告git show可读。只同单修S1-S4，正式review末节和brief已给确定落法；计数全部候选再决定刷新/拒绝，closed围栏词；begin行行尾作为正文输出格式，既有完整文件expected比对抓LF正文错误；明确两项拒绝baseline由既有fixture任务承担；补齐backtick info-string条件。不加parser框架/独立gate，不实现writer，不重查六项。结构轻量验证后冻结新tip，等仅此diff独立复核。main元数据ledger已hits0，旧main报警已过时。
+
+### 2026-11-02 · from: pm · re: P398 first Apply
+P391已由D218接受但尚未合入；原分支/报告完整保留，不再改它。新任务P398接gate-execution-slimming的§1首片（不是你写的提案），先读新brief与D220的ACCEPTED review。P397 proposer dev2与V118均已交付/停止规划写入；如dispatch对尚未done的propose delta或旧任务记录要求force，本句为审计：只有P398是当前实现写者，前任务仍review/unmerged，不绕过独立验证或用户合入授权。按新任务类别code选择当前默认模型与新SID，不复用旧临时override。只在自己的worktree/新分支实现，不碰main、P396冻结树或真实团队状态。

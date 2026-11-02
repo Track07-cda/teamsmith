@@ -1,9 +1,17 @@
 # Gate execution slimming · P397 proposal review
 
-verdict: **PENDING final correction-diff acceptance** — no Apply authorization
+verdict: **ACCEPTED** — local sliced Apply permitted under D220; no merge/push/live-CI/archive authorization
 candidate: `369c7d87a0b4` (`task/P397-gate-slimming-proposal`, author dev2); earlier freezes `be35c18b18bf`, `3fdd1a8aebba` and `4bdcc5b375fb` retained
 change: `gate-execution-slimming`
 independent review: V118 / verify (not the author)
+
+## Final decision — 2026-11-02
+
+PM formally accepts planning candidate `369c7d87a0b4` plus report-only supplement `009b283573a4`. Independent V118 R4 `aa69cb387445` closes R3-1 through R3-6 and preserves the eight previously closed items; R5 `6081debe99ca` confirms the report-only supplement without changing that acceptance. PM's exact-tip probes and prior independent structural/archive receipts are recorded below. This accepts the plan, not measured speedup or compatibility with the 60-minute CI limit.
+
+First Apply is P398, owned by dev3 (not the explorer/proposer dev2), limited to tasks §1 and the applicable preparation/evidence. The three non-blocking R4 residues are carried as small editorial cleanups: explain only overlapping tags as selecting both loops; qualify the remaining census-width sentence as retained width; tidy the loop-key heading and nested code formatting. These change neither the selection rule nor the scope and need no new proposal review. The full-baseline item 0.2 is not executed in this first slice: reuse traceable retained evidence, and supplement a named missing §61b baseline only if necessary. Do not start another whole smoke as task startup. Final full regression remains at integration/merge acceptance; no unchecked item is marked done through this sequencing.
+
+P398 may register its new declaration-file path on the existing 61b index row (no new section/selector algorithm). Scope is borrowed explicitly in OWNERSHIP and the brief; P397/V118 remain review/unmerged, not done. Other slices and independent Verify follow sequentially. No live team init/reload, protected merge/push, public CI execution, timeout increase or real archive is authorized.
 
 ## Correction diff received — 369c7d87
 
