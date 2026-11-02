@@ -637,7 +637,7 @@
 | V118 | 测试瘦身提案独立审查 | verify | - | P397 | review |
 | V119 | 指令瘦身与AGENTS边界提案定点复审 | dev2 | - | P391 | review |
 | V120 | P391 final S1-S4 diff independent review | verify | - | - | review |
-| P398 | 61b 变异测试执行瘦身（首片） | dev3 | - | P397 | todo |
+| P398 | 61b 变异测试执行瘦身（首片） | dev3 | - | P397 | wip |
 
 ## 当前里程碑
 

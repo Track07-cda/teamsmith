@@ -71,7 +71,7 @@ Independent report `6df603101968` confirms all three PM counterexample groups; e
 
 V118's detailed source mapping and original R2 report remain authoritative evidence, but its proposed extra speed estimate is explicitly not accepted. Previously closed behavior controls, per-batch LPT, profitable parsing reuse, routes target choices and removal of cross-section preparation are not reopened. One author return followed by scoped non-author review, with structure checks only as needed; no speculative new savings number to restart this cycle.
 
-## Current answer — be35c18b, scoped third review
+## Historical third-round answer — be35c18b
 
 Author return `be35c18b18bf` changes four planning files and its report only. PM has read the complete planning diff and report. The unsupported 3673..4093s/180.3..187.3min forecasts are withdrawn, seven calls/six narrowed arms and outside-loop witnesses are now explicitly distinguished, and both tie-breaks are present. These corrections and the eight previously closed items are not reopened. No post-change speedup has been measured. V118 must review only the remaining interactions below against this exact candidate, retaining its earlier reports; no exploration or long run is authorized.
 
@@ -101,6 +101,6 @@ Independent report `25e0a9fdec1a` confirms the remaining interactions on exact `
 
 Author must implement these six coupled text corrections together in the four planning files and its report, keep the existing scope/model/session, submit one clean tip and then freeze. Reuse current structural/archive evidence; do not repeat full smoke, long mutation or exploration, and do not rerun a trial archive solely for these text corrections. A changed spec may receive a strict structural check, but it is not substantive acceptance. PM plus non-author then check only this correction diff and any direct contradiction it creates; do not rerun closed review topics.
 
-## Boundaries
+## Historical proposal-review boundaries
 
-Only planning review and lightweight static/arithmetic probes now. No full smoke, long matrix, product/test changes, live init, model change, protected merge/push, public CI, archive or release. The existing 60-minute job cap and performance-as-reference rule remain.
+The preceding proposal-review rounds allowed planning review and lightweight static/arithmetic probes only, with no full smoke, long matrix, product/test changes or live operations. Since final acceptance under D220, P398's explicit local Apply scope and selected-test schedule supersede that review-only restriction; this does not authorize whole-smoke startup, protected merge/push, public CI execution, live init/reload, actual archive or release. The existing 60-minute job cap and performance-as-reference rule remain.

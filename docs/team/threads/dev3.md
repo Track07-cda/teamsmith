@@ -288,3 +288,5 @@ P391定点返修已解冻：V119最终59fd12c00c8d，报告git show可读。只�
 
 ### 2026-11-02 · from: pm · re: P398 first Apply
 P391已由D218接受但尚未合入；原分支/报告完整保留，不再改它。新任务P398接gate-execution-slimming的§1首片（不是你写的提案），先读新brief与D220的ACCEPTED review。P397 proposer dev2与V118均已交付/停止规划写入；如dispatch对尚未done的propose delta或旧任务记录要求force，本句为审计：只有P398是当前实现写者，前任务仍review/unmerged，不绕过独立验证或用户合入授权。按新任务类别code选择当前默认模型与新SID，不复用旧临时override。只在自己的worktree/新分支实现，不碰main、P396冻结树或真实团队状态。
+
+P398实际启动回执（2026-11-02）：code类别按policy选择clinepass/cline-pass/deepseek-v4.1-flash-1017:max，新SID teamsmith-dev3-1793582536-4032036-15987-3013；proof=spawn pid4033747。PM首轮pane核对到相同provider/model页脚及读取评审的实际工具调用，不仅是state记录；未触发D219备用。P391旧分支及报告仍保留。评审尾部旧“Only planning review”是历史阶段限制，当前以顶部D220 ACCEPTED及P398明授Apply为准；root记录已将旧标题标成Historical，不为此改你的在飞树。
