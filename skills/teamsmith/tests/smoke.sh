@@ -880,6 +880,19 @@ assert_not()   { grep -qF -- "$2" "$1" 2>/dev/null && bad "$3（不该出现 [$2
 assert_has_echo() { case "$1" in *"$2"*) ok "$3" ;; *) bad "$3（[$1] 里找不到 [$2]）" ;; esac; }
 assert_not_echo() { case "$1" in *"$2"*) bad "$3（不该出现 [$2]）" ;; *) ok "$3" ;; esac; }
 assert_eq()    { [ "$2" = "$3" ] && ok "$1" || bad "$1（期望 [$3]，实际 [$2]）"; }
+# P386：嵌套夹具的自述总数只能取自**它自己的结果行**（`== <名> 结果 == ✓N ✗M SKIPK`），不能数整份日志里
+# ✓/SKIP 的出现次数 —— 结果行本身也带一个 ✓ 和一个 SKIP0，按出现次数数就是「每跑一次多一条断言、把
+# SKIP0 报成 1 条可见跳过」（V110 第二轮实测 UI 72 报成 73、pty 88 报成 89）。
+# 契约就是夹具已有的一行格式：最后一条结果行必须满足它。读不到、畸形、或不是这份夹具的行 → rc 1，
+# 调用点必须据此判红（不许把「读不到」当成 0 条断言或全绿）。
+smoke_inner_summary() { # <日志> <夹具结果行里的名字> → 打印 "✓N ✗M SKIPK"
+  local log="$1" want="$2" last
+  [ -r "$log" ] || return 1
+  last="$(grep -a "^== ${want} 结果 ==" "$log" | tail -1)" || return 1
+  [ -n "$last" ] || return 1
+  [[ "$last" =~ ^==\ .*\ 结果\ ==\ (✓[0-9]+\ ✗[0-9]+\ SKIP[0-9]+)$ ]] || return 1
+  printf '%s\n' "${BASH_REMATCH[1]}"
+}
 # M6.1：state/ 的字节指纹 —— 只读命令不许改运行时状态（F28 的守门断言）
 state_fp() {
   ( cd "$REPO/.pi/team/state" 2>/dev/null || return 0
@@ -23805,12 +23818,16 @@ section "62 · 关键回复存储与 CLI（change: pulse-key-replies · P234）"
 if [ -f "$SKILL_DIR/tests/key-replies.sh" ]; then
   P234_RC=0
   bash "$SKILL_DIR/tests/key-replies.sh" --all >"$TMP/p234-key-replies.log" 2>&1 || P234_RC=$?
-  if [ "$P234_RC" -eq 0 ]; then
-    ok "62 key-replies 十二组全绿（$(grep -ac '✓' "$TMP/p234-key-replies.log" || true) 条断言，$(grep -ac 'SKIP' "$TMP/p234-key-replies.log" || true) 条可见跳过）"
-    grep -a 'flip/' "$TMP/p234-key-replies.log" | sed 's/^/      /'
-  else
-    bad "62 key-replies 有失败（rc=$P234_RC）"
+  # P386：与 §63 同一口径（同一文件、同一夹具族）—— 总数取自夹具自己的结果行，不数整份日志里的 ✓/SKIP。
+  P234_SUM="$(smoke_inner_summary "$TMP/p234-key-replies.log" 'P234 key-replies')" || P234_SUM=""
+  if [ "$P234_RC" -ne 0 ]; then
+    bad "62 key-replies 有失败（rc=$P234_RC；夹具结果行 ${P234_SUM:-读不到}）"
     grep -a '✗' "$TMP/p234-key-replies.log" | head -12 | sed 's/^/      /'
+  elif [ -z "$P234_SUM" ]; then
+    bad "62 key-replies rc=0 但读不到它自己的结果行（$TMP/p234-key-replies.log 里没有一条 '== P234 key-replies 结果 == ✓N ✗N SKIPN'）——数不出来就是红，不当 0"
+  else
+    ok "62 key-replies 十二组全绿（夹具结果行 $P234_SUM）"
+    grep -a 'flip/' "$TMP/p234-key-replies.log" | sed 's/^/      /'
   fi
 else
   bad "62 缺 tests/key-replies.sh（P234 的聚焦夹具）"
@@ -23828,11 +23845,15 @@ section "63 · 关键回复面板第 5 页（change: pulse-key-replies · P234�
 if [ -f "$SKILL_DIR/tests/key-replies-ui.sh" ]; then
   P234U_RC=0
   bash "$SKILL_DIR/tests/key-replies-ui.sh" --select blocks,machine,snapshots >"$TMP/p234-key-replies-ui.log" 2>&1 || P234U_RC=$?
-  if [ "$P234U_RC" -eq 0 ]; then
-    ok "62 key-replies 读数面快组全绿（blocks/machine/snapshots；$(grep -ac '✓' "$TMP/p234-key-replies-ui.log" || true) 条断言，$(grep -ac 'SKIP' "$TMP/p234-key-replies-ui.log" || true) 条可见跳过）"
-  else
-    bad "62 key-replies 读数面有失败（rc=$P234U_RC）"
+  # P386：总数取自夹具自己的结果行（旧口径把结果行里的 ✓/SKIP0 也算成断言/跳过：72 报 73、SKIP0 报 1）。
+  P234U_SUM="$(smoke_inner_summary "$TMP/p234-key-replies-ui.log" 'P234 key-replies-ui')" || P234U_SUM=""
+  if [ "$P234U_RC" -ne 0 ]; then
+    bad "62 key-replies 读数面有失败（rc=$P234U_RC；夹具结果行 ${P234U_SUM:-读不到}）"
     grep -a '✗' "$TMP/p234-key-replies-ui.log" | head -12 | sed 's/^/      /'
+  elif [ -z "$P234U_SUM" ]; then
+    bad "62 key-replies 读数面 rc=0 但读不到它自己的结果行（$TMP/p234-key-replies-ui.log 里没有一条 '== … 结果 == ✓N ✗N SKIPN'）——数不出来就是红，不当 0"
+  else
+    ok "62 key-replies 读数面快组全绿（blocks/machine/snapshots；夹具结果行 $P234U_SUM）"
   fi
 else
   bad "62 缺 tests/key-replies-ui.sh（P234 的读数面夹具）"
@@ -23867,11 +23888,15 @@ if [ -f "$SKILL_DIR/tests/key-replies-pty.sh" ]; then
   else
     bad "63 pty 等待进度未逐轮到达段落心跳（结束=$P234P_END 轮=$P234P_PROGRESS ticks=$((SG_TICKS - P234P_TICKS_BEFORE))）"
   fi
-  if [ "$P234P_RC" -eq 0 ]; then
-    ok "62 key-replies 真 pty 面九组全绿（$(grep -ac '✓' "$TMP/p234-key-replies-pty.log" || true) 条断言，$(grep -ac 'SKIP' "$TMP/p234-key-replies-pty.log" || true) 条可见跳过）"
-  else
-    bad "62 key-replies 真 pty 面有失败（rc=$P234P_RC）"
+  # P386：同上一处 —— 总数取自 pty 夹具自己的结果行（驱动读数走 fd 3，不进这份日志）。
+  P234P_SUM="$(smoke_inner_summary "$TMP/p234-key-replies-pty.log" 'P234 key-replies-pty')" || P234P_SUM=""
+  if [ "$P234P_RC" -ne 0 ]; then
+    bad "62 key-replies 真 pty 面有失败（rc=$P234P_RC；夹具结果行 ${P234P_SUM:-读不到}）"
     grep -a '✗' "$TMP/p234-key-replies-pty.log" | head -12 | sed 's/^/      /'
+  elif [ -z "$P234P_SUM" ]; then
+    bad "62 key-replies 真 pty 面 rc=0 但读不到它自己的结果行（$TMP/p234-key-replies-pty.log 里没有一条 '== … 结果 == ✓N ✗N SKIPN'）——数不出来就是红，不当 0"
+  else
+    ok "62 key-replies 真 pty 面九组全绿（夹具结果行 $P234P_SUM）"
   fi
 else
   bad "62 缺 tests/key-replies-pty.sh（P234 的真 pty 夹具）"
