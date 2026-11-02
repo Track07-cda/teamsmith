@@ -2513,7 +2513,7 @@ assert_has "$BR/AGENTS.md" "<!-- teamsmith:begin -->" "注入了协议段"
 assert_has "$BR/AGENTS.md" "Specs (OpenSpec)" "bootstrap 注入的协议段也告诉 agent specs 在哪（M6.3）"
 assert_has "$TMP/boot.log" "下一步" "打印了下一步清单"
 $TEAM bootstrap --agents "dev verify" --session "$BSESS" --no-pulse "${P235_MODELS[@]}" >"$TMP/boot2.log" 2>&1
-assert_eq "bootstrap 幂等（协议段只一份）" "$(grep -cF '<!-- teamsmith:begin -->' "$BR/AGENTS.md")" "1"
+assert_eq "bootstrap 幂等（受管段只一份：独行的 begin 标记恰好 1 行）" "$(grep -cxF '<!-- teamsmith:begin -->' "$BR/AGENTS.md")" "1"
 # 必需依赖预检（D10）：配置写完后就要体检；缺了不阻塞，但每条都要给出修复/降级办法
 env TEAM_PI_SETTINGS_FILE="$TMP/mc-none/settings.json" TEAM_OPENSPEC_BIN=/nonexistent \
   $TEAM bootstrap --agents "dev verify" --session "$BSESS" --no-pulse "${P235_MODELS[@]}" >"$TMP/boot-deps.log" 2>&1 \
@@ -2747,7 +2747,7 @@ if grep -rqF '{{' "$REPO/docs/team" "$REPO/.pi/team/config.sh" "$REPO/AGENTS.md"
 else ok "模板全部渲染（无 {{ 残留）"; fi
 # 幂等：再 init 一次不应重复追加协议段
 $TEAM init --session "$SESSION" --agents "dev verify" --vcs local --gates "true" --docs docs/team "${P235_MODELS[@]}" >"$TMP/init-again.log" 2>&1
-assert_eq "AGENTS.md 协议段幂等（只出现一次）" "$(grep -cF '<!-- teamsmith:begin -->' "$REPO/AGENTS.md")" "1"
+assert_eq "AGENTS.md 协议段幂等（独行的 begin 标记只出现一次；正文提到标记不算）" "$(grep -cxF '<!-- teamsmith:begin -->' "$REPO/AGENTS.md")" "1"
 # P40：第二次 init 不重装、不覆盖 —— 源里每个技能都报 skip（逐 skill 一行）
 assert_eq "P40 第二次 init 对每个技能都报 skip（$(skill_src_names | wc -l | tr -d ' ') 条）" \
   "$(grep -cE '^  skip  .*/\.pi/skills/[A-Za-z0-9._-]+（' "$TMP/init-again.log" || true)" "$(skill_src_names | wc -l | tr -d ' ')"
@@ -10599,7 +10599,7 @@ M71="$TMP/m71-repo"; rm -rf "$M71"; mkdir -p "$M71"
   printf 'TEAM_OPENSPEC_BIN="%s"\n' "$FAKE/openspec"
   printf 'TEAM_SPEC_DIR="%s"\n' "$M51_SPEC"
 } >> "$M71/.pi/team/config.sh"
-assert_eq "夹具 init 后是 teamsmith 标记" "$(grep -cF '<!-- teamsmith:begin -->' "$M71/AGENTS.md")" "1"
+assert_eq "夹具 init 后是 teamsmith 标记" "$(grep -cxF '<!-- teamsmith:begin -->' "$M71/AGENTS.md")" "1"
 ( cd "$M71" && $TEAM doctor ) >"$TMP/m71-doctor-clean.log" 2>&1; M71RC=$?
 assert_eq "干净夹具 doctor 退出码 0（指引的消失不是因为别的东西挂了）" "$M71RC" "0"
 assert_not "$TMP/m71-doctor-clean.log" "references/migration.md" "无需迁移时不打指引"
@@ -10614,12 +10614,108 @@ assert_eq "指引只打一行" "$(grep -c 'references/migration.md' "$TMP/m71-do
 
 # ② init 就地改写旧标记（幂等、单块），指引随之消失
 ( cd "$M71" && $TEAM init --session m71-fixture --agents "dev verify" --vcs local --gates "true" --docs docs/team "${P235_MODELS[@]}" ) >/dev/null 2>&1
-assert_eq "init 改掉了旧标记" "$(grep -cF '<!-- pi-team:begin -->' "$M71/AGENTS.md")" "0"
-assert_eq "改写后协议段只有一块" "$(grep -cF '<!-- teamsmith:begin -->' "$M71/AGENTS.md")" "1"
+assert_eq "init 改掉了旧标记" "$(grep -cxF '<!-- pi-team:begin -->' "$M71/AGENTS.md")" "0"
+assert_eq "改写后协议段只有一块" "$(grep -cxF '<!-- teamsmith:begin -->' "$M71/AGENTS.md")" "1"
 ( cd "$M71" && $TEAM init --session m71-fixture --agents "dev verify" --vcs local --gates "true" --docs docs/team "${P235_MODELS[@]}" ) >/dev/null 2>&1
-assert_eq "再 init 一次仍然只有一块（幂等）" "$(grep -cF '<!-- teamsmith:begin -->' "$M71/AGENTS.md")" "1"
+assert_eq "再 init 一次仍然只有一块（幂等）" "$(grep -cxF '<!-- teamsmith:begin -->' "$M71/AGENTS.md")" "1"
 ( cd "$M71" && $TEAM doctor ) >"$TMP/m71-doctor-after.log" 2>&1
 assert_not "$TMP/m71-doctor-after.log" "references/migration.md" "标记迁移后指引消失"
+
+# ②b 受管边界（P400 · change: instruction-context-slimming · tasks 3.2）：旧名迁移、标记外语义、
+#    以及两条拒绝基线。承重判据是**整文件逐字节比较**（不是范围/行数断言）：标记外的示例与项目规则
+#    算普通内容，正文行尾与 EOF 字节不归一化。
+M71T() { ( cd "$M71" && $TEAM init --session m71-fixture --agents "dev verify" --vcs local --gates "true" --docs docs/team "${P235_MODELS[@]}" ); }
+cp "$M71/AGENTS.md" "$TMP/m71-block.md"     # 同参数下渲染出来的受管段（整份文件就是那一段）
+[ "$(head -1 "$TMP/m71-block.md")" = '<!-- teamsmith:begin -->' ] && [ "$(tail -1 "$TMP/m71-block.md")" = '<!-- teamsmith:end -->' ] \
+  && ok "m71 起动夹具：那份文件就是一整块受管段" || bad "m71 起动夹具：它不是一整块受管段"
+cat > "$TMP/m71-outside.md" <<'AGM71OUT'
+# Project handbook
+
+## 项目规则（标记外）
+- 永远用中文回复。
+- 门禁：make check。
+
+## 标记示例（普通内容）
+Inline quote `<!-- pi-team:begin -->` and `<!-- pi-team:end -->` in prose.
+  <!-- pi-team:begin -->
+
+```md
+<!-- pi-team:begin -->
+<!-- pi-team:end -->
+```
+AGM71OUT
+# 旧名受管对（<=1.12 的项目形状）：只有那两行是旧名，围栏里的示例也是旧名
+sed '1 s|<!-- teamsmith:begin -->|<!-- pi-team:begin -->|; $ s|<!-- teamsmith:end -->|<!-- pi-team:end -->|' \
+  "$TMP/m71-block.md" > "$TMP/m71-block-legacy.md"
+cat "$TMP/m71-outside.md" "$TMP/m71-block-legacy.md" > "$M71/AGENTS.md"
+cp "$M71/AGENTS.md" "$TMP/m71-legacy-before.md"
+( cd "$M71" && $TEAM doctor ) >"$TMP/m71-doctor-legacy2.log" 2>&1
+assert_has "$TMP/m71-doctor-legacy2.log" "旧名标记" "旧名对在标记外示例旁边时 doctor 仍指向迁移指南"
+M71T >"$TMP/m71-migrate.log" 2>&1
+cat "$TMP/m71-outside.md" "$TMP/m71-block.md" > "$TMP/m71-expected.md"
+cmp -s "$TMP/m71-expected.md" "$M71/AGENTS.md" \
+  && ok "旧名对迁移后整文件逐字节等于「标记外原文 + 新渲染块」（围栏里的旧名示例 untouched）" \
+  || bad "旧名对迁移后整文件与期望不同（$(wc -c < "$M71/AGENTS.md") vs $(wc -c < "$TMP/m71-expected.md") 字节）"
+assert_eq "受管对是恰好一对当前标记（begin/end 各 1 行）" \
+  "$(grep -cxF '<!-- teamsmith:begin -->' "$M71/AGENTS.md")/$(grep -cxF '<!-- teamsmith:end -->' "$M71/AGENTS.md")" "1/1"
+assert_eq "旧名只剩围栏示例里的两行（begin/end 各 1 行，没有被改写成当前名）" \
+  "$(grep -cxF '<!-- pi-team:begin -->' "$M71/AGENTS.md")/$(grep -cxF '<!-- pi-team:end -->' "$M71/AGENTS.md")" "1/1"
+assert_eq "行内引用的旧名行原样保留" \
+  "$(grep -cxF 'Inline quote `<!-- pi-team:begin -->` and `<!-- pi-team:end -->` in prose.' "$M71/AGENTS.md")" "1"
+assert_eq "缩进的旧名示例行原样保留" "$(grep -cxF '  <!-- pi-team:begin -->' "$M71/AGENTS.md")" "1"
+cp "$M71/AGENTS.md" "$TMP/m71-migrated-once.md"
+M71T >/dev/null 2>&1
+cmp -s "$TMP/m71-migrated-once.md" "$M71/AGENTS.md" \
+  && ok "迁移后再 init 一次：整份 AGENTS 字节不变（幂等，不追加第二对）" \
+  || bad "迁移后再 init 一次：AGENTS 字节漂了"
+( cd "$M71" && $TEAM doctor ) >"$TMP/m71-doctor-migrated.log" 2>&1
+assert_not "$TMP/m71-doctor-migrated.log" "旧名标记" "迁移后 doctor 不再提示旧名标记"
+
+# ②c 拒绝基线一：候选集不是恰好一对 → 文件逐字节不动 + 点名失败（不当成刷新）
+M71R="$TMP/m71-refuse"; rm -rf "$M71R"; cp -a "$M71" "$M71R"; rm -rf "$M71R/.pi/team/state"
+for m71shape in two-pairs lone-begin lone-end mixed; do
+  case "$m71shape" in
+    two-pairs) printf '<!-- teamsmith:begin -->\nA\n<!-- teamsmith:end -->\nmid\n<!-- teamsmith:begin -->\nB\n<!-- teamsmith:end -->\n' > "$M71R/AGENTS.md" ;;
+    lone-begin) printf '<!-- teamsmith:begin -->\nA\n' > "$M71R/AGENTS.md" ;;
+    lone-end)   printf 'A\n<!-- teamsmith:end -->\n' > "$M71R/AGENTS.md" ;;
+    mixed)      printf '<!-- teamsmith:begin -->\nA\n<!-- teamsmith:end -->\n<!-- pi-team:begin -->\nB\n<!-- pi-team:end -->\n' > "$M71R/AGENTS.md" ;;
+  esac
+  cp "$M71R/AGENTS.md" "$TMP/m71r-before.md"
+  ( cd "$M71R" && $TEAM init --session m71-fixture --agents "dev verify" --vcs local --gates "true" --docs docs/team "${P235_MODELS[@]}" ) >"$TMP/m71r-$m71shape.log" 2>&1
+  m71rc=$?
+  [ "$m71rc" -ne 0 ] && ok "拒绝（$m71shape）：init 非 0" || bad "拒绝（$m71shape）：init 居然 0"
+  cmp -s "$TMP/m71r-before.md" "$M71R/AGENTS.md" && ok "拒绝（$m71shape）：AGENTS 逐字节未动" || bad "拒绝（$m71shape）：AGENTS 被改了"
+  assert_has "$TMP/m71r-$m71shape.log" "标记形状无法确定" "拒绝（$m71shape）：点名失败原因"
+  assert_not "$TMP/m71r-$m71shape.log" "协议段落已刷新" "拒绝（$m71shape）：没有假装刷新"
+done
+# ②d 拒绝基线二：没有候选、但文件结束在未闭合围栏里 → 追加会落进围栏、且每次重跑再长一块
+printf '# Handbook\n\n```md\n<!-- teamsmith:begin -->\n<!-- teamsmith:end -->\n' > "$M71R/AGENTS.md"
+cp "$M71R/AGENTS.md" "$TMP/m71r-fence-before.md"
+( cd "$M71R" && $TEAM init --session m71-fixture --agents "dev verify" --vcs local --gates "true" --docs docs/team "${P235_MODELS[@]}" ) >"$TMP/m71r-fence1.log" 2>&1
+m71rc=$?
+[ "$m71rc" -ne 0 ] && ok "未闭合围栏：init 非 0" || bad "未闭合围栏：init 居然 0"
+cmp -s "$TMP/m71r-fence-before.md" "$M71R/AGENTS.md" && ok "未闭合围栏：AGENTS 逐字节未动" || bad "未闭合围栏：AGENTS 被改了"
+assert_has "$TMP/m71r-fence1.log" "未闭合的代码围栏" "未闭合围栏：点名围栏这一条原因"
+( cd "$M71R" && $TEAM init --session m71-fixture --agents "dev verify" --vcs local --gates "true" --docs docs/team "${P235_MODELS[@]}" ) >"$TMP/m71r-fence2.log" 2>&1
+cmp -s "$TMP/m71r-fence-before.md" "$M71R/AGENTS.md" \
+  && ok "未闭合围栏：再跑一次也不长块（字节仍与起点一致）" || bad "未闭合围栏：第二次重跑把文件改长了"
+# ②e 合法形状的追加/创建：只有被引用或围栏圈住的标记 → 追加一块（允许分隔空行）；文件缺失 → 建出来
+printf '# Handbook\n\n## 项目规则\n- 保持中文。\n\nInline `<!-- teamsmith:begin -->` / `<!-- teamsmith:end -->` only.\n\n```md\n<!-- teamsmith:begin -->\n<!-- teamsmith:end -->\n```\n' > "$M71R/AGENTS.md"
+cp "$M71R/AGENTS.md" "$TMP/m71r-append-before.md"
+( cd "$M71R" && $TEAM init --session m71-fixture --agents "dev verify" --vcs local --gates "true" --docs docs/team "${P235_MODELS[@]}" ) >"$TMP/m71r-append.log" 2>&1
+assert_has "$TMP/m71r-append.log" "append " "无候选：报的是追加，不是刷新也不是失败"
+{ cat "$TMP/m71r-append-before.md"; printf '\n'; cat "$TMP/m71-block.md"; } > "$TMP/m71r-append-expected.md"
+cmp -s "$TMP/m71r-append-expected.md" "$M71R/AGENTS.md" \
+  && ok "无候选：原文逐字节保留 + 一个分隔空行 + 渲染块（示例原样）" \
+  || bad "无候选：追加结果与期望不同（$(wc -c < "$M71R/AGENTS.md") vs $(wc -c < "$TMP/m71r-append-expected.md") 字节）"
+cp "$M71R/AGENTS.md" "$TMP/m71r-append-once.md"
+( cd "$M71R" && $TEAM init --session m71-fixture --agents "dev verify" --vcs local --gates "true" --docs docs/team "${P235_MODELS[@]}" ) >/dev/null 2>&1
+cmp -s "$TMP/m71r-append-once.md" "$M71R/AGENTS.md" \
+  && ok "无候选：重跑一次不追加第二块" || bad "无候选：重跑又追加了一块"
+rm -f "$M71R/AGENTS.md"
+( cd "$M71R" && $TEAM init --session m71-fixture --agents "dev verify" --vcs local --gates "true" --docs docs/team "${P235_MODELS[@]}" ) >"$TMP/m71r-create.log" 2>&1
+cmp -s "$TMP/m71-block.md" "$M71R/AGENTS.md" \
+  && ok "文件缺失：建出来的就是那一块渲染段" || bad "文件缺失：建出来的不是渲染段"
 
 # ③ 第二条判据：本会话加载的版本比磁盘旧 → 指引出现；mark-loaded 之后消失
 mkdir -p "$M71/.pi/team/state"

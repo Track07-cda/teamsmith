@@ -160,4 +160,8 @@ target's current bytes, so changing that target can affect other readers without
   15 minutes and only wakes you when there is some.
 - Keep the team alive: you yourself may be restarted by the pulse, so **all progress must land on disk**
   (reports, review records, BOARD, threads) -- never only in the conversation.
+- **Project rules belong outside the Teamsmith markers**: the `<!-- teamsmith:begin -->` … `<!-- teamsmith:end -->`
+  block in `AGENTS.md` is generated and `team init` replaces it on refresh, so it is not a customization surface.
+  Before a refresh, inventory rules that sit inside it and preserve them outside under the user's authorization;
+  the recipe is `{{SKILL_DIR}}/references/migration.md`.
 - Roster: {{AGENTS}} | gates: `{{GATES}}` | session: `{{SESSION}}` (PM window: `{{PM_WINDOW}}`)

@@ -6,21 +6,153 @@ team_help() { # 兼容入口：`team help` 的三级路由在 scripts/lib/cmd-he
 }
 
 # ---------------------------------------------------------------- init
-team_write_section() { # <file> <begin-marker> <end-marker> <content-file>
-  local target="$1" begin="$2" end="$3" content="$4"
+# ── 受管段扫描：这条规则的唯一实现（change instruction-context-slimming · decision 3b）─────
+# 受管段 = 一对「围栏外、独占整行、逐字节等于标记」的行，两者之间的内容由 init 替换；文件里其它
+# 每个字节都归项目自己。这里刻意不写第二个猜测式实现：写入器与 doctor 的迁移提示都读这一份结果。
+#
+# 扫描结果（全局，调用后立刻用）：
+#   MS_LINES[i] 第 i 行的内容（只去掉行终止符；CRLF 的 CR 属于终止符，不在内容里）
+#   MS_TERM[i]  该行自己的终止符：$'\n' / $'\r\n' / ''（文件末行没有换行）
+#   内容 + 自己的终止符 = 原字节，所以重写时逐字节还原，不做任何行尾归一化
+#   MS_IDX[] / MS_KIND[]  候选行：行下标 + curBegin|curEnd|legBegin|legEnd
+#   MS_FENCE_OPEN 1 = 文件结束在一个未闭合的代码围栏里（往那里追加会落进围栏、而且每次重跑都再追加一次）
+#
+# 围栏口径与已接受的 key-replies 解析器同一条窄词法规则（不是 Markdown 解析器）：围栏行长 ≤3 个
+# 前导空格 + 至少三个反引号或波浪号开启，只由同字符、长度不小于开启串、其后只有空白的行关闭；
+# 反引号围栏的 info string 里再出现反引号则不算围栏。未闭合的围栏一直延续到文件末尾。
+MS_FENCE_OPEN_RE='^ {0,3}(`{3,}|~{3,})(.*)$'
+team_marker_scan() { # <file> <begin> <end> [<legacy-begin> <legacy-end>]
+  local f="$1" b="$2" e="$3" lb="${4:-}" le="${5:-}"
+  local -a raw=(); local c fc info op i n lastnl=1 tail_close_fence_re
+  MS_LINES=(); MS_TERM=(); MS_IDX=(); MS_KIND=(); MS_FENCE_OPEN=0
+  mapfile -t raw < "$f"
+  n=${#raw[@]}
+  [ "$n" -gt 0 ] || return 0
+  [ "$(tail -c 1 "$f" | wc -l)" -eq 1 ] || lastnl=0
+  fc=""
+  for ((i = 0; i < n; i++)); do
+    c="${raw[i]%$'\r'}"
+    MS_LINES[i]="$c"
+    if [ "$i" -eq $((n - 1)) ] && [ "$lastnl" = "0" ]; then
+      MS_TERM[i]=""
+    elif [ "${raw[i]}" != "$c" ]; then
+      MS_TERM[i]=$'\r\n'
+    else
+      MS_TERM[i]=$'\n'
+    fi
+    if [ -z "$fc" ]; then
+      if [[ $c =~ $MS_FENCE_OPEN_RE ]]; then
+        op="${BASH_REMATCH[1]}"; info="${BASH_REMATCH[2]}"
+        # 反引号围栏的 info string 里带反引号 → 不是围栏（CommonMark），按普通内容继续
+        if ! { [ "${op:0:1}" = '`' ] && [[ $info == *'`'* ]]; }; then
+          fc="${op:0:1}"; tail_close_fence_re="^ {0,3}${fc}{${#op},}[[:space:]]*$"
+          continue
+        fi
+      fi
+      case "$c" in
+        "$b") MS_IDX+=("$i"); MS_KIND+=(curBegin) ;;
+        "$e") MS_IDX+=("$i"); MS_KIND+=(curEnd) ;;
+        *)
+          if [ -n "$lb" ] && [ "$c" = "$lb" ]; then MS_IDX+=("$i"); MS_KIND+=(legBegin)
+          elif [ -n "$le" ] && [ "$c" = "$le" ]; then MS_IDX+=("$i"); MS_KIND+=(legEnd)
+          fi ;;
+      esac
+    elif [[ $c =~ $tail_close_fence_re ]]; then
+      fc=""
+    fi
+  done
+  # 只有「文件结束在围栏里」才影响决定：已闭合的围栏里那对示例行是普通内容
+  [ -n "$fc" ] && MS_FENCE_OPEN=1
+  return 0
+}
+
+# 只回答一件事：文件里有没有「可迁移的旧标记候选行」（给 doctor 的迁移提示用）。
+# 漂在正文、缩进、或被围栏圈起来的旧标记示例不是候选 —— 提示只该指向 init 真会改的那两行。
+team_legacy_marker_candidates() { # <file> <legacy-begin> <legacy-end> → 候选行数
+  local f="$1"
+  [ -f "$f" ] && [ -s "$f" ] || { printf '0'; return 0; }
+  team_marker_scan "$f" '<!-- teamsmith:begin -->' '<!-- teamsmith:end -->' "$2" "$3"
+  local i cnt=0
+  for i in "${MS_KIND[@]}"; do
+    case "$i" in legBegin|legEnd) cnt=$((cnt + 1)) ;; esac
+  done
+  printf '%s' "$cnt"
+}
+
+team_write_section() { # <file> <begin-marker> <end-marker> <content-file> [<legacy-begin> <legacy-end>]
+  local target="$1" begin="$2" end="$3" content="$4" lb="${5:-}" le="${6:-}"
+  local cb=0 ce=0 lbb=0 lee=0 bi=-1 ei=-1 lbi=-1 lei=-1 reason="" i
   mkdir -p "$(dirname "$target")"
   [ -f "$target" ] || : > "$target"
-  if grep -qF "$begin" "$target"; then
-    awk -v b="$begin" -v e="$end" -v cf="$content" '
-      $0==b { inb=1; print; while ((getline l < cf) > 0) { if (l==b || l==e) continue; print l }; close(cf); next }
-      inb   { if ($0==e) { inb=0; print }; next }
-      { print }
-    ' "$target" > "$target.tmp" && mv "$target.tmp" "$target"
-    team_ok "update $target（协议段落已刷新）"
-  else
+  team_marker_scan "$target" "$begin" "$end" "$lb" "$le"
+  for i in "${!MS_KIND[@]}"; do
+    case "${MS_KIND[i]}" in
+      curBegin) cb=$((cb + 1)); bi=${MS_IDX[i]} ;;
+      curEnd)   ce=$((ce + 1)); ei=${MS_IDX[i]} ;;
+      legBegin) lbb=$((lbb + 1)); lbi=${MS_IDX[i]} ;;
+      legEnd)   lee=$((lee + 1)); lei=${MS_IDX[i]} ;;
+    esac
+  done
+  if [ "$((cb + ce + lbb + lee))" -eq 0 ]; then
+    # 无候选：追加一块；但文件结束在未闭合围栏里时追加会落进围栏、而且每次重跑都再长一块 → 拒绝
+    if [ "$MS_FENCE_OPEN" = "1" ]; then
+      team_err "AGENTS 受管段：$target 的标记形状无法确定，文件未改动"
+      team_dim "  原因：文件结束在一个未闭合的代码围栏里（追加的协议段会落进围栏、且每次重跑都会再追加一块）；先补上围栏的结束行" >&2
+      return 1
+    fi
     { [ -s "$target" ] && printf '\n'; printf '%s\n' "$begin"; grep -vFxf <(printf '%s\n%s\n' "$begin" "$end") "$content"; printf '%s\n' "$end"; } >> "$target"
     team_ok "append $target（团队协议段落）"
+    return 0
   fi
+  # 形状判定：先数完全部候选再决定，绝不「取第一对」
+  if { [ "$cb" -gt 0 ] || [ "$ce" -gt 0 ]; } && { [ "$lbb" -gt 0 ] || [ "$lee" -gt 0 ]; }; then
+    reason="新旧标记混用（当前 $((cb + ce)) 行、旧名 $((lbb + lee)) 行）——无法判断哪一对是受管段"
+  elif [ "$cb" -gt 1 ] || [ "$ce" -gt 1 ]; then
+    reason="有多对受管标记（开始 $cb 行、结束 $ce 行）"
+  elif [ "$cb" -eq 1 ] && [ "$ce" -eq 0 ]; then
+    reason="有开始标记没有结束标记（第 $((bi + 1)) 行）"
+  elif [ "$ce" -eq 1 ] && [ "$cb" -eq 0 ]; then
+    reason="有结束标记没有开始标记（第 $((ei + 1)) 行）"
+  elif [ "$cb" -eq 1 ] && [ "$ce" -eq 1 ] && [ "$bi" -ge "$ei" ]; then
+    reason="结束标记在开始标记之前（第 $((ei + 1)) 行 / 第 $((bi + 1)) 行）"
+  elif [ "$lbb" -gt 1 ] || [ "$lee" -gt 1 ]; then
+    reason="有多对旧名标记（开始 $lbb 行、结束 $lee 行）"
+  elif [ "$lbb" -eq 1 ] && [ "$lee" -eq 0 ]; then
+    reason="有旧名开始标记没有结束标记（第 $((lbi + 1)) 行）"
+  elif [ "$lee" -eq 1 ] && [ "$lbb" -eq 0 ]; then
+    reason="有旧名结束标记没有开始标记（第 $((lei + 1)) 行）"
+  elif [ "$((lbb + lee))" -gt 0 ] && [ "$lbi" -ge "$lei" ]; then
+    reason="旧名结束标记在开始标记之前（第 $((lei + 1)) 行 / 第 $((lbi + 1)) 行）"
+  fi
+  if [ -n "$reason" ]; then
+    team_err "AGENTS 受管段：$target 的标记形状无法确定，文件未改动"
+    team_dim "  原因：$reason；请手工改成恰好一对围栏外独占行的标记，再跑同一条命令" >&2
+    return 1
+  fi
+  # 到这里的形状：一对当前标记，或一对旧名标记
+  if [ "$cb" -eq 0 ]; then
+    bi="$lbi"; ei="$lei"
+  fi
+  local bodyterm=$'\n' legacy=0
+  [ "$cb" -eq 0 ] && legacy=1
+  # 正文的终止符只由 begin 行自己决定（混合行尾文件里它是唯一权威）
+  [ "${MS_TERM[bi]}" = $'\r\n' ] && bodyterm=$'\r\n'
+  local -a body=(); mapfile -t body < "$content"
+  local k m=${#MS_LINES[@]}
+  {
+    for ((k = 0; k < bi; k++)); do printf '%s%s' "${MS_LINES[k]}" "${MS_TERM[k]}"; done
+    # 旧名对：两行标记本身也换成当前标记（同一处范围编辑，围栏外的示例一个字节都不动）
+    if [ "$legacy" = "1" ]; then printf '%s%s' "$begin" "${MS_TERM[bi]}"; else printf '%s%s' "${MS_LINES[bi]}" "${MS_TERM[bi]}"; fi
+    for k in "${!body[@]}"; do
+      if [ "${body[k]}" = "$begin" ] || [ "${body[k]}" = "$end" ]; then continue; fi
+      printf '%s%s' "${body[k]}" "$bodyterm"
+    done
+    if [ "$legacy" = "1" ]; then printf '%s%s' "$end" "${MS_TERM[ei]}"; else printf '%s%s' "${MS_LINES[ei]}" "${MS_TERM[ei]}"; fi
+    for ((k = ei + 1; k < m; k++)); do printf '%s%s' "${MS_LINES[k]}" "${MS_TERM[k]}"; done
+  } > "$target.tmp" && mv "$target.tmp" "$target"
+  [ "$legacy" = "1" ] && team_dim "  旧名标记已迁移为 teamsmith 标记"
+  team_ok "update $target（协议段落已刷新）"
+  return 0
 }
 
 team_gitignore_add() { # <entry> ...
@@ -272,16 +404,12 @@ team_cmd_init() {
     "PROJECT=$project" "DOCS_DIR=$docs" "SESSION=$session" "PM_WINDOW=$pmwin" \
     "SKILL_DIR=$TEAM_SKILL_DIR" "AGENTS=$agents" "GATES=${gates:-<未配置>}" \
     "WORKTREES_DIR=${TEAM_WORKTREES_DIR:-.worktrees}" "PROTECTED_BRANCH=main" > "$section"
-  # 旧名标记迁移（<=1.12 的项目 AGENTS.md 里是 pi-team:begin/end）：
-  # 就地换成新标记，这样 team_write_section 认得出"段落已存在"，不会重复注入。
+  # 旧名标记迁移（<=1.12 的项目 AGENTS.md 里是 pi-team:begin/end）：交给同一个写入器，按同一处
+  # 范围编辑把标记行的文字换掉（围栏外那对才动，示例里的旧标记逐字节保留）。
   local _agents="$TEAM_MAIN_ROOT/AGENTS.md"
-  if [ -f "$_agents" ] \
-     && grep -qF '<!-- pi-team:begin -->' "$_agents" \
-     && ! grep -qF '<!-- teamsmith:begin -->' "$_agents"; then
-    sed -i 's|<!-- pi-team:begin -->|<!-- teamsmith:begin -->|; s|<!-- pi-team:end -->|<!-- teamsmith:end -->|' "$_agents"
-  fi
   team_write_section "$TEAM_MAIN_ROOT/AGENTS.md" \
-    "<!-- teamsmith:begin -->" "<!-- teamsmith:end -->" "$section"
+    "<!-- teamsmith:begin -->" "<!-- teamsmith:end -->" "$section" \
+    "<!-- pi-team:begin -->" "<!-- pi-team:end -->" || { rm -f "$section"; return 1; }
   rm -f "$section"
 
   # 4) .gitignore
@@ -308,12 +436,15 @@ team_cmd_init() {
 
 # ---------------------------------------------------------------- doctor
 # M7.1：这个项目要不要读迁移指南？两个判据都来自可查的真实状态，不猜：
-#   ① AGENTS.md 里还是旧名标记 <!-- pi-team:begin -->（init/bootstrap 会就地改写；改写后不再触发）
+#   ① AGENTS.md 里还有围栏外的旧名标记 <!-- pi-team:begin -->（init 会就地改写；改写后不再触发）——
+#     判据是「可迁移的候选行」，所以正文里引用、缩进或围栏里的旧名示例不会让这条提示永不消失。
 #   ② 本会话加载的 skill 比磁盘旧（mark-loaded 记的版本/指纹与磁盘不一致）—— 与 version --check 同口径
 # 干净项目上保持静默（doctor 不该多刷一行）；返回原因字符串，没有原因则返回空。
 team_migration_reasons() {
   local reasons="" f="$TEAM_MAIN_ROOT/AGENTS.md" loaded
-  if [ -f "$f" ] && grep -qF '<!-- pi-team:begin -->' "$f"; then
+  # 只看「init 真会改的那两行」：围栏外、独占整行、逐字节等于旧名标记。正文引用、缩进
+  # 或围栏里的旧名示例都不会被 init 改写，所以它们也不该让这条提示永不消失。
+  if [ -f "$f" ] && [ "$(team_legacy_marker_candidates "$f" '<!-- pi-team:begin -->' '<!-- pi-team:end -->')" -gt 0 ]; then
     reasons="AGENTS.md 还是旧名标记"
   fi
   loaded="$(team_loaded_version 2>/dev/null || true)"

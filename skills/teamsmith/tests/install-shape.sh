@@ -747,6 +747,118 @@ NODE_BIN="$(command -v node 2>/dev/null || true)"
 # 反向守卫（M7.2）：整轮夹具跑完，真实仓库的收件箱必须一个字节都没变
 inbox_before="$(inbox_hash "$tree")"
 
+# ── P400 · AGENTS 受管段夹具（change: instruction-context-slimming）─────────────────────────
+# 夹具由测试自己拼：head（到 begin 行、含）+ 旧正文 + tail（end 行起、含）；期望文件用「同参数渲染出的
+# 受管段」拼回去，然后整文件逐字节比较 —— 「正文用了 begin 行自己的终止符」「EOF 不多一个字节」
+# 「行尾不被归一化」这类差异会直接红，而不是靠范围断言近似。围栏外的示例（引用两行标记、旧名标记）
+# 是普通内容，必须原样留着：改写它就是丢用户字节。
+agents_head() { # <file> <crlf 0|1>：围栏外示例 + 空行 + 整份行尾之后是 begin 行（head 的最后一行）
+  cat > "$1" <<'AGH'
+# Project handbook
+
+## 项目规则（标记外）
+- 永远用中文回复。
+- 门禁：make check。
+
+## Quoted markers are ordinary content
+Inline `<!-- teamsmith:begin -->` in prose and `<!-- teamsmith:end -->` too.
+  <!-- teamsmith:begin -->
+
+```md
+<!-- teamsmith:begin -->
+<!-- teamsmith:end -->
+```
+
+<!-- teamsmith:begin -->
+AGH
+  [ "${2:-0}" = "1" ] && sed -i 's/$/\r/' "$1"
+  return 0
+}
+agents_old_body() { # <file>：测试自造的冗长旧受管正文（唯一哨兵 + 超过当前渲染长度的说明行）
+  { printf 'OLD-MANAGED-BODY-块内的旧项目规则\n'; printf '\n'
+    awk 'BEGIN { for (i = 1; i <= 400; i++) printf "旧版协议段第 %03d 行：这一段只用来说明旧受管段比当前渲染结果长。\n", i }'
+  } > "$1"
+  return 0
+}
+agents_tail() { # <file> <crlf 0|1>：end 行（tail 的第一行）+ 尾部项目规则
+  cat > "$1" <<'AGT'
+<!-- teamsmith:end -->
+
+## 尾部规则（标记外）
+- 不问就动手。
+- 门禁：make check。
+AGT
+  [ "${2:-0}" = "1" ] && sed -i 's/$/\r/' "$1"
+  return 0
+}
+agents_legacy_pair() { # <head-in> <tail-in> <head-exp> <tail-exp>：受管对换旧名；围栏里的旧名示例两侧都有
+  cp "$1" "$3"; cp "$2" "$4"
+  # 期望侧的 head 也要带那份围栏示例（它是标记外内容，必须原样保留），但不换成旧名受管对
+  printf '```md\n<!-- pi-team:begin -->\n<!-- pi-team:end -->\n```\n\n' | cat - "$3" > "$3.tmp" && mv "$3.tmp" "$3"
+  printf '```md\n<!-- pi-team:begin -->\n<!-- pi-team:end -->\n```\n\n' | cat - "$1" > "$1.tmp" && mv "$1.tmp" "$1"
+  sed -i '$ s|<!-- teamsmith:begin -->|<!-- pi-team:begin -->|' "$1"
+  sed -i '1 s|<!-- teamsmith:end -->|<!-- pi-team:end -->|' "$2"
+  return 0
+}
+agents_case_body() { # <render> <crlf 0|1> <out>：渲染结果去掉两行标记 = 受管段正文
+  sed '1d;$d' "$1" > "$3"
+  [ "${2:-0}" = "1" ] && sed -i 's/$/\r/' "$3"
+  return 0
+}
+agents_run_case() { # <tree> <repo> <render> <label> <head-crlf> <tail-crlf> <body-crlf> <final-newline> <legacy> → 0/1
+  local t="$1" p="$2" render="$3" label="$4" hcrlf="${5:-0}" tcrlf="${6:-0}" bcrlf="${7:-0}" fnl="${8:-1}" legacy="${9:-0}"
+  local d="$p/.agents-fixture" rc
+  rm -rf "$d"; mkdir -p "$d"
+  agents_head "$d/head" "$hcrlf"; agents_tail "$d/tail" "$tcrlf"
+  cp "$d/head" "$d/head.exp"; cp "$d/tail" "$d/tail.exp"
+  [ "$legacy" = "1" ] && agents_legacy_pair "$d/head" "$d/tail" "$d/head.exp" "$d/tail.exp"
+  agents_old_body "$d/oldbody"   # 测试自造的冗长旧受管段（比当前渲染结果长 → 刷新后文件必须变短）
+  [ "$fnl" = "0" ] && { truncate -s -1 "$d/tail"; truncate -s -1 "$d/tail.exp"; }   # 末行没有换行
+  cat "$d/head" "$d/oldbody" "$d/tail" > "$p/AGENTS.md"
+  cp "$p/AGENTS.md" "$d/old.md"
+  run_tree "$t" "$p" init --session "$(basename "$p")" --agents "dev verify" --vcs local --gates true \
+    --task-models 'routine=deepseek/deepseek-flash analysis=xai/grok-4.6 verify=kimi-coding/k3-256k' \
+    --pm-model 'deepseek/deepseek-flash' >"$d/init.log" 2>&1; rc=$?
+  [ "$rc" = "0" ] || { printf '%s：init 非 0（%s）' "$label" "$(tail -1 "$d/init.log")"; return 1; }
+  agents_case_body "$render" "$bcrlf" "$d/body"
+  cat "$d/head.exp" "$d/body" "$d/tail.exp" > "$d/expected"
+  cmp -s "$d/expected" "$p/AGENTS.md" || {
+    printf '%s：整文件与期望不同（实际 %s 字节 / 期望 %s 字节）%s' "$label" \
+      "$(wc -c < "$p/AGENTS.md")" "$(wc -c < "$d/expected")" "$(diff <(od -c "$d/expected") <(od -c "$p/AGENTS.md") | head -4 | tr '\n' ' ')"
+    return 1
+  }
+  # 计数在去掉 CR 的副本上做（CRLF 夹具的行内容带着 \r，逐字节比较由上面的整文件 cmp 负责）
+  tr -d '\r' < "$p/AGENTS.md" > "$d/nocr"
+  [ "$(grep -cxF '<!-- teamsmith:begin -->' "$d/nocr")" -ge 1 ] \
+    || { printf '%s：刷新后没有当前名 begin 行' "$label"; return 1; }
+  if [ "$legacy" = "1" ]; then
+    # 旧名只允许留在围栏外的示例里（一行 begin、一行 end），受管对已迁移
+    [ "$(grep -cxF '<!-- pi-team:begin -->' "$d/nocr")" = "1" ] \
+      || { printf '%s：围栏外的旧名示例没保住（%s 行）' "$label" "$(grep -cxF '<!-- pi-team:begin -->' "$d/nocr")"; return 1; }
+    [ "$(grep -cxF '<!-- pi-team:end -->' "$d/nocr")" = "1" ] \
+      || { printf '%s：围栏里的旧名 end 示例没保住' "$label"; return 1; }
+  fi
+  [ "$(wc -c < "$d/old.md")" -ge "$(wc -c < "$p/AGENTS.md")" ] \
+    || { printf '%s：刷新后文件没有变短（旧 %s / 新 %s）' "$label" "$(wc -c < "$d/old.md")" "$(wc -c < "$p/AGENTS.md")"; return 1; }
+  printf '%s：块外字节逐字节保留、受管段等于独立渲染（%s 字节）' "$label" "$(wc -c < "$p/AGENTS.md")"
+  return 0
+}
+
+chk_agents_refresh() { # <tree> <repo>：LF / CRLF / 末行无换行 / 旧名标记 四例都整文件等于期望
+  local t="$1" p="$2"
+  local render="$p/.agents-render"
+  [ -f "$p/AGENTS.md" ] || { printf '夹具仓库没有 AGENTS.md（没 init 过）'; return 1; }
+  cp "$p/AGENTS.md" "$render"
+  [ "$(head -1 "$render")" = '<!-- teamsmith:begin -->' ] && [ "$(tail -1 "$render")" = '<!-- teamsmith:end -->' ] \
+    || { printf '参照渲染不是一整块受管段（首/末行不是标记）'; return 1; }
+  agents_run_case "$t" "$p" "$render" 'LF' 0 0 0 1 0 || return 1
+  agents_run_case "$t" "$p" "$render" 'CRLF' 1 1 1 1 0 || return 1
+  agents_run_case "$t" "$p" "$render" '混合行尾（标记外 CRLF 段 + LF 段）' 1 0 1 1 0 || return 1
+  agents_run_case "$t" "$p" "$render" '末行无换行' 0 0 0 0 0 || return 1
+  agents_run_case "$t" "$p" "$render" '旧名标记迁移' 0 0 0 1 1 || return 1
+  return 0
+}
+
 # ---------------------------------------------------------------- surfaces · R1
 if want surfaces; then
   section "surfaces · 安装节在前、.pi/skills 被点名（R1 的四个宣称面）"
@@ -823,6 +935,46 @@ if want install; then
   assert_eq "--copy 对着已有软链退出 0（skip，不是覆盖）" "$rc3" "0"
   assert_eq "--copy 后仍是同一软链目标" "$(readlink -f "$p/.pi/skills/teamsmith")" "$t1"
 
+  # ①b P400（task 3.1）：AGENTS 受管段刷新 —— 只换一对标记之间，标记外逐字节不变
+  # 四个例子（LF / CRLF / 末行无换行 / 旧名标记）整文件与期望逐字节比较，证据在 chk_agents_refresh 里；
+  # 这一段另外把单条事实逐条点名（一对标记、旧块消失、标记外完整、同输入重跑字节稳定）。
+  p="$tmp/p-agents"; git_new "$p"; assert_isolated "$tree" "$p"
+  init_proj "$tree" "$p" >/dev/null; rc=$?
+  assert_eq "AGENTS 夹具：首次 init 退出码 0" "$rc" "0"
+  check_holds "刷新受管段：LF / CRLF / 混行尾 / 末行无换行 / 旧名标记五例整文件等于期望" chk_agents_refresh "$tree" "$p"
+  # 单条事实（在同一个 LF 夹具上逐条点名；上面的整文件比较才是承重判据）
+  agents_head "$p/AGENTS.md" 0
+  printf 'OLD-MANAGED-BODY-块内的旧项目规则\n' >> "$p/AGENTS.md"
+  agents_tail "$p/AGENTS.tail" 0; cat "$p/AGENTS.tail" >> "$p/AGENTS.md"
+  init_proj "$tree" "$p" >/dev/null; rc=$?
+  assert_eq "AGENTS 夹具：带旧块的 init 退出码 0" "$rc" "0"
+  assert_not "$p/AGENTS.md" "OLD-MANAGED-BODY" "旧受管段的内容已消失（块内是被替换区域，不是保留区）"
+  assert_eq "刷新后刚好一对独行的当前标记（2 行）" \
+    "$(grep -cxF '<!-- teamsmith:begin -->' "$p/AGENTS.md")/$(grep -cxF '<!-- teamsmith:end -->' "$p/AGENTS.md")" "2/2"
+  assert_eq "缩进的标记示例没被改写" "$(grep -cxF '  <!-- teamsmith:begin -->' "$p/AGENTS.md" || true)" "1"
+  assert_eq "行内引用标记的正文没被改写" \
+    "$(grep -cxF 'Inline `<!-- teamsmith:begin -->` in prose and `<!-- teamsmith:end -->` too.' "$p/AGENTS.md" || true)" "1"
+  assert_eq "围栏外项目规则（中文）还在，且顺序看起来、只出现一次" "$(grep -cxF -- '- 永远用中文回复。' "$p/AGENTS.md" || true)" "1"
+  assert_eq "标记外尾部规则还在" "$(grep -cxF -- '- 不问就动手。' "$p/AGENTS.md" || true)" "1"
+  # 重跑幂等：同一输入第二次刷新后字节不变（不追加第二对、不漂移）
+  cp "$p/AGENTS.md" "$p/AGENTS.once"
+  init_proj "$tree" "$p" >/dev/null
+  cmp -s "$p/AGENTS.once" "$p/AGENTS.md" && ok "重复刷新：AGENTS 字节不变（幂等，不追加第二对）" \
+    || bad "重复刷新：AGENTS 字节漂了"
+  # 拒绝：两条对 / 孤立 begin → 字节不动 + 点名失败，不当成刷新
+  p="$tmp/p-agents-two"; git_new "$p"; init_proj "$tree" "$p" >/dev/null
+  printf '# H\n<!-- teamsmith:begin -->\nA\n<!-- teamsmith:end -->\nmid\n<!-- teamsmith:begin -->\nB\n<!-- teamsmith:end -->\nend\n' > "$p/AGENTS.md"
+  cp "$p/AGENTS.md" "$p/AGENTS.before"
+  out="$(init_proj "$tree" "$p" 2>&1)"; rc=$?
+  [ "$rc" -ne 0 ] && ok "两对标记：init 非 0（拒绝，不当成刷新）" || bad "两对标记：init 居然 0"
+  case "$out" in *'标记形状无法确定'*) ok "两对标记：失败点名原因（标记形状无法确定）" ;; *) bad "两对标记：没点名原因" ;; esac
+  cmp -s "$p/AGENTS.before" "$p/AGENTS.md" && ok "两对标记：文件逐字节未动" || bad "两对标记：文件被改了"
+  p="$tmp/p-agents-lone"; git_new "$p"; init_proj "$tree" "$p" >/dev/null
+  printf '# H\n<!-- teamsmith:begin -->\nA\n' > "$p/AGENTS.md"; cp "$p/AGENTS.md" "$p/AGENTS.before"
+  out="$(init_proj "$tree" "$p" 2>&1)"
+  cmp -s "$p/AGENTS.before" "$p/AGENTS.md" && ok "孤立 begin：文件逐字节未动" || bad "孤立 begin：文件被改了"
+  case "$out" in *'有开始标记没有结束标记'*) ok "孤立 begin：失败点名具体原因" ;; *) bad "孤立 begin：没点名原因" ;; esac
+
   # ② --no-skills：不建目录、也不动 .gitignore
   p="$tmp/p-noskills"; git_new "$p"; assert_isolated "$tree" "$p"
   out="$(init_proj "$tree" "$p" --no-skills)"; rc=$?
@@ -833,6 +985,19 @@ if want install; then
   assert_not_file "$p/.pi/extensions" "--no-skills 也没建 .pi/extensions/"
   assert_eq ".gitignore 没被塞进 .pi/skills/" "$(grep -cxF '.pi/skills/' "$p/.gitignore" || true)" "0"
   assert_eq ".gitignore 没被塞进 .pi/extensions/" "$(grep -cxF '.pi/extensions/' "$p/.gitignore" || true)" "0"
+  # P400（task 3.3）：--no-skills 只是跳过装 skill，AGENTS 受管段照旧刷新（旧的整块换掉，标记外保留）
+  agents_head "$p/AGENTS.md" 0; agents_old_body "$p/AGENTS.old"; cat "$p/AGENTS.old" >> "$p/AGENTS.md"
+  agents_tail "$p/AGENTS.tail" 0; cat "$p/AGENTS.tail" >> "$p/AGENTS.md"; cp "$p/AGENTS.md" "$p/AGENTS.stale"
+  out="$(init_proj "$tree" "$p" --no-skills)"; rc=$?
+  assert_eq "--no-skills 对着旧受管段退出码 0" "$rc" "0"
+  assert_not "$p/AGENTS.md" "OLD-MANAGED-BODY" "--no-skills 也刷新了受管段（旧块内容已消失）"
+  assert_eq "--no-skills 刷新后标记行还是示例 1 对 + 受管 1 对（没有长出第二批）" \
+    "$(grep -cxF '<!-- teamsmith:begin -->' "$p/AGENTS.md")/$(grep -cxF '<!-- teamsmith:end -->' "$p/AGENTS.md")" "2/2"
+  assert_eq "--no-skills 刷新后标记外的尾部规则仍在" "$(grep -cxF -- '- 不问就动手。' "$p/AGENTS.md")" "1"
+  [ "$(wc -c < "$p/AGENTS.md")" -lt "$(wc -c < "$p/AGENTS.stale")" ] \
+    && ok "--no-skills 刷新后文件变短（旧块被替换而不是追加）" || bad "--no-skills 刷新后文件没变短"
+  assert_not_file "$p/.pi/skills" "--no-skills 刷新后依然没有 .pi/skills/"
+  assert_not_file "$p/.pi/extensions" "--no-skills 刷新后依然没有 .pi/extensions/"
 
   # ③ --copy：真目录、字节相等、不带 node_modules/.git
   p="$tmp/p-copy"; git_new "$p"; assert_isolated "$tree" "$p"
@@ -858,11 +1023,20 @@ if want install; then
   p="$tmp/p-wt"; git_new "$p"; init_proj "$tree" "$p" --no-skills >/dev/null
   ( cd "$p" && git add -A >/dev/null 2>&1 && git commit -qm init2 >/dev/null 2>&1 )
   ( cd "$p" && git worktree add -q "$p/.worktrees/wt" -b task/wt >/dev/null 2>&1 )
+  wt_agents_before="$(file_hash "$p/.worktrees/wt/AGENTS.md")"
   out="$(run_tree "$tree" "$p/.worktrees/wt" init --session wt --vcs local --gates true)"; rc=$?
   assert_eq "worktree 里 init 退出码 0" "$rc" "0"
   assert_link_to "$p/.pi/skills/teamsmith" "$tree/skills/teamsmith" "安装落在主工作树的 .pi/skills/"
   assert_not_file "$p/.worktrees/wt/.pi/skills" "worktree 侧没有安装条目"
   assert_not_file "$p/.worktrees/wt/.pi/extensions" "worktree 侧也没有 /team 扩展（席位不需要斜杠命令）"
+  # P400（task 3.3）：worktree 里 init 刷新的是主根 AGENTS，不在 worktree 里另生一份
+  assert_file "$p/AGENTS.md" "worktree 里的 init 写的是主根 AGENTS.md"
+  assert_eq "主根 AGENTS 带着渲染参数里的 session（wt）" \
+    "$(grep -cF 'tmux `wt:pm`' "$p/AGENTS.md" || true)" "1"
+  assert_eq "worktree 侧检出的 AGENTS.md 一个字节都没被 init 动过（没有私有副本）" \
+    "$(file_hash "$p/.worktrees/wt/AGENTS.md")" "$wt_agents_before"
+  assert_eq "主根 AGENTS 确实被这次 worktree 里的 init 刷新过（新块带 wt 的 session）" \
+    "$(grep -cF 'tmux `wt:pm`' "$p/AGENTS.md" || true)" "1"
 
   # ⑤ bootstrap 升级路径（配置已存在、.pi/skills 缺席）
   p="$tmp/p-boot"; git_new "$p"; assert_isolated "$tree" "$p"
@@ -1285,6 +1459,52 @@ PYDECL
   check_holds "⑫ 对照：真实树声明面完整、没有 note 行" chk_skill_no_note "$tree" "$pg"
   check_breaks "⑫ 翻转：声明面删掉 handover（源里还有）" chk_skill_no_note "$ft" "$pf"
   check_holds "⑫ 红侧点名：rc=0 且可见地说 handover 未登记、照装" chk_skill_unregistered_reported "$ft" "$pf"
+  # ⑬–⑮ P400（tasks 3.6 a/b/c/d）：受管段的三个承诺各打一个窄变异，红侧必须落在对应断言上
+  # ⑭ 对照：真实树的四例整文件比较绿
+  pg="$tmp/f-agents-green"; git_new "$pg"; init_proj "$tree" "$pg" >/dev/null 2>&1
+  check_holds "⑭ 对照：真实树刷新受管段、标记外逐字节保留" chk_agents_refresh "$tree" "$pg"
+  # ⑭a 把「只认围栏外独占行」放宽成围栏盲（示例里的标记也当候选）→ 整文件比较必须红
+  ft="$tmp/f-agents-fence"; scratch_tree "$ft"
+  python3 - "$ft/skills/teamsmith/scripts/lib/cmd-project.sh" <<'PYFENCE'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+old = '    if [ -z "$fc" ]; then\n'
+new = '    fc=""; if [ -z "$fc" ]; then\n'
+if old not in s:
+    print("夹具没生效：找不到围栏判定行"); sys.exit(1)
+open(p, "w", encoding="utf-8").write(s.replace(old, new, 1))
+PYFENCE
+  pf="$tmp/f-agents-fence-red"; git_new "$pf"; init_proj "$ft" "$pf" >/dev/null 2>&1
+  check_breaks "⑭a 翻转：扫描不认围栏（闭合示例里的标记当成受管段）" chk_agents_refresh "$ft" "$pf"
+  # ⑭b 让正文总用 LF（无视 begin 行自己的终止符）→ CRLF 那一例必须红
+  ft="$tmp/f-agents-lfbody"; scratch_tree "$ft"
+  python3 - "$ft/skills/teamsmith/scripts/lib/cmd-project.sh" <<'PYBODY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+old = '  [ "${MS_TERM[bi]}" = $\'\\r\\n\' ] && bodyterm=$\'\\r\\n\'\n'
+if old not in s:
+    print("夹具没生效：找不到终止符跟随行"); sys.exit(1)
+open(p, "w", encoding="utf-8").write(s.replace(old, '', 1))
+PYBODY
+  pf="$tmp/f-agents-lfbody-red"; git_new "$pf"; init_proj "$ft" "$pf" >/dev/null 2>&1
+  check_breaks "⑭b 翻转：正文不再跟随 begin 行的终止符（CRLF 块被写成 LF）" chk_agents_refresh "$ft" "$pf"
+  # ⑭c 把旧名迁移退化回全局 sed → 围栏里的旧名示例被改写，整文件比较必须红
+  ft="$tmp/f-agents-legacy-sed"; scratch_tree "$ft"
+  python3 - "$ft/skills/teamsmith/scripts/lib/cmd-project.sh" <<'PYLEGACY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+old = '  team_write_section "$TEAM_MAIN_ROOT/AGENTS.md" \\\n'
+new = ("  if [ -f \"$_agents\" ]; then sed -i 's|<!-- pi-team:begin -->|<!-- teamsmith:begin -->|;"
+       " s|<!-- pi-team:end -->|<!-- teamsmith:end -->|' \"$_agents\"; fi\n" + old)
+if old not in s:
+    print("夹具没生效：找不到写入器调用"); sys.exit(1)
+open(p, "w", encoding="utf-8").write(s.replace(old, new, 1))
+PYLEGACY
+  pf="$tmp/f-agents-legacy-sed-red"; git_new "$pf"; init_proj "$ft" "$pf" >/dev/null 2>&1
+  check_breaks "⑭c 翻转：旧名迁移退化回全局 sed（围栏里的示例被一并改写）" chk_agents_refresh "$ft" "$pf"
   # ⑥ 真实树没被夹具动过：git status 指纹前后一致
   porcelain_after="$(cd "$tree" && git status --porcelain | sha256sum)"
   assert_eq "⑥ 夹具没碰真实树（git status 指纹不变）" "$porcelain_after" "$porcelain_before"
