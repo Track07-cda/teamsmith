@@ -201,4 +201,4 @@ bash <skill>/scripts/team watch --once        # run a single patrol tick
 
 ## 推送约定（dev 镜像分支）
 
-`origin` 是内部仓 `teamsmith-internal`，`public` 是发布仓 `teamsmith`。`dev` 是 main 的**只读镜像**：每次 main 前进（合并或账本提交）后立即把 dev 同步到两个远端：`git push origin main:dev` 与 `git push public main:dev`，让两个 GitHub 仓的 dev 与本地 main 同一步。`dev` 不是工作分支：不从它反向合并、不在它上面提交。public 的 dev 是公开可见的进展镜像，会暴露未发布的中间状态（账本、任务、事故记录），这是用户明确选择的。main 与 tag 仍只在发布检查全绿后按发布流程单独推，本约定不改变发布纪律。此条是项目规则，保留在 Teamsmith 受管标记之外。
+唯一的远端是 `public`（`teamsmith`，公开仓）；内部的 `teamsmith-internal` 已按用户要求移除，`TEAM_REMOTE` 相应改为 `public`。`dev` 是 main 的**只读镜像**：每次 main 前进（合并或账本提交）后立即 `git push public main:dev`，让 GitHub 上的 dev 与本地 main 同一步。`dev` 不是工作分支：不从它反向合并、不在它上面提交。dev 公开可见，会暴露未发布的中间状态（账本、任务、事故记录），这是用户明确选择的。main 与 tag 仍只在发布检查全绿后按发布流程单独推，本约定不改变发布纪律。此条是项目规则，保留在 Teamsmith 受管标记之外。

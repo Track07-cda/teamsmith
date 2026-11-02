@@ -2091,6 +2091,8 @@ P398交由未编写该提案的dev3，只做tasks §1的61b瘦身及必要准备
 
 用户要求及时把工作推到 GitHub 的 dev 分支。`origin`（teamsmith-internal）此前停在 2026-10-04 的 4dbaa955，落后 1870 个提交且属于 filter-repo 改写前的旧历史；`public/main` 之后仍按发布纪律不动。
 
-处置：在 `origin` 与 `public` 两处都创建 `dev`，首推分别指向 56576c1e（internal）与随后的 main（public）；此后每有一次改动落到 main 就把两个远端的 dev 一起同步。dev 只做镜像，不承载提交、不从 dev 反向合并。用户明确选择 public 也承载 dev，接受公开仓显示未发布的中间状态；main 与 tag 的推送仍按发布检查全绿后的发布流程单独执行，本决定不放松任何发布门禁。
+处置：先在 `origin` 与 `public` 两处创建 `dev`，首推分别指向 56576c1e（internal）与随后的 main（public）；此后每有一次改动落到 main 就把两个远端的 dev 一起同步。dev 只做镜像，不承载提交、不从 dev 反向合并。用户明确选择 public 也承载 dev，接受公开仓显示未发布的中间状态；main 与 tag 的推送仍按发布检查全绿后的发布流程单独执行，本决定不放松任何发布门禁。
 
 gates 工作流只在 push 到 main 时触发，推 dev 不会消耗 CI 分钟，也不会产生一次公开红。
+
+2026-11-02 补记：用户选择公开仓承载 dev 后，要求删除 internal 远端。已 `git remote remove origin`、main 改跟 `public/main`、`.pi/team/config.sh` 的 `TEAM_REMOTE` 由 `origin` 改为 `public`（该键不允许命令写，直接改项目配置），此后 dev 只推 public。GitHub 上 `teamsmith-internal` 仓库本身未删除：本机 gh 未登录，无法从这里删除远端仓库。
