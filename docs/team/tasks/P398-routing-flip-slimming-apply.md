@@ -5,7 +5,7 @@ category: code
 phase: apply
 change: gate-execution-slimming
 specs: verification
-deltas: openspec/changes/gate-execution-slimming/specs/verification/spec.md
+deltas: verification
 deps: P397 proposal ACCEPTED (D220); V118 aa69cb387445 / 6081debe99ca
 status: todo
 
