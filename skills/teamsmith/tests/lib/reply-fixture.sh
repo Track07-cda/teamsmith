@@ -64,25 +64,13 @@ kr_mask_print() { sed -E 's/[0-9]{2}:[0-9]{2}:[0-9]{2}/HH:MM:SS/g'; }
 # ---------------------------------------------------------------- real-repo isolation guard
 # 夹具只在临时根里的私有仓库跑真 CLI；每个仓库开写前 `kr_new_proj` → `kr_paths_check` 断言
 # `team paths` 的 main_root **逐字等于**夹具仓库，跑完再断言真实仓库（这个 worktree 自己，
-# 可用 TEAM_REPLY_REAL_ROOT 覆盖）的账本面内容哈希前后一致。
-REAL_ROOT="${TEAM_REPLY_REAL_ROOT:-$(cd -P "$SELF_DIR/../../.." && pwd)}"
-kr_tree_hash() { # <目录> → 内容 sha256（不存在 → missing）
-  local d="$1"
-  if [ ! -e "$d" ]; then printf 'missing\n'; return 0; fi
-  ( cd "$d" 2>/dev/null && find . -type f -print0 2>/dev/null | sort -z | xargs -0 -r sha256sum 2>/dev/null | sha256sum | cut -d' ' -f1 )
-}
-REAL_INBOX_BEFORE="$(kr_tree_hash "$REAL_ROOT/docs/team/inbox")"
-REAL_STATE_BEFORE="$(kr_tree_hash "$REAL_ROOT/.pi/team/state")"
-kr_real_guard() {
-  local inbox_after state_after
-  inbox_after="$(kr_tree_hash "$REAL_ROOT/docs/team/inbox")"
-  state_after="$(kr_tree_hash "$REAL_ROOT/.pi/team/state")"
-  if [ "$inbox_after" = "$REAL_INBOX_BEFORE" ] && [ "$state_after" = "$REAL_STATE_BEFORE" ]; then
-    ok "隔离守卫：真实仓库 $REAL_ROOT 的 inbox/state 前后逐字节不变"
-  else
-    bad "隔离守卫：真实仓库被改动了！inbox $REAL_INBOX_BEFORE → $inbox_after ｜ state $REAL_STATE_BEFORE → $state_after"
-  fi
-}
+# 可用 TEAM_REPLY_REAL_ROOT 覆盖）的**编号回复存储**跑前跑后逐字节一致
+# （`.pi/team/state/key-replies/**`）。inbox 与投递账本是 append-only、由每次回合结束的收尾钩子写，
+# 不参与比对（PM 2026-11-02 裁定，理由写在 lib/reply-guard.sh 文件头）。
+# 实现只此一份：lib/reply-guard.sh（P399）。
+# shellcheck source=reply-guard.sh
+. "$SELF_DIR/lib/reply-guard.sh"
+krg_guard_baseline
 
 # ---------------------------------------------------------------- fixture project + store
 fixture_up() { # <name> <replies…>  每份回复是 `<label>:<title>:<bodyfile>`

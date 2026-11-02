@@ -18,10 +18,11 @@
 #   skip-path    缺观测器（/proc/<pid>/io）时可见跳过并点名，而不是判红（V27 M3）
 #   guide        指引面：PM 提示词/协议/命令表三处纪律在场 + 示例命令对拍真解析器 + 四变异红侧（change: pm-reply-discipline · P267）
 #
-# 隔离（M7.2 的纪律）：夹具只在临时根里的私有仓库跑真 CLI；进入任何写盘命令前先断言
-# `team paths` 的 main_root 等于夹具仓库（不是真实仓库）；跑完断言真实仓库的 docs/team/inbox
-# 与 .pi/team/state 逐字节不变。TEAM_REPLY_EVIDENCE=<dir> 时导出原始日志/IO trace/命令台账
-# （测试旋钮，不是产品配置）。
+# 隔离（M7.2 的纪律，P399 收窄了比对范围）：夹具只在临时根里的私有仓库跑真 CLI；进入任何写盘命令前先断言
+# `team paths` 的 main_root 等于夹具仓库（不是真实仓库）；跑完断言真实仓库的**编号回复存储**逐字节不变
+# （`.pi/team/state/key-replies/**`，见 tests/lib/reply-guard.sh）。inbox 与投递账本是 append-only、
+# 每次回合结束由收尾钩子写，不参与比对（PM 2026-11-02 裁定）。
+# TEAM_REPLY_EVIDENCE=<dir> 时导出原始日志/IO trace/命令台账（测试旋钮，不是产品配置）。
 #
 # 退出码：0 全部成立；1 有失败；2 用法/环境错误；3 临时根建不起来。
 set -uo pipefail
@@ -91,26 +92,13 @@ kr_ev_save() { # <文件> <目标名>
   cp "$1" "$KR_EV/$2" 2>/dev/null || true
 }
 
-# ---------------------------------------------------------------- 真实仓库守卫（M7.2）
-REAL_ROOT="${TEAM_REPLY_REAL_ROOT:-$(cd -P "$SELF_DIR/../../.." && pwd)}"
-kr_tree_hash() { # <目录> → 内容 sha256（不存在 → missing）
-  local d="$1"
-  if [ ! -e "$d" ]; then printf 'missing\n'; return 0; fi
-  ( cd "$d" 2>/dev/null && find . -type f -print0 2>/dev/null | sort -z | xargs -0 -r sha256sum 2>/dev/null | sha256sum | cut -d' ' -f1 )
-}
-REAL_INBOX_BEFORE="$(kr_tree_hash "$REAL_ROOT/docs/team/inbox")"
-REAL_STATE_BEFORE="$(kr_tree_hash "$REAL_ROOT/.pi/team/state")"
-
-kr_real_guard() {
-  local inbox_after state_after
-  inbox_after="$(kr_tree_hash "$REAL_ROOT/docs/team/inbox")"
-  state_after="$(kr_tree_hash "$REAL_ROOT/.pi/team/state")"
-  if [ "$inbox_after" = "$REAL_INBOX_BEFORE" ] && [ "$state_after" = "$REAL_STATE_BEFORE" ]; then
-    ok "隔离守卫：真实仓库 $REAL_ROOT 的 inbox/state 前后逐字节不变"
-  else
-    bad "隔离守卫：真实仓库被改动了！inbox $REAL_INBOX_BEFORE → $inbox_after ｜ state $REAL_STATE_BEFORE → $state_after"
-  fi
-}
+# ---------------------------------------------------------------- 真实仓库守卫（M7.2 / P399）
+# 比对范围（只有编号回复存储 `state/key-replies/**`）、范围外的理由、以及 P399 要求的两条负对照
+# 都是**一份实现**：tests/lib/reply-guard.sh
+# （key-replies-ui.sh / key-replies-pty.sh 通过 lib/reply-fixture.sh 用的是同一份）。
+# shellcheck source=tests/lib/reply-guard.sh
+. "$SELF_DIR/lib/reply-guard.sh"
+krg_guard_baseline
 
 # ---------------------------------------------------------------- 夹具仓库与 CLI
 KR_SKILL="${KR_SKILL:-$SKILL_DIR}"
@@ -1320,6 +1308,8 @@ for g in "${KR_GROUPS[@]}"; do
     bad "${g}：零断言（依赖缺失/静默跳过不算通过）"
   fi
 done
+section "guard-selfcheck · 隔离守卫的比对范围（P399，合成根上的双向自检）"
+krg_self_check "$TMP"
 kr_real_guard
 [ -n "$KR_EV" ] && kr_ev_note "run end $(date -u +%Y-%m-%dT%H:%M:%SZ) pass=$PASS fail=$FAIL"
 
