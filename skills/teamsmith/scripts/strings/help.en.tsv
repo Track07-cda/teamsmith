@@ -275,13 +275,12 @@ cmd.dispatch.arg.--fresh	start a new session instead of reopening the recorded o
 cmd.dispatch.arg.--allow-overflow	dispatch even when the model's concurrency limit is already reached.
 cmd.dispatch.arg.--print	print the launch command without starting anything.
 cmd.say.title	send a seat one line
-cmd.say.what	Puts one line in front of a seat. If the seat's input box already holds a draft, the message is queued and delivered when the box is clear, so a person's half-written line is never overwritten.
+cmd.say.what	Puts one line in front of a seat. A live inbox watcher gets the line in its durable inbox and wake spool with no keystrokes; with no usable watcher the line is typed straight into the seat's window as one immediate attempt, even over a draft, and the skip is recorded. Neither path proves the model received it.
 cmd.say.when	Use it for a short instruction or a status note. For a decision the seat's next session must still find, write it in the thread as well.
 cmd.say.example	team say dev "the gate is green, please open the pull request"
 cmd.say.read	the seat's window and the outbox
 cmd.say.write	the seat's inbox and the outbox
 cmd.say.see	`team notify`, `team outbox`, `team thread`
-cmd.say.arg.--now	deliver immediately, skipping the draft guard; the skip is recorded.
 cmd.notify.title	one line from a seat to the PM
 cmd.notify.what	Writes one line into the PM's inbox and knocks on the PM's window. The sender is resolved from the directory the command runs in, so a seat cannot claim to be the PM by typing a name.
 cmd.notify.when	Use it at the end of a turn to say that something is ready or that something is blocked.

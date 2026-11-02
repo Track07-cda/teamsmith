@@ -321,7 +321,7 @@ ways, and **the channel is chosen by the target, not by the sender**:
 | Target | Channel |
 |---|---|
 | a Pi session that loaded `extension/team-inbox-watch.ts` (both built-in launch paths pass it with `-e`; a custom Pi-shaped template can add `-e {skill_dir}/extension/team-inbox-watch.ts`) | **inbox watch**: a durable inbox line plus one pointer line in `state/inbox-watch/<key>.wake`; the session's own extension calls `pi.sendMessage({customType:'team-inbox'}, {triggerTurn:true, deliverAs:'followUp'})`. **The input box is never read and never typed into.** |
-| everything else — a custom adapter, a Pi session without the extension, a dead or foreign registration — and the explicit escape hatch (`--now`) | **paste path**: the delivery guard reads the box, defers while it holds a draft, types, verifies the submission in the conversation above the box, and retracts or leaves residue honestly (`references/troubleshooting.md` §3) |
+| everything else — a custom adapter, a Pi session without the extension, a dead or foreign registration — and any default `team say` that finds no usable watcher (it attempts the direct send at once, audited in `state/outbox/forced.log`), plus the human's explicit override (`team draft send --now` / `team outbox flush --now`) | **paste path**: the delivery guard reads the box, defers while it holds a draft, types, verifies the submission in the conversation above the box, and retracts or leaves residue honestly (`references/troubleshooting.md` §3) |
 
 Readiness is proven by the session itself: the extension writes `state/inbox-watch/<key>.reg`
 (`target=<session>:<window>`, `inbox=<name>`, `pid`, `cwd`, `started`, `heartbeat`), and a sender routes to the

@@ -190,17 +190,26 @@ project's seat, still without a live pane, and the same process start time the p
 
 ### Deferred delivery (`delivery-guard`)
 
-Automatic senders never type into an input box that already holds a draft: the message is queued in
-`state/outbox/` (one immutable file per message) and delivered when the box is free. A message deferred behind a
-**trusted** non-empty box is reported as `queued` (exit 0). Two outcomes are instead `held` with a machine reason
-and a non-zero exit: `geometry-untrusted` (the supported Pi layout cannot be established — no key is sent and no
-draft is asserted) and `queue-stalled` (three consecutive eligible drains read a trusted empty box but made no
-progress; observations are recorded per entry in `state/outbox/diagnostics/`). Both keep the immutable entry and
-its durable inbox copy; `team outbox list` names the reason and the recovery command, and the obstacles are also
-counted on the `team status` / `team digest` outbox line and in the panel. The escape hatches are explicit:
-`team say <agent> "…" --now` and `team outbox flush --now` type immediately **even into a non-empty box** and append
-one audit line to `state/outbox/forced.log`; `team outbox drop <n|all>` discards entries; `team draft pm`
-(`state/draft-pm.md`) is the human entry point. See `references/troubleshooting.md` §3 for the detector's known edges.
+Protected automated senders — a `team notify` knock, the watchdog wake line, the notify extension's knock, the
+meeting knock, ordinary `team draft send` and ordinary queued pane delivery — never type into an input box that
+already holds a draft: the message is queued in `state/outbox/` (one immutable file per message) and delivered when
+the box is free. A message deferred behind a **trusted** non-empty box is reported as `queued` (exit 0). Two
+outcomes are instead `held` with a machine reason and a non-zero exit: `geometry-untrusted` (the supported Pi
+layout cannot be established — no key is sent and no draft is asserted) and `queue-stalled` (three consecutive
+eligible drains read a trusted empty box but made no progress; observations are recorded per entry in
+`state/outbox/diagnostics/`). Both keep the immutable entry and its durable inbox copy; `team outbox list` names
+the reason and the recovery command, and the obstacles are also counted on the `team status` / `team digest` outbox
+line and in the panel.
+
+`team say` is the exception the user chose. It prefers a valid live inbox watcher (durable inbox line plus wake
+spool, zero tmux keys, the draft untouched). With no usable watcher it attempts the old direct send immediately,
+even into a draft, after its recipient/`--any`, window, dead-pane and empty-shell checks, and appends one line to
+`state/outbox/forced.log`. That is an **attempt**: it never claims confirmed model receipt and does not promise an
+automatic queueing of a failed transport. The public `say --now` flag is retired (an unknown flag, exit 2).
+The remaining explicit human overrides are `team draft send --now` and `team outbox flush --now`, which type even
+into a non-empty box and record the skip in `state/outbox/forced.log`; `team outbox drop <n|all>` discards
+entries; `team draft pm` (`state/draft-pm.md`) is the human entry point. See `references/troubleshooting.md` §3 for
+the detector's known edges.
 
 ### Branch model (D1)
 

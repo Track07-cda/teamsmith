@@ -111,7 +111,9 @@ STARTED_AT=$(date +%s)
 # ① 现场重置：这一次的测量只看这一次。
 L="$E/logs/$CASE"
 rm -rf -- "$L"
-mkdir -p "$L" "$E/pkg"
+# P393：容器的 scratch / HOME / history 落在**bind mount 的** /evidence/tmp（磁盘、宿主机可见），
+# 不再只活在容器内 /tmp —— 容器结束后宿主上仍能读现场。
+mkdir -p "$L" "$E/pkg" "$E/tmp"
 cp -a "$(dirname "$0")/." "$E/pkg/"
 P163_CASE="$CASE" P163_RUN_ID="$RUN_ID" P163_REV="$REV" P163_REV_FULL="$REV_FULL" \
 P163_PI_VERSION="$PI_VERSION" P163_MODE="$MODE" P163_STARTED_AT="$STARTED_AT" \
@@ -133,6 +135,7 @@ args=(run --rm --network=none -i -e HOME=/tmp -e P138_CONTAINER=1 -e "P138_LONG=
   -e "P138_OLD_NOTIFY=${P138_OLD_NOTIFY:-0}" -e "P143_DRAFT=${P143_DRAFT:-0}" -e "P138_TRACKED=${P138_TRACKED:-0}" -e "P138_SETTLE_DELAY=${P138_SETTLE_DELAY:-1}" -e "P138_SECOND=${P138_SECOND:-0}"
   -e "P163_RUN_ID=$RUN_ID" -e "P163_CASE=$CASE" -e "P163_MODE=$MODE" -e "P163_PI_VERSION=$PI_VERSION"
   -e "P163_BRANCH_UPSTREAM=${P163_BRANCH_UPSTREAM:-0}"
+  -e "P163_DRAFT_AB=${P163_DRAFT_AB:-0}" -e "P163_BASELINE_NOW=${P163_BASELINE_NOW:-0}" -e "P163_DRAFT_TEXT=${P163_DRAFT_TEXT:-P163-HUMAN-DRAFT}" -e "TMPDIR=/evidence/tmp"
   -v "$ROOT:/src:ro" -v "$E:/evidence:rw" -w /src)
 if [ "$MODE" = observation ]; then
   args+=(-v "$MODULES:$MODULES:ro" -e "P138_PI_PKG=$MODULES/$PKG")

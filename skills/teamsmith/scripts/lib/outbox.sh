@@ -14,7 +14,8 @@
 #      投递 = 写 durable 收件箱 + 往 `state/inbox-watch/<key>.wake` 追加一行指针；会话里的扩展读到
 #      就 `sendMessage(triggerTurn)` 唤醒 —— **一个键都不碰**。五次 draft-race 事故（D20/M17/M24/…）
 #      的结论：框检测判不准「人的草稿 vs 我们刚贴进去的 payload」，所以 pi 通道换道而不是继续修。
-#      粘贴路径（守卫 + 收回）保留给非 pi target 与显式逃生门（`outbox flush --now` / `say --now`）。
+#      粘贴路径（守卫 + 收回）保留给非 pi target、没有可用 watcher 的默认 `say` 直投尝试，以及人的显式
+#      逃生门（`outbox flush --now` / `draft send --now`）。
 #
 # 已知的诚实边界（写进 references/troubleshooting.md §3，不许静默）：
 #   - 只有空白的草稿会被判成 EMPTY（光标相对检测法的实测盲区）；
@@ -1661,13 +1662,16 @@ team_outbox_note() { # <ok|warn|plain> <文本>：--quiet 时整段静音（警�
   esac
 }
 
-team_outbox_process_entry() { # <entry> [--now] [--no-verify]
+team_outbox_process_entry() { # <entry> [--now] [--no-verify] [--watch-only]
   local e="$1"; shift
-  local now=0 noverify=0
+  local now=0 noverify=0 watch_only=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --now) now=1; shift ;;
       --no-verify) noverify=1; shift ;;
+      # P393 · 私有的一次性模式（只有「已选中监视通道的默认 say」会传）：本次只走监视通道；
+      # 路由消失/持久化失败就留下条目，绝不换道去打字。不进队头、不持久化、不影响后续普通排水。
+      --watch-only) watch_only=1; shift ;;
       *) shift ;;
     esac
   done
@@ -1731,6 +1735,17 @@ team_outbox_process_entry() { # <entry> [--now] [--no-verify]
     fi
     team_outbox_note warn "outbox：$(basename "$e") pi 通道投递失败（收件箱写不进去）→ 留在队列重试"
     team_outbox_release "$e"
+    TEAM_OUTBOX_CHANNEL="watch-pending"
+    TEAM_OUTBOX_RESULT="queued"
+    return 0
+  fi
+
+  # P393：已选中的监视通道本次不可用（路由已消失）—— 条目留在队列、零按键；
+  # 不落到下面的 EMPTY/BUSY 守卫，也不走 forced。后续普通排水仍是原来的受守卫排水。
+  if [ "$watch_only" = "1" ]; then
+    team_outbox_note warn "outbox：$(basename "$e") 已选中的监视通道路由已消失 → 留在队列（本次不打字）"
+    team_outbox_release "$e"
+    TEAM_OUTBOX_CHANNEL="watch-pending"
     TEAM_OUTBOX_RESULT="queued"
     return 0
   fi
@@ -1946,7 +1961,10 @@ team_outbox_drain() { # [--now] [--quiet] [--max N] [--retry-impeded]
 # 所有「往 TUI 输入框打字」的发送方都走这里。设置 TEAM_SEND_OUTCOME：
 #   delivered（已确认送达）｜watched（pi 监视通道：已写收件箱 + 唤醒指针，输入框零按键）｜queued（进队列了）
 #   ｜held（阻碍 hold：geometry-untrusted / queue-stalled，返回非 0）
-#   ｜forced（--now）｜unknown-sent｜unknown-failed｜offline｜duplicate
+#   ｜forced（--now 或 kind=say 的默认直投：一次尝试，不是回执）
+#   ｜offline-handled（say 的直投前检查已把消息落收件箱并解释原因）
+#   ｜persist-failed（已选监视通道但队列条目写不进去：非零持久化错误）
+#   ｜unknown-sent｜unknown-failed｜offline｜duplicate
 team_send_guarded() { # <target> <payload> <kind> [--from F] [--dedup K] [--inbox A] [--inbox-written A] [--now] [--no-verify] [--meeting-ledger V]
   local target="$1" payload="$2" kind="$3"; shift 3
   local from="-" dedup="" inbox="" inbox_written="" now=0 noverify=0 queue_offline=0 meeting_ledger=""
@@ -1966,11 +1984,40 @@ team_send_guarded() { # <target> <payload> <kind> [--from F] [--dedup K] [--inbo
   TEAM_SEND_OUTCOME=""
   TEAM_SEND_ENTRY=""
   TEAM_SEND_REASON=""
-  local entry="" rc=0 v=""
+  local entry="" rc=0 v="" watch_route="" default_direct=0 watch_only=0
 
-  if [ "$now" = "1" ]; then
+  # M30 · pi 通道：目标装了 inbox-watch 扩展（活的注册）→ 不查输入框、不判 SHELL/NOPANE
+  # （那些问题问的是「能不能打字」；pi 通道根本不打字），直接入队，投递由 process_entry 走收件箱 + spool。
+  # P393：这一次查询同时就是 fresh `kind=say` 的路由选择（watch 优先）。
+  [ "$now" = "1" ] || watch_route="$(team_inbox_watch_route "$target" 2>/dev/null || true)"
+
+  # P393 · 默认 say = 先 watch、没有可用 watcher 才走旧 forced 动作。
+  # 意图只由**这次发送**的 kind=say 解释（不是新的 flag，也不进入队头/排水）：
+  # team_outbox_process_entry 不按 kind 强制，所以后续普通排水仍是受守卫的排水。
+  # 目标资格检查（窗口/死 pane/空提示符）在决定直投的这一刻、按键之前做（team_say_prepare_direct）。
+  if [ "$kind" = "say" ] && [ "$now" != "1" ] && [ -n "$inbox" ]; then
+    if [ -z "$watch_route" ]; then
+      local prep=0
+      team_say_prepare_direct "$inbox" "$target" "$payload" || prep=$?
+      case "$prep" in
+        0) default_direct=1 ;;
+        *) # 已经离线处理完（收件箱已写、原因已打印）：不重复追加、不打字
+           TEAM_SEND_OUTCOME="offline-handled"
+           return 0 ;;
+      esac
+    else
+      watch_only=1            # 已选中监视通道：这次即时处理只走监视通道，路由/持久化失败不换道
+    fi
+  fi
+
+  if [ "$now" = "1" ] || [ "$default_direct" = "1" ]; then
     team_outbox_force_log "$target" "$kind" "$from"
-    team_warn "--now：跳过守卫，直接往 $target 打字（今天的旧行为，已记入 outbox/forced.log）"
+    if [ "$now" = "1" ]; then
+      team_warn "--now：跳过守卫，直接往 $target 打字（今天的旧行为，已记入 outbox/forced.log）"
+    else
+      # 只由 kind=say 的默认直投走到这里：决不展示已退休的 flag，也不声称已确认送达。
+      team_warn "say：没有可用的监视通道，直接往 $target 打字（立即尝试，未确认模型接收；已记入 outbox/forced.log）"
+    fi
     local before="" i after="" text
     text="$(team_deliver_text "$target" "$payload")"
     [ "$noverify" = "1" ] || before="$(team_pane_snapshot "$target")"
@@ -1997,10 +2044,7 @@ team_send_guarded() { # <target> <payload> <kind> [--from F] [--dedup K] [--inbo
   elif [ -n "$inbox" ]; then enq+=(--inbox "$inbox"); fi
   enq+=(--payload "$payload")
 
-  # M30 · pi 通道：目标装了 inbox-watch 扩展（活的注册）→ 不查输入框、不判 SHELL/NOPANE
-  # （那些问题问的是「能不能打字」；pi 通道根本不打字），直接入队，投递由 process_entry 走收件箱 + spool。
-  local watch_route=""
-  [ "$now" = "1" ] || watch_route="$(team_inbox_watch_route "$target" 2>/dev/null || true)"
+  # M30 · pi 通道：见上面的路由选择（watch_route 已在进入时查询过；显式 --now 不查）
   if [ -n "$watch_route" ]; then
     v=""                      # pi 通道：不打字，就不需要判 SHELL/NOPANE/BUSY
   else
@@ -2044,13 +2088,19 @@ team_send_guarded() { # <target> <payload> <kind> [--from F] [--dedup K] [--inbo
     TEAM_SEND_OUTCOME="duplicate"
     return 0
   fi
-  [ -n "$entry" ] && [ -f "$entry" ] || { TEAM_SEND_OUTCOME="offline"; return 1; }
+  [ -n "$entry" ] && [ -f "$entry" ] || {
+    # P393：已选中监视通道却连队列条目都建不起来 = 真实持久化失败。不许报 offline（那不是离线）、
+    # 不许报 queued/收件箱成功，也不许因此改成盲直投 —— 调用方保持这个非零错误。
+    if [ -n "$watch_route" ]; then
+      TEAM_SEND_OUTCOME="persist-failed"
+      return 1
+    fi
+    TEAM_SEND_OUTCOME="offline"; return 1; }
   TEAM_SEND_ENTRY="$entry"
-  if [ "$noverify" = "1" ]; then
-    team_outbox_process_entry "$entry" --no-verify
-  else
-    team_outbox_process_entry "$entry"
-  fi
+  local pa=()
+  [ "$watch_only" = "1" ] && pa+=(--watch-only)
+  [ "$noverify" = "1" ] && pa+=(--no-verify)
+  team_outbox_process_entry "$entry" ${pa[@]+"${pa[@]}"}
   case "$TEAM_OUTBOX_RESULT" in
     delivered)
       if [ "$TEAM_OUTBOX_CHANNEL" = "watch" ]; then TEAM_SEND_OUTCOME="watched"
@@ -2064,7 +2114,11 @@ team_send_guarded() { # <target> <payload> <kind> [--from F] [--dedup K] [--inbo
         return 1
       fi
       TEAM_SEND_OUTCOME="queued" ;;
-    *)         TEAM_SEND_OUTCOME="queued" ;;
+    *)
+      TEAM_SEND_OUTCOME="queued"
+      # P393：监视通道在这次即时处理里没走完（路由消失/收件箱写不进去）：条目留在队列，
+      # 本次零按键；调用方的输出不能说成「目标有草稿」。
+      [ "$TEAM_OUTBOX_CHANNEL" = "watch-pending" ] && TEAM_SEND_REASON="watch-pending" ;;
   esac
   return 0
 }

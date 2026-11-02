@@ -122,12 +122,33 @@ wait_for "$L/dev-events.jsonl" 'agent_settled'
 sleep "${P138_SETTLE_DELAY:-1}"
 ( cd "$WT" && git status --porcelain ) > "$L/dirty-before.txt"
 tmux capture-pane -p -S -100 -t p138:dev > "$L/dev-before.frame"
+# P393 · 测试专用 A/B 模式：在**被测的那一次 say 之前**往真实编辑器里键入同一份真草稿，并把它
+# 的精确字节/光标/帧留在现场。产品和基线都走同一条路径，模式只由 env 选择（绝不是产品分支）。
+# P163_BASELINE_NOW=1 只对**基线 revision** 有意义：它让 scenario 调基线自带的 say --now —— 用来
+# 证明「候选默认直投」与「基线显式 --now」在同一个脏框上等价，而不是让候选去实现一个已退休的旗标。
+if [ "${P163_DRAFT_AB:-0}" = 1 ]; then
+  P163_DRAFT_TEXT=${P163_DRAFT_TEXT:-P163-HUMAN-DRAFT}
+  tmux send-keys -t p138:dev -l "$P163_DRAFT_TEXT"
+  sleep 1
+  printf '%s' "$P163_DRAFT_TEXT" > "$L/draft-typed.txt"
+  tmux capture-pane -p -S -100 -t p138:dev > "$L/draft-typed-before.frame"
+  tmux display-message -p -t p138:dev '#{cursor_y}' > "$L/draft-typed-cursor.txt"
+  # 单独一份（result.txt 稍后会被 say_rc 覆盖，证据不放在会被重写的文件里）
+  {
+    printf 'draft_before_send_sha=%s\n' "$(sha256sum < "$L/draft-typed.txt" | cut -d' ' -f1)"
+    printf 'draft_text=[%s]\n' "$P163_DRAFT_TEXT"
+    printf 'draft_cursor_row=%s\n' "$(cat "$L/draft-typed-cursor.txt")"
+  } > "$L/draft-typed-meta.txt"
+fi
 # sender runs in the fixture main root, not in the worker directory.
 MSG="P138-SAY-$CASE"
 if [ "${P138_LONG:-0}" = 1 ]; then MSG="$MSG $(printf '请核对未提交文件并报告检查结果。%.0s' {1..70})"; fi
 printf '%s\n' "$MSG" > "$L/payload.txt"
+say_args=(say dev "$MSG")
+# 测试专用：只在基线 revision 上选择它自带的显式旗标（候选没有、也不许有）
+[ "${P163_BASELINE_NOW:-0}" = 1 ] && say_args+=(--now)
 set +e
-"${TEAM[@]}" say dev "$MSG" > "$L/say.txt" 2>&1; SAY_RC=$?
+"${TEAM[@]}" "${say_args[@]}" > "$L/say.txt" 2>&1; SAY_RC=$?
 set -e
 printf 'say_rc=%s\n' "$SAY_RC" | tee "$L/result.txt"
 sleep 4

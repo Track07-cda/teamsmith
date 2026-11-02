@@ -506,7 +506,7 @@ probe_recipe() {
     report)       printf 'task|report T1 dev\n' ;;
     add-agent)    printf 'proj|add-agent dev --create\n' ;;
     dispatch)     printf 'wt|dispatch dev T1 docs/team/tasks/T1-first-task.md --branch task/T1-first-task\n' ;;
-    say)          printf 'wt|say dev "one line" --now\n' ;;
+    say)          printf 'wt|say dev "one line"\n' ;;
     notify)       printf 'proj|notify pm "one line"\n' ;;
     draft)        printf 'proj|draft send DRAFT --now\n' ;;
     outbox)       printf 'proj|outbox list\n' ;;
@@ -1262,11 +1262,69 @@ check_claims() {
   local c
   if [ -n "${TEAM_HELP_SURFACE_ONLY:-}" ]; then
     for c in ${TEAM_HELP_SURFACE_ONLY}; do run_probe "$c"; done
+    case " ${TEAM_HELP_SURFACE_ONLY} " in *" say "*) check_say_flag_retired ;; esac
     return 0
   fi
   for c in "${MG_ORDER[@]}"; do
     run_probe "$c"
   done
+  check_say_flag_retired
+  return 0
+}
+
+# ---------------------------------------------------------------- P393 退休的 say --now
+# 两个位置都必须走**既有** unknown-flag 路径（exit 2），且投递副作用为零。指纹分开取 keys（记录型
+# tmux 的 send-keys）、收件箱、wake spool、forced 审计与活动/held 队列 —— 只有逐面比较才说得清
+# 哪个面动了；另跑一次不带旗标的普通 say 作对照，证明指纹看得见写入（不是瞎的）。
+say_flag_fp() { # <dir> → 每个面一行
+  local d="$1"
+  printf 'keys=%s\n' "$(grep -c 'send-keys' "$tmp/tmux-calls.log" 2>/dev/null || true)"
+  printf 'inbox=%s\n' "$(fp_dir "$d/docs/team/inbox")"
+  printf 'spool=%s\n' "$(fp_dir "$d/.pi/team/state/inbox-watch")"
+  printf 'forced=%s\n' "$( [ -f "$d/.pi/team/state/outbox/forced.log" ] && sha256sum "$d/.pi/team/state/outbox/forced.log" | cut -d' ' -f1 || printf none)"
+  printf 'queue=%s\n' "$( { find "$d/.pi/team/state/outbox" -maxdepth 1 -name '*.msg' -printf '%f %s\n' 2>/dev/null
+                           find "$d/.pi/team/state/outbox/held" -maxdepth 1 -name '*.msg' -printf 'held/%f %s\n' 2>/dev/null
+                         } | sort | sha256sum | cut -d' ' -f1)"
+}
+
+check_say_flag_retired() {
+  section "say · 退休的 --now 在两个位置都无副作用"
+  local d before a1 a2 rc1 rc2 out1 out2 after_control
+  d="$(new_repo p-say-flag)"
+  if ! setup_fixture wt "$d" p-say-flag >"$tmp/logs/p-say-flag.setup" 2>&1; then
+    finding "say 退休旗标：夹具搭不起来（$(tail -1 "$tmp/logs/p-say-flag.setup")）"
+    return 1
+  fi
+  HS_ENV=""; HS_STDIN=/dev/null
+  before="$(say_flag_fp "$d")"
+  env_run "$d" say --now dev "retired flag before the recipient" >/dev/null 2>&1
+  rc1="$HS_RC"; out1="$HS_OUT"
+  a1="$(say_flag_fp "$d")"
+  env_run "$d" say dev "retired flag after the message" --now >/dev/null 2>&1
+  rc2="$HS_RC"; out2="$HS_OUT"
+  a2="$(say_flag_fp "$d")"
+  if [ "$rc1" = "2" ] && printf '%s' "$out1" | grep -q -- '--now' && printf '%s' "$out1" | grep -q '未知参数'; then
+    ok "say --now（收件人之前）→ exit 2 并点名 --now"
+  else
+    finding "say --now 前置位置：rc=$rc1 out=$(printf '%s' "$out1" | head -1 | cut -c1-80)"
+  fi
+  if [ "$rc2" = "2" ] && printf '%s' "$out2" | grep -q -- '--now' && printf '%s' "$out2" | grep -q '未知参数'; then
+    ok "say dev … --now（消息之后）→ exit 2 并点名 --now"
+  else
+    finding "say --now 后置位置：rc=$rc2 out=$(printf '%s' "$out2" | head -1 | cut -c1-80)"
+  fi
+  if [ "$before" = "$a1" ] && [ "$before" = "$a2" ]; then
+    ok "两次拒绝后 keys/inbox/spool/forced/queue 指纹逐字节不变"
+  else
+    finding "拒绝臂动了投递面：$(diff <(printf '%s\n' "$before") <(printf '%s\n' "$a2") | grep '^[<>]' | paste -sd ' ' -)"
+  fi
+  env_run "$d" say dev "control send proves the fingerprint sees writes" >/dev/null 2>&1
+  after_control="$(say_flag_fp "$d")"
+  if [ "$after_control" != "$before" ]; then
+    ok "对照：一次普通 say 改变了指纹（所以「拒绝臂不变」不是瞎的）"
+  else
+    finding "对照：普通 say 也没让指纹变化（指纹是瞎的，拒绝臂的绿不成立）"
+  fi
   return 0
 }
 
@@ -1291,7 +1349,6 @@ reply --from --stdin --title
 report --force
 resume --agent --all --dry-run
 review --allow-unresolved-branch --dir --no-gates --strong
-say --now
 standby --reason
 task --agent --category --deps --issue --title
 teardown --agent --all --force --purge --register

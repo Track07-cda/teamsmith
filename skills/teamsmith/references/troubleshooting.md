@@ -54,6 +54,14 @@ conversation like a queued follow-up. The input box is never read and never type
 a custom adapter, a Pi session started without the extension, a registration whose pid is dead or whose cwd
 is another project — takes the **delivery guard** below, which is the only code allowed to type into a pane.
 
+**Two senders are direct-attempt exceptions, and they are named, not hidden.** `team say` prefers a valid live
+watcher (durable inbox line plus wake spool, zero keys, draft untouched). With **no usable watcher** it attempts the
+old direct send immediately — after its existing recipient/`--any`, window, dead-pane and empty-shell checks — even
+when the box holds a draft, and appends exactly one line to `state/outbox/forced.log`. That line, a zero exit and a
+pane snapshot are an **attempt**, never proof that the model received the message; the retired `say --now` is
+rejected as an unknown flag before any side effect. The other exception is the human's explicit override
+`team draft send --now` / `team outbox flush --now`.
+
 The Pi channel exists because five draft-race incidents (2026-09, all on real Pi 0.85.1) showed that the box
 heuristic cannot be made reliable enough: D20 is where the guard came from (an automated message glued onto a
 human's draft); in M17 a payload was judged to have raced a draft while the PM had in fact just finished a long
@@ -89,7 +97,9 @@ Honest edges of the Pi channel (visible, never silent):
 
 **The delivery guard** (the paste path) locates the target pane's input box before typing and reads **every content row
 of the box** — including rows below the cursor, because a draft typed after a leading newline or recalled with `Up`
-sits below the cursor row. If the box already holds text, the sender writes **no key at all**: the message goes
+sits below the cursor row. If the box already holds text, a **protected sender** (a `team notify` knock, the
+watchdog wake line, the notify extension's knock, the meeting knock, an ordinary `team draft send`, or ordinary
+queued pane delivery) writes **no key at all**: the message goes
 into `state/outbox/` as one immutable entry and is delivered when the box is free (`team outbox list` shows what is
 waiting, `team outbox flush` drains it, and every watchdog tick drives one drain as well). A message deferred behind a
 **trusted** non-empty box is reported as **`queued`** (exit 0), never as delivered. The two impediment outcomes below —
@@ -103,8 +113,9 @@ What this means for you:
 - Keep typing. Your draft stays in the box; the notice waits outside it.
 - If the queue bothers you: `team outbox drop <n|all>` discards entries, and `team status` / `team digest` print one
   `outbox …` line as long as anything is waiting (nothing when it is empty).
-- `team say <agent> "…" --now` (and `team outbox flush --now`) deliberately types into a non-empty box — that is
-the old behaviour on purpose, and it appends one line to `state/outbox/forced.log`. Use it only when you really
+- `team say <agent> "…"` with no usable watcher types into a non-empty box on purpose — that is the default direct
+  attempt now, and it appends one line to `state/outbox/forced.log`. `team outbox flush --now` and
+  `team draft send --now` stay the human's explicit overrides for queued messages. Use them only when you really
   want the text glued.
 - The human entry point is `team draft pm`: an editor window on `state/draft-pm.md` (nothing automated ever types
   into it); saving and quitting enqueues the file through the same guarded path and prints the acknowledgement in
@@ -266,7 +277,9 @@ Honest edges (documented, not hidden):
   missing/short bottom rule, or a content row wider than the pane (a clipping or scrolled TUI, a draft whose own
   rule row makes the rectangle ambiguous) are **`geometry-untrusted`**: no key is sent, the payload is moved to
   `state/outbox/held/` with that reason plus its durable inbox copy, the sender exits non-zero and names the
-  entry and the recovery command, and `team say` asserts no draft and promises no automatic delivery. Recovery
+  entry and the recovery command, and the protected sender asserts no draft and promises no automatic delivery.
+  (A default `team say` with no watcher never takes this path: it attempts the direct send instead, which reads no
+  geometry at all.) Recovery
   is `team outbox flush` once the layout is supported again (the entry is never-typed, so it may be retried; a
   terminal `draft-raced*`/`unconfirmed` entry never is). Real captures and the red side (`admission shadowed
   off` → the same bytes read `[21 30]`/BUSY) are pinned in `tests/frames/` and
@@ -925,7 +938,8 @@ skipped (`classify stale=<n> …`, and a *recovered* line that has since gone st
 
 ## 21. pi announces a new version → the input box reads as BUSY
 
-**Symptom**: a PM/worker Pi pane is idle with an empty box, yet `team say` / `team notify` report **`queued`**
+**Symptom**: a PM/worker Pi pane is idle with an empty box, yet `team notify` (or a drained `team draft send` /
+ordinary queued message) reports **`queued`**
 (the message lands in `state/outbox/` instead of the box), and the real-pi fixture says so:
 
 ```

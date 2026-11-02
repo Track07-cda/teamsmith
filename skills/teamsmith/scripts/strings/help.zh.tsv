@@ -261,13 +261,12 @@ cmd.dispatch.arg.--fresh	新开一个会话，而不是复用记录里的那个�
 cmd.dispatch.arg.--allow-overflow	即使该模型的并发限额已经满了也照派。
 cmd.dispatch.arg.--print	只打印启动命令，不启动任何东西。
 cmd.say.title	给一个席位发一句话
-cmd.say.what	把一句话放到席位眼前。如果席位的输入框里已经有草稿，这句话会先排队、等输入框空了再投递，所以人写了一半的那行不会被覆盖。
+cmd.say.what	把一句话放到席位眼前。席位的收件箱监视器活着时，这句话落进它的 durable 收件箱与唤醒 spool、一个键都不打；没有可用监视器时，直接把这句话打进席位窗口（即使输入框里有草稿），这次跳过会留痕。两条路都不等于模型已经收到。
 cmd.say.when	一句短指令或一句状态说明时用它。席位下一个会话还要找得到的决定，另外写进往来记录。
 cmd.say.example	team say dev "门禁绿了，请开 PR"
 cmd.say.read	席位的窗口与延后队列
 cmd.say.write	席位的收件箱与延后队列
 cmd.say.see	`team notify`、`team outbox`、`team thread`
-cmd.say.arg.--now	立刻投递，跳过草稿守卫；这次跳过会留痕。
 cmd.notify.title	席位发给 PM 的一句话
 cmd.notify.what	把一句话写进 PM 的收件箱，并敲一下 PM 的窗口。发送者按命令运行时所在的目录解析，所以席位不能靠自称来冒充 PM。
 cmd.notify.when	回合结束时用它，说某件事成了、或者某件事卡住了。

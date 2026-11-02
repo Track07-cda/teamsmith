@@ -8,6 +8,7 @@
 |---|---|---|
 | `scenario.sh` | `docs/team/reports/P157-verify/pkg/scenario.sh` `3fa9d3d6…` | 改：读 `run.json` 运行戳 + 在判据读的事件文件第一行写单次 `run_start` 标记 |
 | `run-case.sh` | `docs/team/reports/P157-verify/pkg/run-case.sh` `167c474c…` | 改：case 名 `*-p163-*`、现场强制重置 + `run.json`、变量名 `P163_EVIDENCE`；P380 起运行时默认解析最新版（`latest`）并记录实际版本（见下） |
+| `judge-dirty-ab.py` | 新增（P393）：脏框 A/B 的严格单次运行判据；单次运行/版本/旧现场检查复用 `judge-second.py` 的实现 |
 | `judge-second.py` | `docs/team/reports/P157-verify/pkg/judge-second.py` `e6735be5…` | 改：严格单次运行校验（缺戳 / 多 run 标记 / 有旧文件 / observation 一律拒绝）；P197 起标记必须**恰好一条**（集合相等会吞掉同 ID 的重复）且在**第一行**，`run-start.txt` 必须存在/非空/`run=` 与 `run.json` 一致；P380 起不再硬编码版本号，改为要求记录值等于现场实测值 |
 | `mock-server.py` | `docs/team/reports/P157-verify/pkg/mock-server.py` `629963db…` | 逐字相同（回环 mock 模型，`--network=none`） |
 | `observe.ts` | `docs/team/reports/P157-verify/pkg/observe.ts` `3bab2cb4…` | 逐字相同（把 pane 帧/事件写成 jsonl 证据） |
@@ -63,6 +64,41 @@ git 的 `fatal: no upstream configured for branch …` 被写到 pane 上。Pi 1
 无远端、不联网），把「第二封 say 能不能送达」与「探测的 stderr 漏到 pane」分开；默认**关**，保持真实工作树
 形状。根治在产品侧（`skills/teamsmith/extension/team-notify.ts` 的 `run()` 需要
 `stdio: ['ignore', 'pipe', 'pipe']`；最小复现见 `docs/team/reports/P380-dev3.md`），修好后这个开关可以删掉。
+
+## P393 · 脏框 A/B（默认 say 的 watch-first/直投）与当前 Pi 观察
+
+三条独立运行、同一个真草稿、同一个 mock 后端、同一个 0.99.2 运行时。基线 = `ec78b6c622ad`：
+
+```sh
+E="$PWD/docs/team/reports/P393-dev"; mkdir -p "$E"
+# ① 基线默认 say：无 watcher + 真草稿 → 旧行为排队，不产生模型请求
+P163_DRAFT_AB=1 P163_EVIDENCE="$E" \
+  bash skills/teamsmith/tests/fixtures/delivery-truth-real/run-case.sh tmux-p163-base-default-dirty ec78b6c622ad 0 0.99.2
+# ② 基线自带的显式 --now：同一个脏框 → 旧 forced 动作
+P163_DRAFT_AB=1 P163_BASELINE_NOW=1 P163_EVIDENCE="$E" \
+  bash skills/teamsmith/tests/fixtures/delivery-truth-real/run-case.sh tmux-p163-base-now-dirty ec78b6c622ad 0 0.99.2
+# ③ 候选默认 say：必须与 ② 等价（草稿+修正同一条真实请求、恰一条 forced 审计、零活动条目）
+P163_DRAFT_AB=1 P163_EVIDENCE="$E" \
+  bash skills/teamsmith/tests/fixtures/delivery-truth-real/run-case.sh tmux-p163-candidate-default-dirty <candidate-sha> 0 0.99.2
+P163_EVIDENCE="$E" python3 skills/teamsmith/tests/fixtures/delivery-truth-real/judge-dirty-ab.py \
+  tmux-p163-base-default-dirty tmux-p163-base-now-dirty tmux-p163-candidate-default-dirty
+```
+
+`P163_BASELINE_NOW=1` 只对基线 revision 有意义：它让 scenario 调用**基线自带的** `say --now`，用来
+证明候选的默认直投与旧的显式强制投递等价；候选不实现这个退休旗标。判据只信请求正文、`say.txt`、
+`forced.log`、队列和草稿字节，不用 pane 回显或 `rc=0`。
+
+第二封修正仍走原有的 0.99.2 单次判据：
+
+```sh
+P138_SECOND=1 P163_EVIDENCE="$E" \
+  bash skills/teamsmith/tests/fixtures/delivery-truth-real/run-case.sh tmux-p163-candidate-second-dirty <candidate-sha> 0 0.99.2
+P163_EVIDENCE="$E" python3 skills/teamsmith/tests/fixtures/delivery-truth-real/judge-second.py tmux-p163-candidate-second-dirty
+```
+
+**当前宿主 Pi（1.4.0）只作观察**：同一个 `P163_DRAFT_AB=1` 现场用 `host` 运行时跑一遍，记下真实的
+`pi --version`、请求与帧；`judge-second.py` 与 `judge-dirty-ab.py` 都会**拒绝**给 observation 现场出
+判据（exit 2）。不要把一个版本的观察当成另一个版本的判据，也不要把 P380 的旧证据拼进来。
 
 ## 纪律
 

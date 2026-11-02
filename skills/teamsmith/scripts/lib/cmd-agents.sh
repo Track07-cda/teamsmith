@@ -1621,49 +1621,61 @@ team_require_recipient() { # <recipient> <是否 --any> <命令名>
   return 1
 }
 
+# P393：无可用监视通道时，默认 say 直投之前的**目标资格检查**（从 team_cmd_say 原样搬来）。
+# 位置很关键：它在「选中直投之后、按任何键之前」，所以已选中的监视通道不需要看 pane，而一个不合格的
+# 注册也不可能绕过它 —— 检查与按键之间不留一个「路由又消失」的空档。
+# 返回 0 = 目标可直投；2 = 已经离线处理完（收件箱已写、原因已打印），调用方不得再追加同一份兜底。
+# 收件人（--any 越权）与目标会话边界已在调用方校验/解析过，这里只做 pane 侧的三项判断。
+team_say_prepare_direct() { # <agent> <target> <msg>
+  local agent="$1" target="$2" msg="$3" w
+  w="${target#*:}"
+  team_tmux_has_window "$TEAM_SESSION" "$w" \
+    || { team_say_offline "$agent" "$msg" "窗口 $TEAM_SESSION:$w 不在"; return 2; }
+  # P55（投递换道）：死 pane 不是投递目标 —— send-keys 返回 0 但文字落进虚空（探针 P5），
+  # 「提示框非空确认送达」永远等不到（画面不再变）。消息走收件箱，输出点名座位已死与退出证据。
+  if team_agent_pane_dead "$agent"; then
+    local ev; ev="$(team_agent_pane_evidence "$agent" 2>/dev/null || echo '证据未知')"
+    team_inbox_append "$agent" pm "（PM 消息，座位已死：$ev）$msg"
+    team_warn "say: $agent 的 pane 已死（$ev）—— 没有按任何键；消息已落 $TEAM_DOCS_DIR/inbox/$agent.md"
+    team_dim "  现场：$TEAM_CLI status <ID>（或 tmux capture-pane -p -S - -t $target）；恢复：$TEAM_CLI resume --agent $agent（会先抓现场再替换遗体）"
+    return 2
+  fi
+  # 安全：空提示符时把消息 send-keys 进去会被 shell 当命令执行
+  if team_is_shell_cmd "$(team_pane_cmd "$TEAM_SESSION:$w")" && ! team_pane_busy "$TEAM_SESSION:$w"; then
+    team_say_offline "$agent" "$msg" "$(team_agent_cli_name) 已退出（空提示符）"
+    return 2
+  fi
+  return 0
+}
+
 team_cmd_say() {
-  local agent="" msg="" verify=1 any=0 now=0
+  local agent="" msg="" verify=1 any=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --no-verify) verify=0; shift ;;
       --any) any=1; shift ;;
-      --now) now=1; shift ;;
+      # P393：公共 --now 已退休（say 默认就会在没有可用监视通道时直投）。走同一条未知参数路径：
+      # 收件人校验、任何按键、任何队列/收件箱写入之前就以 rc=2 退出。
       -*) team_usage_die "say: 未知参数 $1" ;;
       *) if [ -z "$agent" ]; then agent="$1"; elif [ -z "$msg" ]; then msg="$1"; else msg="$msg $1"; fi; shift ;;
     esac
   done
-  [ -n "$agent" ] && [ -n "$msg" ] || team_usage_die "say <agent> <单行消息> [--no-verify] [--any] [--now]"
+  [ -n "$agent" ] && [ -n "$msg" ] || team_usage_die "say <agent> <单行消息> [--no-verify] [--any]"
   case "$msg" in *$'\n'*) team_die "say 只能发单行：多行请写进文件，然后让 agent 去读" ;; esac
   team_require_recipient "$agent" "$any" say || return 1
   local w; w="$(team_state_get "$agent" window "$agent")"
   local target="$TEAM_SESSION:$w"
-  # M30 · pi 通道不经过 tmux：有活的收件箱监视器（inbox-watch 扩展）时，窗口/pane 的检查都不必要
-  # —— 「pi 通道零 tmux 调用」是 M30 的验收判据之一（消息写 durable 收件箱 + spool，由扩展唤醒）。
-  if ! team_inbox_watch_route "$target" >/dev/null 2>&1; then
-    team_tmux_has_window "$TEAM_SESSION" "$w" \
-      || { team_say_offline "$agent" "$msg" "窗口 $TEAM_SESSION:$w 不在"; return 0; }
-    # P55（投递换道）：死 pane 不是投递目标 —— send-keys 返回 0 但文字落进虚空（探针 P5），
-    # 「提示框非空确认送达」永远等不到（画面不再变）。消息走收件箱，输出点名座位已死与退出证据。
-    if team_agent_pane_dead "$agent"; then
-      local ev; ev="$(team_agent_pane_evidence "$agent" 2>/dev/null || echo '证据未知')"
-      team_inbox_append "$agent" pm "（PM 消息，座位已死：$ev）$msg"
-      team_warn "say: $agent 的 pane 已死（$ev）—— 没有按任何键；消息已落 $TEAM_DOCS_DIR/inbox/$agent.md"
-      team_dim "  现场：$TEAM_CLI status <ID>（或 tmux capture-pane -p -S - -t $target）；恢复：$TEAM_CLI resume --agent $agent（会先抓现场再替换遗体）"
-      return 0
-    fi
-    # 安全：空提示符时把消息 send-keys 进去会被 shell 当命令执行
-    if team_is_shell_cmd "$(team_pane_cmd "$TEAM_SESSION:$w")" && ! team_pane_busy "$TEAM_SESSION:$w"; then
-      team_say_offline "$agent" "$msg" "$(team_agent_cli_name) 已退出（空提示符）"
-      return 0
-    fi
-  fi
 
-  # 投递一律走守卫（delivery-guard）：输入框里有草稿 → 不写一个键，消息进 state/outbox/ 排队。
-  # --now 是人的显式逃生门（故意重建旧行为，留审计）；--no-verify 保留旧语义。
+  # 投递一律走共享发送口（delivery-guard）：它先判断有没有可用的监视通道，再决定直投或排队；
+  # 直投前的窗口/死 pane/空提示符检查由 team_say_prepare_direct 在那一刻做（P393）。
   local sargs=()
   [ "$verify" = "1" ] || sargs+=(--no-verify)
-  [ "$now" = "1" ] && sargs+=(--now)
-  team_send_guarded "$target" "$msg" say --from pm --inbox "$agent" ${sargs[@]+"${sargs[@]}"}
+  local send_rc=0
+  team_send_guarded "$target" "$msg" say --from pm --inbox "$agent" ${sargs[@]+"${sargs[@]}"} || send_rc=$?
+  # 捕获返回值，才能在真实入口的 set -e 下报告持久化失败；其他非零结果仍原样失败，不能落进离线兜底。
+  if [ "$send_rc" -ne 0 ] && [ "$TEAM_SEND_OUTCOME" != "persist-failed" ]; then
+    return "$send_rc"
+  fi
   case "$TEAM_SEND_OUTCOME" in
     delivered)
       team_ok "said to $target: $msg（已确认送达）"
@@ -1673,9 +1685,17 @@ team_cmd_say() {
       team_ok "said to $target: $msg（pi 监视通道：已写收件箱 $TEAM_DOCS_DIR/inbox/$agent.md + 唤醒指针；输入框零按键）"
       return 0 ;;
     queued)
-      # 契约：排队 ≠ 送达 —— 输出里只许有 queued，绝不能写「已确认送达」
-      team_ok "queued for $target: $msg（目标输入框里有草稿：没有写任何键；条目已入 state/outbox/，清空后自动投递）"
-      team_dim "  原因/条目：$TEAM_CLI outbox list ｜ 投递未确认的兜底：消息已在 $TEAM_DOCS_DIR/inbox/$agent.md"
+      # 契约：排队 ≠ 送达 —— 输出里只许有 queued，绝不能写「已确认送达」。
+      # P393：默认 say 不会再因为「目标有草稿」排队；这里排队只可能是**已选中的监视通道**没走完
+      # （路由消失 / 收件箱或 spool 写不进去），条目留在 outbox 走原有排水。那种情况不许假称草稿、
+      # 也不许承诺「清空草稿就送达」。
+      if [ "$TEAM_SEND_REASON" = "watch-pending" ]; then
+        team_ok "queued for $target: $msg（监视通道这次没走完：没有写任何键；条目已入 state/outbox/，后续排水仍走守卫）"
+        team_dim "  条目：$TEAM_CLI outbox list ｜ 这与目标输入框里的草稿无关，也不承诺清空草稿就会送达"
+      else
+        team_ok "queued for $target: $msg（没有写任何键；条目已入 state/outbox/，清空后自动投递）"
+        team_dim "  原因/条目：$TEAM_CLI outbox list ｜ 投递未确认的兜底：消息已在 $TEAM_DOCS_DIR/inbox/$agent.md"
+      fi
       return 0 ;;
     held)
       # delivery-truth D1/D2：geometry-untrusted / queue-stalled —— 一个键都没发，报 held + 原因 +
@@ -1684,7 +1704,8 @@ team_cmd_say() {
       team_dim "  条目：$(basename "${TEAM_SEND_ENTRY:--}")｜durable 全文：$(team_outbox_durable_path "${TEAM_SEND_ENTRY:--}" 2>/dev/null || printf '%s' -)（payload 与条目头未改）｜原因：$TEAM_CLI outbox list ｜恢复：$(team_outbox_recovery_hint "${TEAM_SEND_REASON:--}")"
       return 1 ;;
     forced)
-      team_ok "said to $target: $msg（--now：跳过守卫直投，记入 outbox/forced.log）"
+      # P393：默认直投是**尝试**，不是回执 —— 不写「已确认送达」，也不承诺失败会自动入队。
+      team_ok "attempted immediate send to $target: $msg（已尝试立即发送；未确认模型接收；跳过草稿守卫已记入 state/outbox/forced.log）"
       return 0 ;;
     unknown-sent)
       team_ok "said to $target: $msg（输入框形状未知：按旧行为投递）"
@@ -1692,6 +1713,14 @@ team_cmd_say() {
     unknown-failed)
       team_inbox_append "$agent" pm "（PM 消息，投递未确认）$msg"
       team_err "投递未确认：$target（输入框形状未知且 pane 无变化；消息已写入收件箱 $TEAM_DOCS_DIR/inbox/$agent.md）"
+      return 1 ;;
+    offline-handled)
+      # 发送口里的直投前检查已经处理完（收件箱已写、原因已打印）：这里绝不再追加一份。
+      return 0 ;;
+    persist-failed)
+      # 已选中监视通道，却连队列条目都没能落盘 = 真实持久化失败：不是离线，也不是「已排队」。
+      team_err "say: 写不进 state/outbox/ 的队列条目（目标 $target）—— 没有按任何键，也没有离线/排队兜底"
+      team_dim "  检查 $(team_state_dir)/outbox 的权限与磁盘后重发；已选中的监视通道不会退回直投"
       return 1 ;;
     *)
       team_say_offline "$agent" "$msg" "$(team_agent_cli_name) 已退出（空提示符）"
