@@ -3237,7 +3237,7 @@ team_pm_abort_uncommitted() { # only the window started by this attempt
   team_tmux_kill_window "$target" || { team_err "uncommitted PM stop failed: $target；检查保存的诊断"; return 1; }
 }
 
-team_pm_pi_args() { # PM 不加载 notify 扩展（它就是收件人），但加载 team-bg（PM 的后台门禁）与 team-inbox-watch（PM 的投递换道）；默认 -c 延续本目录上一个会话以保住历史
+team_pm_pi_args() { # PM 定向加载 bg/inbox-watch/reply，不加载 notify；默认 -c 延续本目录上一个会话
   team_pm_identity_guard || return 1
   local model="$(team_pm_model_resolve)" args=()
   args=(--provider "${model%%/*}" --model "${model#*/}")
@@ -3245,6 +3245,7 @@ team_pm_pi_args() { # PM 不加载 notify 扩展（它就是收件人），但�
   [ -d "$TEAM_SKILL_DIR" ] && args+=(-e "$TEAM_SKILL_DIR/extension/team-bg.ts")
   # M30：PM 的收件箱监视唤醒（投递换道：pi 通道不再往输入框粘贴）
   [ -d "$TEAM_SKILL_DIR" ] && args+=(-e "$TEAM_SKILL_DIR/extension/team-inbox-watch.ts")
+  [ -d "$TEAM_SKILL_DIR" ] && args+=(-e "$TEAM_SKILL_DIR/extension/team-reply.ts")
   [ -d "$TEAM_SKILL_DIR" ] && args+=(--skill "$TEAM_SKILL_DIR")
   # 续跑参数（M8.1）：TEAM_PM_SESSION_ID > 显式 TEAM_PM_RESUME_ARGS > 历史的 -c。
   # 默认三个都空 = 与历史逐字节一致；显式配了 resume 参数就换掉默认的 -c（同一套键也服务于自定义 CLI）。
@@ -3533,8 +3534,10 @@ team_pm_launch_cmd() { # <prompt_file> <spawn_file> → respawn-pane 的 shell-c
   if [ -z "$(team_trim "${TEAM_PM_CMD:-}")" ]; then
     pi_bin="$(team_pm_bin_path)"
     # M40：启动前先清洗身份 env（继承的 TEAM_* 一律清掉，只写本命令推导出的身份）
-    printf '%s%scd %q && printf "%%s\\n" $$ > %q && exec %q %s @%q' \
-      "$(team_identity_env_prefix "$TEAM_MAIN_ROOT")" "$(team_tmux_shim_exports)" "$TEAM_MAIN_ROOT" "$spawnfile" "$pi_bin" "$(team_pm_pi_args)" "$pf"
+    printf '%s%sexport TEAM_STATE_DIR=%q TEAM_CONFIG_FILE=%q TEAM_PM_WINDOW=%q; cd %q && printf "%%s\\n" $$ > %q && exec %q %s @%q' \
+      "$(team_identity_env_prefix "$TEAM_MAIN_ROOT")" "$(team_tmux_shim_exports)" \
+      "$TEAM_STATE_DIR" "${TEAM_CONFIG:-${TEAM_CONFIG_FILE:-}}" "$TEAM_PM_WINDOW" \
+      "$TEAM_MAIN_ROOT" "$spawnfile" "$pi_bin" "$(team_pm_pi_args)" "$pf"
     return 0
   fi
   expanded="$(team_agent_expand pm "$TEAM_PM_CMD" pm "${TEAM_PM_SESSION_ID:-}" \

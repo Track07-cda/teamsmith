@@ -2,9 +2,9 @@
 # teamsmith · 更新与版本自检：mark-loaded / version [--check] / changelog
 #
 # 三种更新粒度（实测自 Pi 的 reload 实现）：
-#   scripts/**            每次调用现读盘  → 零操作
+#   普通 scripts/**       每次调用现读盘 → 零操作；reply-capture/replies 是扩展的已加载依赖，须 reload
 #   SKILL.md / references / templates       → /reload（或 team reload）刷新描述与清单；正文本来就每次读盘
-#   extension/*.ts        重新 import（reload 会清模块缓存）→ /reload；不确定就重启 agent
+#   已有 extension/*.ts   重新 import → /reload；PM 原启动未注入 reply 入口时须获权重启
 #
 # 本模块提供：把"本会话启动时的版本"记下来，之后任何时刻都能判断"我是不是旧的"。
 
@@ -13,7 +13,10 @@ team_skill_changelog() { printf '%s/CHANGELOG.md\n' "$TEAM_SKILL_DIR"; }
 # M27：扩展面从一个变成两个（notify + bg）；指纹必须覆盖**两个**，否则改了 team-bg.ts
 # 而 `team version --check` 还说「没变」，PM 不会想起 /reload。team_skill_ext 保留
 # 单数形态（老调用方要的是 notify 扩展那一个路径）。
-team_skill_exts() { printf '%s\n' "$TEAM_SKILL_DIR/extension/team-notify.ts" "$TEAM_SKILL_DIR/extension/team-bg.ts"; }
+team_skill_exts() {
+  printf '%s\n' "$TEAM_SKILL_DIR/extension/team-notify.ts" "$TEAM_SKILL_DIR/extension/team-bg.ts" \
+    "$TEAM_SKILL_DIR/extension/team-reply.ts" "$TEAM_SKILL_DIR/scripts/reply-capture.mjs" "$TEAM_SKILL_DIR/scripts/replies.mjs"
+}
 team_skill_ext() { printf '%s\n' "$TEAM_SKILL_DIR/extension/team-notify.ts"; }
 
 team_skill_doc_version() { # SKILL.md frontmatter 里的 version
@@ -28,7 +31,7 @@ team_skill_changelog_version() { # CHANGELOG 顶部版本
   sed -n 's/^##[[:space:]]*\[*v\?\([0-9][0-9.]*\)\]*.*/\1/p' "$f" | head -1
 }
 
-team_skill_hash() { # SKILL.md + extension/**（notify + bg）的内容指纹（判断“文本是否变过”）
+team_skill_hash() { # SKILL.md + 扩展入口/实际捕获依赖指纹（不代表 live runtime 已装载）
   local a f
   a="$(team_skill_file)"
   {

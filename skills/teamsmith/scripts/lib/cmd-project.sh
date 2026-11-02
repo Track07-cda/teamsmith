@@ -620,6 +620,30 @@ team_cmd_doctor() {
     fi
   fi
 
+  # Disk, directed launch and actual process registration are separate evidence; mark-loaded is not runtime proof.
+  check "关键回复磁盘"
+  if [ -f "$TEAM_SKILL_DIR/extension/team-reply.ts" ] && [ -f "$TEAM_SKILL_DIR/scripts/reply-capture.mjs" ]; then
+    pass "捕获源码存在（不代表当前 PM 已加载）"
+  else warn "捕获源码缺失"; fi
+  check "关键回复启动"
+  if [ -z "$(team_trim "${TEAM_PM_CMD:-}")" ]; then
+    pass "内置 Pi 启动定向注入 team-reply；旧进程未带 -e 时 /reload 不会补入口，须获权重启"
+  else warn "自定义 PM 命令不注入捕获扩展，首版不承诺兼容"; fi
+  check "关键回复运行"
+  local reply_runner reply_runtime
+  reply_runner="$(team_js_runner)"
+  if [ -z "$reply_runner" ]; then
+    warn "unknown：无可用 JS 运行时，未核实 live 注册"
+  elif reply_runtime="$("$reply_runner" -e '
+    import(require("node:url").pathToFileURL(process.argv[1]).href).then(m => {
+      const [root,state,config,session,window,skill] = process.argv.slice(2);
+      const r = m.inspectRuntime({root,state,config,session,window,skill});
+      console.log(`${r.state} disk=${r.disk || "unknown"} loaded=${r.loaded || "unknown"} generation=${r.generation || "unknown"}; ${r.reason}`);
+    }).catch(e => { console.error(`runtime diagnostic unavailable: ${e.code || e.name}`); process.exitCode=1 })
+    ' "$TEAM_SKILL_DIR/scripts/reply-capture.mjs" "$TEAM_MAIN_ROOT" "$TEAM_STATE_DIR" "${TEAM_CONFIG:-${TEAM_CONFIG_FILE:-}}" "$TEAM_SESSION" "$TEAM_PM_WINDOW" "$TEAM_SKILL_DIR")"; then
+    case "$reply_runtime" in ready\ *) pass "$reply_runtime" ;; *) warn "$reply_runtime" ;; esac
+  else warn "unknown：live 注册诊断执行失败（未当作启用）"; fi
+
   check "巡检（pulse）"; local legacy_note; legacy_note="$(team_pulse_legacy_suffix)"
     case "$(team_pulse_state)" in
       off) warn "没在跑 → $TEAM_CLI pulse up（pulse 由 PM 配置）$legacy_note" ;;

@@ -28,16 +28,29 @@ implementation, the next step, the conclusion, or nothing; an observation that c
 answer. Delete what names nothing checkable: what stays is what the reader can verify. See
 `{{SKILL_DIR}}/references/protocol.md` §11b.
 
-**Key conclusions: replies written for the user go to the reply page first.** The reader decides what gets
-published -- a landed milestone, an answer to a question, a status or progress report, a conclusion or a ruling, a
-decision you ask the user for, a delivery or verification summary, and any other reply written for the user; a
-short reply is published just like a long one, and a reply is never held back because it reads like process
-rather than like a conclusion. Publish the complete reply -- the substance the user needs to read, not a
-play-by-play of the work -- with
-`team reply post --from pm --title '<short title>' --stdin < <file>`, then send that same body in the conversation.
-Replies written to the patrol, to another seat, to another project's PM and tool receipts are not for the user and
-stay out of the page. When it is not obvious, ask **who is this reply written for?**; if it cannot be settled, treat
-the reply as written for the user. A batch of user-facing replies may be one reply. See
+**Key conclusions: mark the last line of a reply written for the user.** The reader decides what gets published
+-- a landed milestone, an answer to a question, a status or progress report, a conclusion or a ruling, a decision
+you ask the user for, a delivery or verification summary, and any other reply written for the user; a short reply
+is marked just like a long one, and a reply is never held back because it reads like process rather than like a
+conclusion. Write the complete reply -- the substance the user needs to read, not a play-by-play of the work -- as
+the normal answer, and end it with the capture marker as its own final line:
+
+```text
+The migration is merged; the two follow-ups are listed below.
+[[team-reply]]
+```
+
+The first form derives the title from the first nonblank line; `[[team-reply:<short one-line title>]]` keeps the
+title you wrote instead (an empty title is invalid, not omitted). The marker is case-sensitive, alone at column
+zero with no trailing spaces, and outside code: a marker inside a fenced block or a paired inline span is a literal
+example, more than one complete marker line is ambiguous, and a marker that is not final is misplaced -- none of
+those publishes. Your marked answer goes out with only that control line removed, and the directed PM extension
+publishes the rest of that same message to the reply page. An unmarked answer is never published by inference, and
+when capture is unavailable the answer still goes out unchanged. Replies written to the patrol, to another seat, to
+another project's PM and tool receipts are not for the user and stay out of the page. When it is not obvious, ask
+**who is this reply written for?**; if it cannot be settled, treat the reply as written for the user. A batch of
+user-facing replies may be one reply. `team reply post --from pm --title '<short title>' --stdin` stays the manual
+publication, backfill and recovery entry only -- never the daily default. See
 `{{SKILL_DIR}}/references/protocol.md` §4b.
 
 ## First moves (on every start / whenever the pulse raises you)

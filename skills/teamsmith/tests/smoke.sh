@@ -4179,6 +4179,7 @@ PM_SUPPORT="${PM_SUPPORT% }"
 #    M27 起默认参数多了 `-e <skill>/extension/team-bg.ts`（PM 的后台门禁）、M30 起再多了
 #    `-e <skill>/extension/team-inbox-watch.ts`（PM 的投递换道）：参考值同步加这两项，
 #    它仍是**字面写死**的，不调实现。
+#    P396 起默认参数再多了 `-e <skill>/extension/team-reply.ts`（定向关键回复采集）：参考值同步补这一项。
 #    M36 起整条命令再带一个**闸门前缀**（tmux 运行时闸门：PATH 最前 = scripts/shim、state/tmux-calls.log、
 #    真 tmux 路径三段 export）——前缀同样字面写死；前缀以外的历史部分保持逐字节一致。
 M36_REF_PREFIX="export PATH=$(printf '%q' "$SKILL_DIR/scripts/shim"):\"\$PATH\"; export TEAM_TMUX_CALLS_LOG=$(printf '%q' "$REPO/.pi/team/state/tmux-calls.log"); "
@@ -4191,11 +4192,15 @@ M36_REF_PREFIX="${M36_REF_PREFIX}export TEAM_SIGNAL_CALLS_LOG=$(printf '%q' "$RE
 # 前缀同样字面写死（值只取夹具已知量），前缀以外的历史部分保持逐字节一致。
 m40sq() { printf "'%s'" "${1//\'/\'\\\'\'}"; }
 M40_REF_PREFIX="unset TEAM_ROOT TEAM_MAIN_ROOT TEAM_PROJECT TEAM_SESSION TEAM_SESSION_FROM TEAM_CONFIG_FILE TEAM_IDENTITY_LOCKED TEAM_IDENTITY_ROOT TEAM_IDENTITY_MAIN_ROOT TEAM_IDENTITY_PROJECT TEAM_IDENTITY_INHERIT_ROOT TEAM_IDENTITY_INHERIT_MAIN_ROOT TEAM_IDENTITY_INHERIT_PROJECT TEAM_IDENTITY_INHERIT_SESSION; export TEAM_ROOT=$(m40sq "$REPO"); export TEAM_MAIN_ROOT=$(m40sq "$REPO"); export TEAM_PROJECT=$(m40sq "$(basename "$REPO")"); export TEAM_SESSION=$(m40sq "$SESSION"); "
-LEGACY_REF="${M40_REF_PREFIX}${M36_REF_PREFIX}cd $(printf '%q' "$REPO") && printf \"%s\\n\" \$\$ > $(printf '%q' "$PM_SPAWN") && exec $(printf '%q' "$FAKE/pi") --provider deepseek --model deepseek-flash -e $(printf '%q' "$SKILL_DIR/extension/team-bg.ts") -e $(printf '%q' "$SKILL_DIR/extension/team-inbox-watch.ts") --skill $(printf '%q' "$SKILL_DIR") -c  @$(printf '%q' "$PM_PF")"
+# P396 起命令里再固定本次解析出的 state/config/window 三段（进程局部，不新增配置键、不写 tmux global）：
+# 同样字面写死，前缀以外的历史部分保持逐字节一致。
+P396_REF_PREFIX="export TEAM_STATE_DIR=$(printf '%q' "$REPO/.pi/team/state") TEAM_CONFIG_FILE=$(printf '%q' "$REPO/.pi/team/config.sh") TEAM_PM_WINDOW=pm; "
+LEGACY_REF="${M40_REF_PREFIX}${M36_REF_PREFIX}${P396_REF_PREFIX}cd $(printf '%q' "$REPO") && printf \"%s\\n\" \$\$ > $(printf '%q' "$PM_SPAWN") && exec $(printf '%q' "$FAKE/pi") --provider deepseek --model deepseek-flash -e $(printf '%q' "$SKILL_DIR/extension/team-bg.ts") -e $(printf '%q' "$SKILL_DIR/extension/team-inbox-watch.ts") -e $(printf '%q' "$SKILL_DIR/extension/team-reply.ts") --skill $(printf '%q' "$SKILL_DIR") -c  @$(printf '%q' "$PM_PF")"
 DEFAULT_CMD="$(pm_render "$PM_PF" "$PM_SPAWN" "TEAM_PI_BIN=$FAKE/pi")"
-assert_eq "M8.1 默认渲染与历史逐字节一致（TEAM_PM_CMD/BIN/RESUME_ARGS 全空；M27 起含 -e bg、M30 起再含 -e inbox-watch、M36 起带闸门 exports 前缀、M40 起带身份环境前缀）" "$DEFAULT_CMD" "$LEGACY_REF"
+assert_eq "M8.1 默认渲染与历史逐字节一致（TEAM_PM_CMD/BIN/RESUME_ARGS 全空；M27 起含 -e bg、M30 起再含 -e inbox-watch、P396 起再含 -e reply 与 state/config/window 前缀、M36 起带闸门 exports 前缀、M40 起带身份环境前缀）" "$DEFAULT_CMD" "$LEGACY_REF"
 assert_has_echo "$DEFAULT_CMD" "extension/team-bg.ts" "M27：PM 默认命令加载 team-bg（后台门禁）"
 assert_has_echo "$DEFAULT_CMD" "extension/team-inbox-watch.ts" "M30：PM 默认命令加载 inbox-watch（投递换道）"
+assert_has_echo "$DEFAULT_CMD" "extension/team-reply.ts" "P396：PM 默认命令加载定向关键回复扩展"
 assert_has_echo "$DEFAULT_CMD" " -c  @$PM_PF" "默认仍是 pi -c + @prompt-file（历史行为）"
 # 显式配了续跑键就在内置 Pi 路径生效（同一套键也服务于自定义 CLI）
 SID_CMD="$(pm_render "$PM_PF" "$PM_SPAWN" "TEAM_PI_BIN=$FAKE/pi" 'TEAM_PM_SESSION_ID=pm-fixed')"

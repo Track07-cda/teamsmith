@@ -181,35 +181,52 @@ refused (its pane is alive; `reap` only judges orphans); each refusal names the 
 entries only: `interrupt` leaves the window as a live shell, leaves the worktree, the session file and the
 assignment record untouched, and does not touch the seat's detached background jobs (§4's `team-bg` lane).
 
-## 4b. Key replies: publish the body before you answer
+## 4b. Key replies: mark the answer and the extension publishes it
 
-Publishing the body of a key conclusion is a **standing duty of the PM**, not a licence for answers that merely look
+Marking a reply written for the user is a **standing duty of the PM**, not a licence for answers that merely look
 memorable: it travels with the tool, so it holds in every project and on every machine. The wake-up loop carries a
 *pointer* (`inbox/<agent>.md` plus a knock) and the report carries the *process*; neither carries the **body**, and
 both are transient or post-hoc — the inbox is gitignored, and a report is written after the work. **The reader
 decides what is published**: whenever the reply is written for the user — a landed milestone, an answer to a
 question, a status or progress report, a conclusion or a ruling, a decision you ask the user for, a delivery or
-verification summary, however short — publish the **complete reply** — the substance the user needs to read, not a
-play-by-play of the work — with:
+verification summary, however short — write the **complete reply** — the substance the user needs to read, not a
+play-by-play of the work — as the normal answer, and end it with the capture marker as its own final line:
 
 ```
-team reply post --from <seat> --title "<short single line>" --stdin <<'EOF'
-… the exact body you are about to send …
-EOF
+[[team-reply]]
 ```
+
+`[[team-reply:<short single-line title>]]` keeps the title you wrote; the bare form derives it from the first
+nonblank line of the body. An empty explicit title is invalid, not omitted. The marker is a control line:
+case-sensitive, alone at column zero, no trailing spaces, and the last nonblank line of the message — everything
+after it may only be blank lines. It is recognized only outside code: one inside a fenced block or a paired inline
+span is a literal example, a second complete marker line is ambiguous, and a marker that is not final is misplaced;
+none of those publishes.
 
 **The reader decides, so ask "who is this reply written for?"** A reply meant for the patrol or the watchdog, for
 another seat, or for another project's PM stays in its own channel, and a receipt a tool generated is not a reply at
-all. Length never decides: a one-line answer or a short progress report meant for the user is published in full.
+all. Length never decides: a one-line answer or a short progress report meant for the user is marked in full.
 A reply is never held back because of its kind: a status or progress report, a delivery summary and a decision
-request are published exactly as a conclusion is, and reading like process never makes a reply unpublishable.
+request are marked exactly as a conclusion is, and reading like process never makes a reply unpublishable.
 When the reader cannot be settled, treat the reply as meant for the user rather than risk the user missing it.
 
-A batch of user-facing replies may be one reply. Then send the answer normally. Publication **never gates the
-answer**: the same body goes out whether the post
-reported `saved` (0), an input error (2), storage unavailable (4), a busy writer (5, the lock wait is bounded) or
-`unconfirmed` (6, the entry is visible but its durability could not be confirmed — never re-post it automatically).
-Failures are diagnostics on stderr; they must not be concatenated into the answer, and they must not stop it.
+A batch of user-facing replies may be one reply. The directed PM extension captures a marked message once it settles
+as the latest successful answer of the current activity, and passes the **complete sanitized body** — your answer
+with only the recognized control line removed — through the existing writer into the same reply store. An unmarked
+answer is never published by inference: no session scan, no body-hash or page matching, and no automatic fallback that
+posts with the CLI. Each marked activity earns at most one automatic attempt — a busy, failed or unconfirmed capture
+is never retried automatically.
+
+Publication **never gates the answer**: the same answer goes out whether capture reported `saved`,
+an input rejection, storage unavailable, a busy writer or `unconfirmed`. Any diagnostic is separate from the answer
+and must not stop it. The marker control line is removed from the answer you send, from the finalized transcript and
+from later model history; bytes already streamed to the terminal are not retroactively erased, so the marker may be
+visible for a moment while the answer streams. That is a known boundary, not a delivery guarantee at a fixed latency.
+
+`team reply post --from <seat> --title "<short single line>" --stdin` remains the **manual** publication, backfill and
+recovery entry — for a reply written before capture existed, a session without the extension, or a deliberate
+backfill. It is not the daily default, and the old habit of posting first and then repeating the same body in the
+conversation is not the workflow this tool ships.
 
 What a receipt does and does not mean:
 - **A saved receipt is project-local durable publication only.** It is not user delivery, not approval, not read
@@ -224,10 +241,11 @@ What a receipt does and does not mean:
   (newest first), `team reply show <no>` prints safe display text, `team reply show <no> --raw` exports the original
   bytes to a non-TTY stdout, and the console's page 5 renders the latest reply plus the numbered history. Flags and
   exit codes are in `team reply --help`.
-- **The honest limit**: the gate holds only that this duty is shipped on the instruction surfaces (the injected PM
-  prompt template, this section, the command table) and that the example command printed there is accepted by the real
-  parser. No tool can verify that a live PM follows the duty — whether a given reply was meant for the user, which
-  conclusions a PM published, and whether the body matched the answer, stay unprovable from here.
+- **The honest limit**: the correctness gate holds only that this duty is shipped on the instruction surfaces (the
+  injected PM prompt template, this section, the command table) and that the shipped marker example is parsed and
+  published by the real parser and writer. No tool can verify that a live PM follows the duty — whether a given reply
+  was meant for the user, which conclusions a PM marked, and whether the body matched the answer, stay unprovable
+  from here.
 
 ## 5. Task briefs: written for "a weak model without context"
 

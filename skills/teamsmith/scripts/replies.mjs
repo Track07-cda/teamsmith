@@ -107,7 +107,7 @@ export function sanitize(value) {
 }
 
 // 标题的输入校验比显示净化更严：终端控制与双向/不可见格式控制一律拒绝（不是删掉）。
-const TITLE_FORBIDDEN_RE = new RegExp(
+export const TITLE_FORBIDDEN_RE = new RegExp(
   `[\\u0000-\\u001F\\u007F-\\u009F\\u00AD\\u061C\\u200B-\\u200F\\u2028-\\u202E\\u2060-\\u206F\\uFEFF]`,
 )
 
@@ -425,7 +425,7 @@ function validateLabel(from) {
     throw input(`--from 必须是 1–${MAX_LABEL} 个 ASCII 字母/数字/点/下划线/连字符的平坦标识符`)
 }
 
-function validateTitle(title) {
+export function validateTitle(title) {
   if (typeof title !== 'string' || title.length === 0) throw input('缺少 --title <title>')
   const points = Array.from(title).length
   if (points > MAX_TITLE_CODEPOINTS) throw input(`--title 超过 ${MAX_TITLE_CODEPOINTS} 个码点`)
@@ -459,14 +459,20 @@ function readStdinBounded() {
     chunks.push(Buffer.from(buf.subarray(0, n)))
   }
   const body = Buffer.concat(chunks, total)
+  validateBody(body)
+  return body
+}
+
+/** Pure input validation shared with directed capture; CLI still owns bounded stdin reads. */
+export function validateBody(body) {
   if (body.length === 0) throw input('正文不能为空')
+  if (body.length > MAX_BODY_BYTES) throw input(`正文超过上界 ${MAX_BODY_BYTES} 字节（不截断）`)
   if (body.includes(0)) throw input('正文里不许有 NUL 字节')
   try {
     new TextDecoder('utf-8', { fatal: true }).decode(body)
   } catch {
     throw input('正文不是合法 UTF-8')
   }
-  return body
 }
 
 // ---------------------------------------------------------------- 锁
