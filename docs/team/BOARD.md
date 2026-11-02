@@ -616,7 +616,7 @@
 | P385 | Agent Self-Reminder探索 | dev2 | - | - | review |
 | V110 | P383 pty修复独立复核 | verify | - | - | review |
 | V111 | Self-Reminder架构独立复核 | dev3 | - | - | review |
-| P386 | 63嵌套摘要计数修正 | dev | - | - | todo |
+| P386 | 63嵌套摘要计数修正 | dev | - | - | wip |
 | P387 | Agent Self-Reminder OpenSpec提案 | dev2 | - | - | review |
 | V112 | Self-Reminder提案独立评审 | dev3 | - | - | review |
 | P388 | Agent Self-Reminder MVP实现 | dev-bob | - | - | blocked |
@@ -632,13 +632,14 @@
 | V116 | team say实现独立复验 | dev2 | - | - | review |
 | P395 | 标记式关键回复OpenSpec提案 | dev2 | - | - | done |
 | V117 | 标记式关键回复提案独立评审 | dev3 | - | - | done |
-| P396 | 标记式关键回复MVP实现 | dev | - | - | wip |
+| P396 | 标记式关键回复MVP实现 | dev | - | - | done |
 | P397 | Gate execution slimming proposal | dev2 | - | P379 | review |
-| V118 | 测试瘦身提案独立审查 | verify | - | P397 | review |
+| V118 | 测试瘦身提案独立审查 | verify | - | P397 | done |
 | V119 | 指令瘦身与AGENTS边界提案定点复审 | dev2 | - | P391 | review |
 | V120 | P391 final S1-S4 diff independent review | verify | - | - | review |
 | P398 | 61b 变异测试执行瘦身（首片） | dev3 | - | P397 | dropped |
 | P399 | 关键回复隔离守卫的比对范围（夹具假红） | dev | - | - | done |
+| V121 | 标记式关键回复独立复验 | dev | - | - | done |
 
 ## 当前里程碑
 
