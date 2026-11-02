@@ -610,7 +610,7 @@
 | P380 | 真实测试运行时使用最新pi | dev3 | - | - | done |
 | P381 | 通知的git探测不污染Pi输入框 | dev-bob | - | - | done |
 | V109 | 最新pi运行时独立复核 | verify | - | - | review |
-| P382 | 公开CI账本夹具数字UID失败 | dev | - | - | review |
+| P382 | 公开CI账本夹具数字UID失败 | dev | - | - | done |
 | P383 | Key-replies mouse scroll clamp failure | dev-bob | - | - | review |
 | P384 | README三Skill安装表述 | dev3 | - | - | review |
 | P385 | Agent Self-Reminder探索 | dev2 | - | - | review |
