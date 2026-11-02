@@ -39,7 +39,7 @@ you install is the product (this file, `skills/`, `bin/`, `openspec/specs/`), no
 ```bash
 npm install -g teamsmith     # the `team` CLI: one npm bin entry, checks bash >= 5 and prints the fix if it is missing
 cd your-project
-team init                    # config + docs skeleton + both skills into the project's .pi/skills/
+team init                    # config + docs skeleton + all three bundled skills into the project's .pi/skills/
 ```
 
 > First session in that project: Pi asks **“Project is not trusted”** before it will load project resources
@@ -47,7 +47,7 @@ team init                    # config + docs skeleton + both skills into the pro
 > answer `pi --approve` (this once) or approve the project in Pi's UI — nothing else is needed, and the skills are
 > not modified either way.
 
-`team init` installs `teamsmith` and `teamsmith-init` into the project's **`.pi/skills/`** — Pi's project-level
+`team init` installs `teamsmith`, `teamsmith-init` and `handover` into the project's **`.pi/skills/`** — Pi's project-level
 skill search path — so any session in that project sees the toolkit (the `openspec init` model: per project, and
 version-lockable). The default is a symlink to the package, so package updates are live; `--copy` copies the files
 instead (for an ephemeral source such as an `npx` cache, excluding `.git/` and `node_modules/`), and `--no-skills`
@@ -92,8 +92,8 @@ On a non-Pi host, `install.sh` puts the skill **files** where a skill directory 
 
 ### What the package declares — and what it deliberately does not
 
-The manifest (`package.json`) declares the two skills (`pi.skills: ["./skills"]` loads `teamsmith` and
-`teamsmith-init`) and exactly one npm `bin` entry — `team` → `bin/team.mjs`, a transparent wrapper that runs the
+The manifest (`package.json`) declares the three bundled skills (`pi.skills: ["./skills"]` loads `teamsmith`,
+`teamsmith-init` and `handover`) and exactly one npm `bin` entry — `team` → `bin/team.mjs`, a transparent wrapper that runs the
 bash CLI with your argv, stdio and exit status. The files under `skills/teamsmith/extension/` (`team-notify.ts`, `team-bg.ts`,
 `team-inbox-watch.ts`) are deliberately **not** in the manifest: teamsmith injects each of them with `-e` when it
 starts a PM or a worker window, so they exist only inside team windows. Installing the package adds no global
