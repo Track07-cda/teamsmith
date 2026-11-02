@@ -13,7 +13,7 @@ status: todo
 
 执行 `/opsx-apply gate-execution-slimming` 的第一片：完成已接受 tasks.md §1，并交出实际执行减量、保留的错误发现能力和同环境耗时证据。不是重新提案，也不是三片一起做。提案作者dev2；你没有参与其编写，后续Verify必须由别人承担。category code用于已有设计下的有界实现。
 
-先读AGENTS、自己的thread、本brief、`openspec/changes/gate-execution-slimming/`四文件、能力spec和正式proposal review。PM准备的新分支携带精确规划369c7d87及报告009b2835、V118最终报告6081debe；主检出只接受方案，没有合入产品。生成的opsx命令若缺失，按 `skills/teamsmith/references/openspec.md` 执行并读 `"$HOME/.bun/bin/openspec" instructions apply --change gate-execution-slimming --json`；不要为补命令运行init。
+先读AGENTS、自己的thread、本brief、`openspec/changes/gate-execution-slimming/`四文件、能力spec和正式proposal review。PM准备的新分支携带精确规划369c7d87及报告009b2835；V118最终报告用 `git show 6081debe99ca:docs/team/reports/V118-verify.md` 读取原件（不改原件格式）；主检出只接受方案，没有合入产品。生成的opsx命令若缺失，按 `skills/teamsmith/references/openspec.md` 执行并读 `"$HOME/.bun/bin/openspec" instructions apply --change gate-execution-slimming --json`；不要为补命令运行init。
 
 ## 执行片与边界
 
