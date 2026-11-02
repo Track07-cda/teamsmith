@@ -74,7 +74,7 @@ function skillVersion(): string {
 
 function run(cmd: string, args: string[], cwd?: string): string {
   try {
-    return execFileSync(cmd, args, { cwd, encoding: 'utf8', timeout: 5000 }).trim()
+    return execFileSync(cmd, args, { cwd, encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'] }).trim()
   } catch {
     return ''
   }

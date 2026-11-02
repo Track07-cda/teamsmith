@@ -7885,6 +7885,22 @@ const ctx = {
   cwd: wt,
   sessionManager: { getEntries: () => [{ message: { role: 'assistant', stopReason: 'stop', content: [{ text: 'ALLDONE feature implemented' }] } }] },
 }
+// P381：另建真正没有 upstream 的分支；下面外层捕获扩展进程 stderr，不能把 git 的报错画进输入框。
+{
+  const { execFileSync, spawnSync } = await import('node:child_process')
+  const noUpstreamWt = join(root, '.worktrees/p381-stderr')
+  execFileSync('git', ['-C', root, 'worktree', 'add', '-q', '-b', 'agent/p381-stderr', noUpstreamWt, 'HEAD'], { stdio: 'pipe' })
+  try {
+    const probe = spawnSync('git', ['-C', noUpstreamWt, 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'], { encoding: 'utf8' })
+    if (probe.status !== 128 || !probe.stderr.includes('no upstream configured')) throw new Error('P381 fixture must have a branch without upstream')
+    await handler({}, { ...ctx, cwd: noUpstreamWt })
+    const line = readFileSync(join(root, 'docs/team/inbox/p381-stderr.md'), 'utf8')
+    const expected = execFileSync('git', ['-C', noUpstreamWt, 'rev-list', '--count', 'HEAD', '--not', '--remotes'], { encoding: 'utf8', stdio: 'pipe' }).trim()
+    if (!line.includes(`unpushed=${expected}(no-upstream)`)) throw new Error(`P381 no-upstream notice has the wrong unpushed value: ${line}`)
+  } finally {
+    execFileSync('git', ['-C', root, 'worktree', 'remove', '--force', noUpstreamWt], { stdio: 'pipe' })
+  }
+}
 await handler({}, ctx)
 await handler({}, ctx)              // 去重窗口内，第二次必须被抑制
 let lines = readFileSync(inbox, 'utf8').trim().split('\n')
@@ -8137,10 +8153,12 @@ if (!registered.commands.includes('teamsmith-reload')) { console.error('FAIL: �
 if (!registered.tools.includes('reload_skills')) { console.error('FAIL: 没注册 reload_skills 工具'); process.exit(9) }
 console.log('ext-ok')
 EOF
-  if $TS_RUNNER "$TMP/ext-test.mjs" "$SKILL_DIR/extension/team-notify.ts" "$REPO" "$REPO/.worktrees/dev" >"$TMP/ext.log" 2>&1; then
-    ok "扩展：写入 + 去重 + 非 worktree 不触发（runner=$TS_RUNNER）"
+  # Node 的模块类型警告可能也在 stderr；只判定夹具的 git fatal，不能把无关警告当泄漏。
+  if env LC_ALL=C $TS_RUNNER "$TMP/ext-test.mjs" "$SKILL_DIR/extension/team-notify.ts" "$REPO" "$REPO/.worktrees/dev" >"$TMP/ext.log" 2>"$TMP/ext-stderr.log" \
+    && ! grep -Fq "fatal: no upstream configured for branch 'agent/p381-stderr'" "$TMP/ext-stderr.log"; then
+    ok "扩展：写入 + 去重 + 非 worktree 不触发；无 upstream 不泄漏 git fatal（runner=$TS_RUNNER）"
   else
-    bad "扩展测试失败（runner=$TS_RUNNER）"; cat "$TMP/ext.log"
+    bad "扩展测试失败或 stderr 泄漏（runner=$TS_RUNNER）"; cat "$TMP/ext.log" "$TMP/ext-stderr.log"
   fi
 else
   printf '  (跳过扩展测试：node 未启用类型剥离，且没有 bun/tsx)\n'
