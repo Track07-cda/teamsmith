@@ -198,3 +198,7 @@ bash <skill>/scripts/team watch --once        # run a single patrol tick
 ## 项目模型额度切换
 
 仅在明确确认 `clinepass` 额度耗尽时，PM 可将受影响任务切换到 `opencode-go/deepseek-v4.1-flash:max`，无需再次申请换模授权；不提前改变当前配置或运行席位，普通连接失败、超时或限流不等同额度耗尽。切换须记录原因，保留任务分支和已有证据，显式选择新模型并创建新 SID，不把旧模型会话续到新模型上。此条是项目规则，保留在 Teamsmith 受管标记之外。
+
+## 推送约定（dev 镜像分支）
+
+`origin` 是内部仓 `teamsmith-internal`，`public` 是发布仓 `teamsmith`。`dev` 是 main 的**只读镜像**：每次 main 前进（合并或账本提交）后立即 `git push origin main:dev`，让 GitHub 上的 dev 与本地 main 同一步。`dev` 不是工作分支：不从它反向合并、不在它上面提交、不推 public。main 与 tag 仍只在发布检查全绿后按发布流程单独推，本约定不改变发布纪律。此条是项目规则，保留在 Teamsmith 受管标记之外。
