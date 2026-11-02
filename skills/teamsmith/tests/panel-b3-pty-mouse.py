@@ -16,9 +16,11 @@ Exit: 0 assertions held, 2 the console never rendered, 3 usage/env failure.
 """
 
 import argparse
+import errno
 import fcntl
 import os
 import pty
+import re
 import select
 import struct
 import subprocess
@@ -27,22 +29,94 @@ import termios
 import time
 
 
-def drain(fd, seconds, deadline=None):
-    end = time.time() + seconds
+FRAME_START = b"\x1b[?2026h"
+FRAME_END = b"\x1b[?2026l"
+
+# These are failure detectors, not timing assertions. A round reads for up to 0.3 s;
+# 10,000 rounds leave the existing shared 25 s deadline in charge even during fast redraws.
+# Host focused mouse run (2026-10-28, 3/40 wheels): successful wait-only latencies
+# were 0–71 ms, including frame polling but excluding initial panel startup. The cap
+# and deadline detect missing progress; neither is a performance pass/fail threshold.
+FRAME_WAIT_CAP = 10000
+FRAME_WAIT_POLL = 0.3
+
+
+def last_complete_frame(data):
+    end = data.rfind(FRAME_END)
+    start = data.rfind(FRAME_START, 0, end) if end >= 0 else -1
+    if start < 0 or data.rfind(FRAME_START) > end:
+        return b""
+    tail = data[end + len(FRAME_END):]
+    if any(tail.endswith(FRAME_START[:n]) for n in range(1, len(FRAME_START))):
+        return b""
+    return data[start + len(FRAME_START):end]
+
+
+def drain(fd, seconds, deadline=None, until_frame=False):
+    # Zero seconds drains everything immediately available, without waiting for new output.
+    end = time.monotonic() + seconds if seconds else float("inf")
+    if deadline is not None:
+        end = min(end, deadline)
     buf = b""
-    while time.time() < end:
-        r, _, _ = select.select([fd], [], [], 0.05)
+    while (remaining := end - time.monotonic()) > 0:
+        r, _, _ = select.select([fd], [], [], min(0.05, remaining) if seconds else 0)
+        if not r and not seconds:
+            break
         if r:
             try:
                 chunk = os.read(fd, 65536)
-            except OSError:
-                break
+            except OSError as exc:
+                if exc.errno == errno.EIO:  # A closed pty slave reports EIO on the master.
+                    break
+                raise
             if not chunk:
                 break
             buf += chunk
-        if deadline is not None and time.time() > deadline:
-            break
+            if until_frame and last_complete_frame(buf):
+                break
     return buf
+
+
+def frame_reading(data, previous=b""):
+    frame = last_complete_frame(data)
+    source = "current"
+    if not frame:
+        frame = last_complete_frame(previous)
+        source = "previous"
+    if not frame:
+        return f"no complete frame (current_bytes={len(data)}, previous_bytes={len(previous)})"
+    text = frame.decode("utf-8", errors="replace")
+    text = re.sub(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\\\)", "", text)
+    text = re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", text)
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    # Include the first rows, where the list's newest entry or the overlay appears.
+    summary = " | ".join(lines[:8])[:1000]
+    return f"{source} complete frame (current_bytes={len(data)}): {summary!r}"
+
+
+def wait_frame(fd, proc, deadline, name, expected, data, predicate, previous=b"", cap=FRAME_WAIT_CAP):
+    """Observe a complete frame in counted rounds, publishing each actual reading."""
+    start = time.monotonic()
+    round_no = 0
+    reading = "no observation"
+    progress_fd = os.environ.get("TEAM_PTY_PROGRESS_FD")
+    while round_no < cap:
+        round_no += 1
+        frame = last_complete_frame(data)
+        reading = frame_reading(data, previous)
+        elapsed_ms = round((time.monotonic() - start) * 1000)
+        progress = (f"P383 wait={name} round={round_no}/{cap} elapsed_ms={elapsed_ms} "
+                    f"expected={expected} last={reading}")
+        print(progress, file=sys.stderr, flush=True)
+        if progress_fd is not None:
+            os.write(int(progress_fd), (progress + "\n").encode())
+        if frame and predicate(frame):
+            return data, None
+        if proc.poll() is not None or time.monotonic() >= deadline or round_no == cap:
+            break
+        data += drain(fd, FRAME_WAIT_POLL, deadline, until_frame=True)
+    return data, (f"wait={name} {round_no}/{cap} expected={expected}; last={reading}; "
+                  f"process_status={proc.poll()}")
 
 
 def main():
@@ -66,6 +140,8 @@ def main():
     ap.add_argument("--no-click", action="store_true", help="inject only the wheel (if any), no press/release")
     ap.add_argument("--wheel", choices=["down", "up", "none"], default="none")
     ap.add_argument("--wheel-clicks", type=int, default=0)
+    ap.add_argument("--wheel-ready", default="", help="wait for this text in a complete frame before scrolling")
+    ap.add_argument("--wheel-barrier", default="", help="overlay text used to acknowledge the wheel input")
     ap.add_argument("--out2", default="", help="the bytes written after the wheel injection")
     ap.add_argument("--send", default="", help="comma-separated key sequence before the dump (enter,esc,q,tab,up,down,left,right, or raw text)")
     ap.add_argument("--send2", default="", help="second key sequence; its bytes go to --out2 after --send")
@@ -121,15 +197,31 @@ def main():
     )
     os.close(slave)
 
-    deadline = time.time() + args.wait
-    boot = b""
-    while time.time() < deadline and b"teamsmith pulse" not in boot:
-        boot += drain(master, 0.3, deadline)
-    if b"teamsmith pulse" not in boot:
-        proc.kill()
+    def fail(message, data, after=None):
+        # Keep the observed bytes even on failure: an empty or interrupted frame is evidence.
+        with open(args.out, "wb") as dump:
+            dump.write(data)
+        if args.out2 and after is not None:
+            with open(args.out2, "wb") as dump2:
+                dump2.write(after)
+        print(f"panel-b3-pty-mouse: {message}", file=sys.stderr)
+        proc.terminate()
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
         os.close(master)
-        print("panel-b3-pty-mouse: the console never rendered", file=sys.stderr)
         return 2
+
+    deadline = time.monotonic() + args.wait
+    boot = b""
+    while time.monotonic() < deadline and b"teamsmith pulse" not in boot:
+        boot += drain(master, 0.3, deadline)
+        if proc.poll() is not None:
+            break
+    if b"teamsmith pulse" not in boot:
+        return fail(f"the console never rendered (process status {proc.poll()})", boot)
 
     out = boot + drain(master, 0.5, deadline)
 
@@ -171,11 +263,54 @@ def main():
         after += send_sequence(args.send, deadline)
 
     if args.wheel != "none" and args.wheel_clicks > 0:
+        if args.wheel_ready:
+            # The list is loaded asynchronously. Do not count its initial frame as a scroll frame.
+            ready = args.wheel_ready.encode()
+            observed, error = wait_frame(
+                master, proc, deadline, "wheel-ready", f"complete frame contains {args.wheel_ready!r}",
+                out + after, lambda frame: ready in frame)
+            after = observed[len(out):]
+            if error:
+                return fail(error, observed, after)
+            out = observed
+            after = b""
         button = 65 if args.wheel == "down" else 64
-        for _ in range(args.wheel_clicks):
-            os.write(master, f"\x1b[<{button};{args.click_col};{args.click_row}M".encode())
-            time.sleep(0.35)
+        event = f"\x1b[<{button};{args.click_col};{args.click_row}M".encode()
+        if args.wheel_barrier:
+            # Ink splits consecutive SGR sequences into separate inputs. The overlay is queued
+            # after the last wheel: seeing it proves the input stream has been handled, including
+            # no-op notches at the clamp. Closing it leaves the page and viewport unchanged.
+            for _ in range(args.wheel_clicks):
+                if time.monotonic() >= deadline:
+                    return fail("deadline expired while sending wheel events", out + after, after)
+                if os.write(master, event) != len(event):
+                    return fail("short write while sending wheel events", out + after, after)
+                after += drain(master, 0, deadline)
+            if os.write(master, b",") != 1:
+                return fail("short write while sending wheel barrier", out + after, after)
+            marker = args.wheel_barrier.encode()
+            after, error = wait_frame(
+                master, proc, deadline, "wheel-barrier-open", f"complete frame contains {args.wheel_barrier!r}",
+                after, lambda frame: marker in frame, previous=out)
+            if error:
+                return fail(error, out + after, after)
+            os.write(master, b"\x1b")
+            closed, error = wait_frame(
+                master, proc, deadline, "wheel-barrier-close", f"new complete frame without {args.wheel_barrier!r}",
+                b"", lambda frame: marker not in frame, previous=after)
+            after += closed
+            if error:
+                return fail(error, out + after, after)
+        else:
+            for _ in range(args.wheel_clicks):
+                if time.monotonic() >= deadline:
+                    return fail("deadline expired while sending wheel events", out + after, after)
+                os.write(master, event)
+                # Read while the panel writes; advance on a complete redraw or at the old bound.
+                after += drain(master, 0.35, deadline, until_frame=True)
         after += drain(master, 1.2, deadline)
+        if time.monotonic() >= deadline:
+            return fail("deadline expired while collecting wheel output", out + after, after)
 
     if args.keys:
         for ch in args.keys:
@@ -192,6 +327,8 @@ def main():
     if args.send2:
         after += send_sequence(args.send2, deadline)
 
+    if proc.poll() is not None:
+        return fail(f"console exited during interaction (status {proc.returncode})", out + after, after)
     out += after
     if args.out2:
         with open(args.out2, "wb") as dump2:

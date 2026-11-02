@@ -23617,8 +23617,35 @@ else
   bad "62 缺 tests/key-replies-ui.sh（P234 的读数面夹具）"
 fi
 if [ -f "$SKILL_DIR/tests/key-replies-pty.sh" ]; then
-  P234P_RC=0
-  bash "$SKILL_DIR/tests/key-replies-pty.sh" --all >"$TMP/p234-key-replies-pty.log" 2>&1 || P234P_RC=$?
+  # Driver wait readings travel on fd 3, not the redirected fixture log. Each reading
+  # reaches the owning shell so the actual section-guard heartbeat advances once per round.
+  P234P_RC=0; P234P_PROGRESS=0; P234P_TICKS_BEFORE="$SG_TICKS"; P234P_END=0
+  exec {P234P_FD}< <(
+    TEAM_PTY_PROGRESS_FD=3 bash "$SKILL_DIR/tests/key-replies-pty.sh" --all 3>&1 >"$TMP/p234-key-replies-pty.log" 2>&1
+    P234P_CHILD_RC=$?
+    printf 'P383-END %s\n' "$P234P_CHILD_RC"
+    exit "$P234P_CHILD_RC"
+  )
+  P234P_PID=$!
+  while IFS= read -r P234P_LINE <&"$P234P_FD"; do
+    case "$P234P_LINE" in
+      'P383-END '*) P234P_END=1; break ;;
+      'P383 wait='*)
+        P234P_PROGRESS=$((P234P_PROGRESS + 1))
+        section_guard_check
+        printf '  · %s\n' "$P234P_LINE"
+        ;;
+      *) bad "63 pty 等待读数格式错误：$P234P_LINE" ;;
+    esac
+  done
+  exec {P234P_FD}<&-
+  wait "$P234P_PID" || P234P_RC=$?
+  if [ "$P234P_END" -eq 1 ] && [ "$P234P_PROGRESS" -gt 0 ] && \
+     [ "$((SG_TICKS - P234P_TICKS_BEFORE))" -eq "$P234P_PROGRESS" ]; then
+    ok "63 pty 每轮实际读数刷新段落心跳（$P234P_PROGRESS 轮）"
+  else
+    bad "63 pty 等待进度未逐轮到达段落心跳（结束=$P234P_END 轮=$P234P_PROGRESS ticks=$((SG_TICKS - P234P_TICKS_BEFORE))）"
+  fi
   if [ "$P234P_RC" -eq 0 ]; then
     ok "62 key-replies 真 pty 面九组全绿（$(grep -ac '✓' "$TMP/p234-key-replies-pty.log" || true) 条断言，$(grep -ac 'SKIP' "$TMP/p234-key-replies-pty.log" || true) 条可见跳过）"
   else

@@ -41,15 +41,45 @@ for g in "${KR_SEL[@]}"; do
 done
 trap reply_fixture_cleanup EXIT
 
-# 直驱 pty 的原始 dump → 可见文本（剥掉 OSC/CSI；Ink 只重绘变更行，所以这是「变更内容」而不是整屏）
+# 直驱 pty 的最后一个完整同步帧 → 可见文本；空流、缺帧和末尾残帧不能证明「不存在」。
 kr_chunk_text() { # <dump>
   python3 - "$1" <<'PYF'
 import re, sys
-raw = open(sys.argv[1], 'rb').read().decode('utf-8', 'replace')
-clean = re.sub(r'\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)', '', raw)
+try:
+    raw = open(sys.argv[1], 'rb').read()
+except OSError as exc:
+    sys.exit(f'cannot read pty output: {exc}')
+start_mark, end_mark = b'\x1b[?2026h', b'\x1b[?2026l'
+end = raw.rfind(end_mark)
+start = raw.rfind(start_mark, 0, end) if end >= 0 else -1
+if start < 0 or raw.rfind(start_mark) > end:
+    sys.exit('pty output has no complete final frame')
+tail = raw[end + len(end_mark):]
+if any(tail.endswith(start_mark[:n]) for n in range(1, len(start_mark))):
+    sys.exit('pty output ends in a partial frame marker')
+try:
+    frame = raw[start + len(start_mark):end].decode('utf-8')
+except UnicodeDecodeError as exc:
+    sys.exit(f'pty frame is not complete UTF-8: {exc}')
+clean = re.sub(r'\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)', '', frame)
 clean = re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', clean)
+if not clean.strip():
+    sys.exit('pty final frame is empty')
 sys.stdout.write(clean)
 PYF
+}
+
+kr_wheel_chunk() { # <driver-rc> <raw> <text> <log> <label>
+  local rc="$1" raw="$2" text="$3" log="$4" label="$5"
+  if [ "$rc" != 0 ]; then
+    bad "$label：驱动失败（rc=$rc：$(tail -2 "$log" | tr '\n' ' ')）"
+    return 1
+  fi
+  if ! kr_chunk_text "$raw" >"$text" 2>"$text.error"; then
+    bad "$label：输出缺失或残缺（$(tr '\n' ' ' <"$text.error"))"
+    return 1
+  fi
+  ok "$label：驱动成功且最终帧完整"
 }
 
 # ---------------------------------------------------------------- 组：pages
@@ -195,6 +225,150 @@ PYB
   ev_save "$tmp/$current/end.txt" "pty-body-end.txt"
 }
 
+# P383：真列表的缺失就绪标记 + 两个受控屏障失败。子进程的进度管道逐行转发给
+# §63 的守卫，同时留副本检查轮数、期望和最后一帧；独立运行时也检查同一条管道。
+kr_wait_accounting() {
+  local fake="$tmp/p383-stuck-overlay.py" checks="$tmp/p383-wait-checks.txt" rc line result message
+  python3 - "$fake" <<'PYFAKE'
+import sys
+from pathlib import Path
+Path(sys.argv[1]).write_text('''import os, select, sys, tty
+start, end = b"\\x1b[?2026h", b"\\x1b[?2026l"
+tty.setraw(0)
+def frame(text):
+    os.write(1, start + ("teamsmith pulse\\r\\n" + text + "\\r\\n").encode() + end)
+frame("#38 鼠标 38 号")
+os.write(1, b"\\x1b[?1006h")
+opened = False
+while True:
+    ready, _, _ = select.select([0], [], [], 0.3)
+    if ready:
+        data = os.read(0, 4096)
+        if not data:
+            break
+        if b"," in data and os.environ["P383_FAKE_MODE"] == "close":
+            opened = True
+    frame("语言" if opened else "#38 鼠标 38 号")
+''')
+PYFAKE
+  python3 - "$SELF_DIR/panel-b3-pty-mouse.py" "$js" "$panel" "$ROOT" "$state" "$team_cli" "$tmp" "$fake" >"$checks" 2>"$tmp/p383-wait-checks.error" <<'PYCHECK'
+import contextlib
+import importlib.util
+import io
+import os
+import re
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+driver, js, panel, root, state, cli, tmp, fake = sys.argv[1:]
+tmp = Path(tmp)
+parent_fd = os.environ.get("TEAM_PTY_PROGRESS_FD")
+failures = 0
+
+def check(name, condition, detail=""):
+    global failures
+    print(("PASS " if condition else "FAIL ") + name + (" — " + detail if detail else ""), flush=True)
+    failures += not condition
+
+def relay(line):
+    if parent_fd is not None:
+        os.write(int(parent_fd), line.encode())
+
+def probe(name, real, mode, ready, barrier, wait):
+    rfd, wfd = os.pipe()
+    env = dict(os.environ, TEAM_PTY_PROGRESS_FD=str(wfd), P383_FAKE_MODE=mode)
+    raw = tmp / f"p383-{name}.bin"
+    log = tmp / f"p383-{name}.log"
+    cmd = [sys.executable, driver, "--js", js if real else sys.executable,
+           "--panel", panel if real else fake, "--root", root, "--state-dir", state,
+           "--team-cli", cli, "--out", str(raw), "--no-click", "--wheel", "down",
+           "--wheel-clicks", "1", "--wheel-ready", ready, "--wheel-barrier", barrier,
+           "--wait", str(wait)]
+    if real:
+        cmd += ["--send", "5"]
+    with log.open("wb") as err:
+        proc = subprocess.Popen(cmd, stdout=err, stderr=err, env=env, pass_fds=(wfd,))
+        os.close(wfd)
+        lines = []
+        with os.fdopen(rfd, encoding="utf-8") as progress:
+            for line in progress:
+                lines.append(line)
+                relay(line)
+        rc = proc.wait()
+    (tmp / f"p383-{name}.progress").write_text("".join(lines))
+    return rc, raw.read_bytes(), log.read_text(), lines
+
+sys.dont_write_bytecode = True  # the gate must not write __pycache__ into its checkout
+spec = importlib.util.spec_from_file_location("p383_mouse", driver)
+mouse = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mouse)
+cases = [
+    ("ready", True, "ready", "NEVER-P383-READY", "语言", 25, "wheel-ready", "#38 鼠标 38 号"),
+    ("open", False, "open", "#38 鼠标 38 号", "语言", 4, "wheel-barrier-open", "#38 鼠标 38 号"),
+    ("close", False, "close", "#38 鼠标 38 号", "语言", 4, "wheel-barrier-close", "语言"),
+]
+for name, real, mode, ready, barrier, wait, target, last_marker in cases:
+    rc, raw, log, lines = probe(name, real, mode, ready, barrier, wait)
+    target_lines = [line for line in lines if f"wait={target} " in line]
+    rounds = [re.search(r"round=(\d+)/(\d+)", line) for line in target_lines]
+    counted = (len(rounds) >= 2 and all(rounds) and
+               [int(m.group(1)) for m in rounds] == list(range(1, len(rounds) + 1)) and
+               len({int(m.group(2)) for m in rounds}) == 1)
+    check(f"P383 {target} 每轮进度递增", counted, f"rounds={len(rounds)}")
+    final = rounds[-1] if rounds and rounds[-1] else None
+    attribution = (final is not None and f"wait={target} {final.group(1)}/{final.group(2)} expected=" in log
+                   and "last=" in log and last_marker in log.split("panel-b3-pty-mouse:")[-1])
+    check(f"P383 {target} 失败点名期望和最后帧", rc == 2 and attribution, f"rc={rc}")
+    if name == "ready":
+        check("P383 不存在的就绪标记不能掩盖真列表 #38",
+              b"#38 \xe9\xbc\xa0\xe6\xa0\x87 38 \xe5\x8f\xb7" in mouse.last_complete_frame(raw)
+              and ready.encode() not in mouse.last_complete_frame(raw))
+
+# Exercise the count cap independently of the wall-clock deadline.
+class Alive:
+    def __init__(self):
+        self.polls = 0
+    def poll(self):
+        self.polls += 1
+        # If the counter is broken, let the mutated unit return instead of filling the pipe.
+        return 0 if self.polls > 4 else None
+rfd, wfd = os.pipe()
+old_fd = os.environ.get("TEAM_PTY_PROGRESS_FD")
+os.environ["TEAM_PTY_PROGRESS_FD"] = str(wfd)
+old_drain = mouse.drain
+mouse.drain = lambda *args, **kwargs: b""
+frame = mouse.FRAME_START + b"observed #38" + mouse.FRAME_END
+with contextlib.redirect_stderr(io.StringIO()):
+    _, error = mouse.wait_frame(0, Alive(), time.monotonic() + 60, "cap-probe",
+                                "never arrives", frame, lambda _: False, cap=3)
+mouse.drain = old_drain
+os.close(wfd)
+with os.fdopen(rfd, encoding="utf-8") as progress:
+    cap_lines = list(progress)
+for line in cap_lines:
+    relay(line)
+if old_fd is None:
+    del os.environ["TEAM_PTY_PROGRESS_FD"]
+else:
+    os.environ["TEAM_PTY_PROGRESS_FD"] = old_fd
+check("P383 轮数上限 3/3 归因最后读数",
+      len(cap_lines) == 3 and [re.search(r"round=(\d+)/3", s).group(1) for s in cap_lines] == ["1", "2", "3"]
+      and error is not None and "wait=cap-probe 3/3 expected=never arrives" in error
+      and "observed #38" in error and "process_status=None" in error)
+sys.exit(1 if failures else 0)
+PYCHECK
+  rc=$?
+  while IFS= read -r line; do
+    result="${line%% *}"; message="${line#* }"
+    case "$result" in PASS) ok "$message" ;; FAIL) bad "$message" ;; *) bad "P383 等待检查输出无效：$line" ;; esac
+  done <"$checks"
+  if [ "$rc" -ne 0 ] && ! grep -q '^FAIL ' "$checks"; then
+    bad "P383 等待检查异常退出（rc=$rc：$(tail -3 "$tmp/p383-wait-checks.error" | tr '\n' ' ')）"
+  fi
+}
+
 # ---------------------------------------------------------------- 组：mouse
 kr_group_mouse() {
   section "mouse · 真实 SGR 鼠标（3.2）"
@@ -224,30 +398,32 @@ kr_group_mouse() {
   rc=$?
   if [ "$rc" = "0" ]; then ok "mouse：Back 芯片点击注入成功"; else bad "mouse：Back 点击失败（rc=$rc：$(tail -2 "$tmp/m-back.log" | tr '\n' ' ')）"; fi
   want_frame m_back "mouse：Back 回到列表（同一页与焦点）" "› #38 鼠标 38 号"
-  # 滚轮：tmux 会吃掉滚轮事件（既有测量），所以滚轮走直驱 pty。两条独立运行各证一件事：
-  #   ① 3 格下滚 → 变更块里的最大编号小于最新号（顶部确实让位给更旧的行）
-  #   ② 滚 40 格 → 到底被夹住：最旧的 #1 进入窗口、最新号不再重绘（越界不换页、不空帧）
+  # 滚轮：tmux 会吃掉滚轮事件（既有测量），所以滚轮走直驱 pty。先等 #38 的完整列表帧，
+  # 再分别检查下滚 3 格和 40 格后的最后完整帧；驱动失败或没有完整帧时不能判缺席为通过。
   python3 "$SELF_DIR/panel-b3-pty-mouse.py" --js "$js" --panel "$panel" --root "$ROOT" --state-dir "$state" \
     --team-cli "$team_cli" --out "$tmp/m-wheel.bin" --out2 "$tmp/m-wheel-after.bin" --no-click \
-    --send "5" --wheel down --wheel-clicks 3 --expect-enable yes >"$tmp/m-wheel.log" 2>&1
-  local rc=$?
-  if [ "$rc" = "0" ]; then ok "mouse：直驱 pty 滚轮注入成功"; else bad "mouse：滚轮注入失败（rc=$rc：$(tail -2 "$tmp/m-wheel.log" | tr '\n' ' ')）"; fi
-  kr_chunk_text "$tmp/m-wheel-after.bin" >"$tmp/m-wheel-chunk.txt"
-  assert_not "$tmp/m-wheel-chunk.txt" "#38 鼠标 38 号" "mouse：下滚 3 格后最新行不再重绘（顶部让位）"
-  local chunk_max
-  chunk_max="$(grep -oE '#[0-9]+ ' "$tmp/m-wheel-chunk.txt" | tr -dc '0-9\n' | sort -n | tail -1)"
-  if [ -n "$chunk_max" ] && [ "$chunk_max" -lt 38 ]; then
-    ok "mouse：下滚 3 格后变更块里的最大编号是 #$chunk_max（< 最新号 38）"
-  else
-    bad "mouse：下滚 3 格后变更块里没有更旧的行（最大 #${chunk_max:-?}）"
+    --send "5" --wheel-ready "#38 鼠标 38 号" --wheel-barrier "语言" --wheel down --wheel-clicks 3 --expect-enable yes >"$tmp/m-wheel.log" 2>&1
+  rc=$?
+  if kr_wheel_chunk "$rc" "$tmp/m-wheel-after.bin" "$tmp/m-wheel-chunk.txt" "$tmp/m-wheel.log" "mouse：下滚 3 格"; then
+    assert_not "$tmp/m-wheel-chunk.txt" "#38 鼠标 38 号" "mouse：下滚 3 格后最新行不再重绘（顶部让位）"
+    local chunk_max
+    chunk_max="$(grep -oE '#[0-9]+ ' "$tmp/m-wheel-chunk.txt" | tr -dc '0-9\n' | sort -n | tail -1)"
+    if [ -n "$chunk_max" ] && [ "$chunk_max" -lt 38 ]; then
+      ok "mouse：下滚 3 格后帧里的最大编号是 #$chunk_max（< 最新号 38）"
+    else
+      bad "mouse：下滚 3 格后帧里没有更旧的行（最大 #${chunk_max:-?}）"
+    fi
   fi
   python3 "$SELF_DIR/panel-b3-pty-mouse.py" --js "$js" --panel "$panel" --root "$ROOT" --state-dir "$state" \
     --team-cli "$team_cli" --out "$tmp/m-end.bin" --out2 "$tmp/m-end-after.bin" --no-click \
-    --send "5" --wheel down --wheel-clicks 40 >"$tmp/m-end.log" 2>&1
-  kr_chunk_text "$tmp/m-end-after.bin" >"$tmp/m-end-chunk.txt"
-  assert_has "$tmp/m-end-chunk.txt" "#1 鼠标一号" "mouse：滚 40 格到底被夹住（最旧的 #1 进入窗口，不换页）"
-  assert_not "$tmp/m-end-chunk.txt" "#38 鼠标 38 号" "mouse：到底后最新号不再在窗口里"
+    --send "5" --wheel-ready "#38 鼠标 38 号" --wheel-barrier "语言" --wheel down --wheel-clicks 40 >"$tmp/m-end.log" 2>&1
+  rc=$?
+  if kr_wheel_chunk "$rc" "$tmp/m-end-after.bin" "$tmp/m-end-chunk.txt" "$tmp/m-end.log" "mouse：下滚 40 格"; then
+    assert_has "$tmp/m-end-chunk.txt" "#1 鼠标一号" "mouse：滚 40 格到底被夹住（最旧的 #1 进入窗口，不换页）"
+    assert_not "$tmp/m-end-chunk.txt" "#38 鼠标 38 号" "mouse：到底后最新号不再在窗口里"
+  fi
   assert_eq "mouse：滚轮之后 tmux 里那块面板仍活着" "$(pty_pane_state | cut -d: -f1)" "0"
+  kr_wait_accounting
   ev_save "$tmp/$current/m_open.txt" "pty-mouse-open.txt"
 }
 
