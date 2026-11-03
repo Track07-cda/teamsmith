@@ -39,3 +39,6 @@ The separate intentional `.pi/team/state/standby` marker created by PM while wai
 - PM asked whether to authorize **P381 only as a local squash merge** (option A, recommended) or leave it unmerged for a later batch (option B). No answer has arrived; no merge has been executed. The preview is `git merge --squash task/P381-notify-git-stderr-leak` followed by the recorded P381 commit, with pre/post-merge checks and no push.
 - Since that question, P382 and P380 also became technically merge-ready, but no authorization has been requested or assumed for them. Required order for the next decisions: P381 first; P382 independently; V109 records-only; then P380 with `comment-fix.patch`. P379's exploration report is also records-only and can follow without approving implementation.
 - Push, public-CI retry, npm release and any post-0.3.4 release remain unauthorized. Ask only with verified evidence and an exact next command.
+
+16. **F1 · 选段命令的隐式顺序依赖（V127 实测，未修）**：`smoke.sh --select 0b,1b,6,17,18,18b,19,39` 会经路径展开拉进 §2 却不拉 §1c，而 §1c 结尾的 `cd "$REPO"`（`smoke.sh:2658`）是唯一把 cwd 从 §1b 的 `$TMP/bootrepo` 挪回来的地方；于是 §2 在 bootrepo 里跑、停在 `$REPO` 的断言全红，随后身份隔离自检判"team 认错项目"中止整套。**加上 `1c` 即 ✓378 ✗0**。这是夹具段的顺序依赖，不是产品缺陷；任何人照抄不带 `1c` 的选段命令都会撞。修法只有一条：让 §2 自己确保 cwd，而不是依赖上一段留下的副作用。未派单，等合并后统一处理。
+
