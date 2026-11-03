@@ -844,6 +844,72 @@ agents_run_case() { # <tree> <repo> <render> <label> <head-crlf> <tail-crlf> <bo
   return 0
 }
 
+# ── P402 · 既有契约的渲染参数（change: instruction-context-slimming · 现场缺陷面）──────────────
+# 现场（PM 2026-11-03 实测）：`TEAM_SESSION=teamsmith`、`TEAM_AGENTS="dev verify dev2 dev3 dev-bob"` 的
+# 既有契约上跑裸 `team init --no-skills`，受管块写成 `pm-skills:pm` / `dev verify` —— 会话名取了目录名，
+# 名册取了硬编码默认。判据两半：既有契约 → 契约现值（整块逐字节等于同参数的显式渲染）；无契约的新项目 →
+# 目录名 + 默认名册（两条路径没有合并成一条）。
+init_cfg_fixture() { # <tree> <repo>：把非默认的渲染参数写进契约（P402 的既有契约夹具）
+  local t="$1" p="$2"
+  run_tree "$t" "$p" init --no-skills --session cfg-session --agents "alice bob carol" \
+    --pm-window cfg-pm --docs docs/crew --vcs local --gates "make check" \
+    --task-models 'routine=deepseek/deepseek-flash analysis=xai/grok-4.6 verify=kimi-coding/k3-256k' \
+    --pm-model 'deepseek/deepseek-flash'
+}
+
+chk_init_render_from_config() { # <tree> <已 init 的仓库>：裸 init 取契约现值，既有契约字节不变
+  local t="$1" p="$2" base cfg before after out rc e
+  cfg="$p/.pi/team/config.sh"; base="$(basename "$p")"
+  [ -f "$cfg" ] || { printf '夹具没有既有契约（这是对照组的形状）'; return 1; }
+  before="$(file_hash "$cfg")"
+  out="$(run_tree "$t" "$p" init 2>&1)"; rc=$?
+  [ "$rc" = "0" ] || { printf '裸 init rc=%s（%s）' "$rc" "$(printf '%s\n' "$out" | tail -1)"; return 1; }
+  after="$(file_hash "$cfg")"
+  [ "$before" = "$after" ] || { printf '裸 init 改了既有契约（sha %s → %s）' "$before" "$after"; return 1; }
+  # 承重判据：整块逐字节等于「同一组参数显式渲染」的结果（单项 grep 只用来点名是哪一条错）
+  e="$p.expected"; rm -rf "$e"; git_new "$e"
+  init_cfg_fixture "$t" "$e" >/dev/null 2>&1 || { printf '参考渲染（同一组参数显式 init）失败'; return 1; }
+  cmp -s "$e/AGENTS.md" "$p/AGENTS.md" || {
+    printf '裸 init 的受管块与同参数的显式渲染不同（实际 %s 字节 / 期望 %s 字节）：%s' \
+      "$(wc -c < "$p/AGENTS.md")" "$(wc -c < "$e/AGENTS.md")" \
+      "$(diff "$e/AGENTS.md" "$p/AGENTS.md" | head -6 | tr '\n' ' ')"
+    return 1
+  }
+  [ "$(grep -cF 'tmux `cfg-session:cfg-pm`' "$p/AGENTS.md" || true)" = "1" ] \
+    || { printf '受管段没写契约里的 SESSION:PM_WINDOW（实际：%s）' "$(grep -m1 -F 'A **PM (orchestrator)**' "$p/AGENTS.md")"; return 1; }
+  grep -qF "tmux \`$base:pm\`" "$p/AGENTS.md" \
+    && { printf '受管段把会话名写成了目录名（%s）' "$base"; return 1; }
+  [ "$(grep -cF 'Roster: alice bob carol (editable' "$p/AGENTS.md" || true)" = "1" ] \
+    || { printf '受管段没写契约里的名册（实际：%s）' "$(grep -m1 -F 'Roster:' "$p/AGENTS.md")"; return 1; }
+  grep -qF 'Roster: dev verify' "$p/AGENTS.md" \
+    && { printf '受管段把名册写成了硬编码默认（dev verify）'; return 1; }
+  [ "$(grep -cF 'docs/crew/threads/<agent>.md' "$p/AGENTS.md" || true)" = "1" ] \
+    || { printf '受管段没写契约里的 docs 路径（实际：%s）' "$(grep -m1 -F '/threads/<agent>.md' "$p/AGENTS.md")"; return 1; }
+  [ ! -e "$p/docs/team" ] || { printf '裸 init 又回到默认 docs/team（契约写的是 docs/crew）'; return 1; }
+  [ "$(grep -cF 'Gates are `make check`;' "$p/AGENTS.md" || true)" = "1" ] \
+    || { printf '受管段没写契约里的门禁（实际：%s）' "$(grep -m1 -F 'Gates are' "$p/AGENTS.md")"; return 1; }
+  printf '裸 init 写出 %s:%s + 名册 + docs/crew + 门禁，整块等于显式渲染，契约字节不变' 'cfg-session' 'cfg-pm'
+  return 0
+}
+
+chk_init_defaults_fresh() { # <tree> <无契约的仓库>：新项目裸 init 仍写目录名与默认名册
+  local t="$1" p="$2" base out rc
+  base="$(basename "$p")"
+  [ ! -f "$p/.pi/team/config.sh" ] || { printf '对照夹具已经有契约了（应是无契约的新项目）'; return 1; }
+  out="$(run_tree "$t" "$p" init --no-skills \
+    --task-models 'routine=deepseek/deepseek-flash analysis=xai/grok-4.6 verify=kimi-coding/k3-256k' \
+    --pm-model 'deepseek/deepseek-flash' 2>&1)"; rc=$?
+  [ "$rc" = "0" ] || { printf '无契约 init rc=%s（%s）' "$rc" "$(printf '%s\n' "$out" | tail -1)"; return 1; }
+  [ "$(grep -cF "tmux \`$base:pm\`" "$p/AGENTS.md" || true)" = "1" ] \
+    || { printf '新项目没写目录名 session（实际：%s）' "$(grep -m1 -F 'A **PM (orchestrator)**' "$p/AGENTS.md")"; return 1; }
+  [ "$(grep -cF 'Roster: dev verify (editable' "$p/AGENTS.md" || true)" = "1" ] \
+    || { printf '新项目没写默认名册（实际：%s）' "$(grep -m1 -F 'Roster:' "$p/AGENTS.md")"; return 1; }
+  [ "$(grep -cF 'docs/team/threads/<agent>.md' "$p/AGENTS.md" || true)" = "1" ] \
+    || { printf '新项目没写默认 docs 路径（实际：%s）' "$(grep -m1 -F '/threads/<agent>.md' "$p/AGENTS.md")"; return 1; }
+  printf '无契约：目录名 %s + 默认名册 dev verify + docs/team' "$base"
+  return 0
+}
+
 chk_agents_refresh() { # <tree> <repo>：LF / CRLF / 末行无换行 / 旧名标记 四例都整文件等于期望
   local t="$1" p="$2"
   local render="$p/.agents-render"
@@ -998,6 +1064,16 @@ if want install; then
     && ok "--no-skills 刷新后文件变短（旧块被替换而不是追加）" || bad "--no-skills 刷新后文件没变短"
   assert_not_file "$p/.pi/skills" "--no-skills 刷新后依然没有 .pi/skills/"
   assert_not_file "$p/.pi/extensions" "--no-skills 刷新后依然没有 .pi/extensions/"
+
+  # ②b P402：既有契约 + 非 --force 的裸 init → 渲染参数取契约现值（不是目录名/硬编码默认）；
+  # 对照组是无契约的新项目：仍是目录名与默认名册（证明没有把两条路径合并成一条）。
+  p="$tmp/p-cfg-render"; git_new "$p"; assert_isolated "$tree" "$p"
+  init_cfg_fixture "$tree" "$p" >/dev/null; rc=$?
+  assert_eq "P402 夹具：非默认渲染参数写进契约" "$rc" "0"
+  check_holds "P402 裸 init 取契约里的 session/名册/docs/PM 窗口/门禁（整块等于同参数的显式渲染）" \
+    chk_init_render_from_config "$tree" "$p"
+  p="$tmp/p-cfg-fresh"; git_new "$p"; assert_isolated "$tree" "$p"
+  check_holds "P402 对照：无契约的新项目裸 init 写目录名与默认名册" chk_init_defaults_fresh "$tree" "$p"
 
   # ③ --copy：真目录、字节相等、不带 node_modules/.git
   p="$tmp/p-copy"; git_new "$p"; assert_isolated "$tree" "$p"
@@ -1505,6 +1581,22 @@ open(p, "w", encoding="utf-8").write(s.replace(old, new, 1))
 PYLEGACY
   pf="$tmp/f-agents-legacy-sed-red"; git_new "$pf"; init_proj "$ft" "$pf" >/dev/null 2>&1
   check_breaks "⑭c 翻转：旧名迁移退化回全局 sed（围栏里的示例被一并改写）" chk_agents_refresh "$ft" "$pf"
+  # ⑮ P402：把「既有契约取现值」的回落关掉 → 裸 init 写成目录名/硬编码默认，整块比较必须红
+  ft="$tmp/f-init-render"; scratch_tree "$ft"
+  python3 - "$ft/skills/teamsmith/scripts/lib/cmd-project.sh" <<'PYINITRENDER'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+old = '  if [ "$had_config" = "1" ] && [ "$force" != "1" ]; then\n    local _cfgv\n'
+new = '  if [ "0" = "1" ]; then\n    local _cfgv\n'
+if old not in s:
+    print("夹具没生效：找不到 P402 的契约回落块"); sys.exit(1)
+open(p, "w", encoding="utf-8").write(s.replace(old, new, 1))
+PYINITRENDER
+  pg="$tmp/f-init-render-green"; git_new "$pg"; init_cfg_fixture "$tree" "$pg" >/dev/null 2>&1
+  pf="$tmp/f-init-render-red"; git_new "$pf"; init_cfg_fixture "$ft" "$pf" >/dev/null 2>&1
+  check_holds "⑮ 对照：真实树裸 init 取契约现值" chk_init_render_from_config "$tree" "$pg"
+  check_breaks "⑮ 翻转：回落顺序退回目录名/硬编码默认（不看契约现值）" chk_init_render_from_config "$ft" "$pf"
   # ⑥ 真实树没被夹具动过：git status 指纹前后一致
   porcelain_after="$(cd "$tree" && git status --porcelain | sha256sum)"
   assert_eq "⑥ 夹具没碰真实树（git status 指纹不变）" "$porcelain_after" "$porcelain_before"

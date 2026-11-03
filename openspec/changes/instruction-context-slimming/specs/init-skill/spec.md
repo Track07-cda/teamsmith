@@ -33,7 +33,7 @@ Guidance shipped on the AGENTS managed section and the PM startup prompt SHALL s
 
 Non-force refresh SHALL retain the bytes of an existing valid config and existing ledger documents that init normally skips. Guidance MUST NOT extend that promise to all other paths or to file metadata: init also creates missing document scaffolding, writes ignore/support files, normalizes config permissions and, unless skipped, handles project-local installation. The sequence SHALL be described as non-transactional: a later failure is not proof that earlier AGENTS/docs/ignore writes did not occur. Guidance SHALL distinguish explicit init refresh from existing-config bootstrap, which does not refresh AGENTS, and from force re-rendering, which can replace config/ledger and is not necessary for AGENTS refresh. Existing legacy-model refusal and install-conflict behavior SHALL remain unchanged.
 
-Refresh guidance SHALL disclose the render parameters and actual main-root write target instead of claiming that preserving config makes bare init safe for non-default projects. It SHALL name the ordinary defaults (main-root basename session, `dev verify` roster, `docs/team` docs, `pm` PM window and the current AGENTS render's `main` protected-branch value), require a private-copy preview with the project's actual inputs before live adoption, and disclose that customization inside markers is not protected. No automatic live adoption or repair of malformed/multiple/mixed marker blocks is promised by this contract.
+Refresh guidance SHALL disclose the render parameters it uses and the actual main-root write target. When a valid existing contract is being refreshed without `--force`, a render parameter not supplied on the command line SHALL take that contract's present value; the ordinary defaults (main-root basename session, `dev verify` roster, `docs/team` docs, `pm` PM window) apply only to a fresh project or an absent key, and an explicitly supplied value still wins. Guidance SHALL keep the current AGENTS render's `main` protected-branch value visible as a limitation, require a private-copy preview with the project's actual inputs before live adoption, and disclose that customization inside markers is not protected. No automatic live adoption or repair of malformed/multiple/mixed marker blocks is promised by this contract.
 
 #### Scenario: Verbose old current block becomes the rendered shorter block without losing outside text
 
@@ -99,6 +99,13 @@ Refresh guidance SHALL disclose the render parameters and actual main-root write
 - **WHEN** the explicit matching non-force init invocation is previewed in a private copy and then exercised there
 - **THEN** the rendered section names those parameters and correct paths, equals the template rendered with those inputs, and preserves the existing config and existing ledger documents
 - **AND** guidance names the different bare-init defaults and current hard-coded protected-branch render value rather than promising that all non-default configuration is inferred
+
+#### Scenario: A bare refresh on a valid contract renders that contract's own parameters
+
+- **GIVEN** a project with a valid current config whose session, roster, docs path, PM window and gates differ from the ordinary defaults, and its existing config bytes recorded
+- **WHEN** ordinary non-force `team init` runs without `--session`, `--agents`, `--docs`, `--pm-window` or `--gates`
+- **THEN** the refreshed managed section names that contract's values, matches the block rendered with the same parameters supplied explicitly, and the existing config bytes are byte-identical
+- **AND** the same command in a project with no config still renders the main-root basename session and the `dev verify` roster, an explicitly supplied flag still wins over the contract value, and `--force` still re-renders from explicit inputs or the ordinary defaults
 
 #### Scenario: Force, bootstrap and late failure are not mistaken for safe refresh shortcuts
 

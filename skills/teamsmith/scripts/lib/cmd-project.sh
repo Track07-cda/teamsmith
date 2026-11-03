@@ -280,12 +280,27 @@ team_cmd_init() {
   done
 
   local project; project="$(basename "$TEAM_MAIN_ROOT")"
+  local cfg="$TEAM_MAIN_ROOT/.pi/team/config.sh" had_config=0; [ -f "$cfg" ] && had_config=1
+  local gates_from_config=0
+  # P402：既有契约（且不是 --force 重渲染）时，命令行上没给的渲染参数取**契约里的现值** —— 受管块是
+  # agent 读到的「PM 在哪、有谁」的权威说明，写目录名/硬编码默认就是文档撒谎（2026-11-03 现场：
+  # TEAM_SESSION=teamsmith、TEAM_AGENTS="dev verify dev2 dev3 dev-bob" 的项目被渲染成 `pm-skills:pm`
+  # 与 `dev verify`）。显式参数仍然优先；键缺失（老契约/手改）是预期分支，保持下面的默认。
+  if [ "$had_config" = "1" ] && [ "$force" != "1" ]; then
+    local _cfgv
+    if [ -z "$session" ] && _cfgv="$(team_config_file_value "$cfg" TEAM_SESSION)"; then session="$_cfgv"; fi
+    if [ -z "$agents" ] && _cfgv="$(team_config_file_value "$cfg" TEAM_AGENTS)"; then agents="$_cfgv"; fi
+    if [ -z "$docs" ] && _cfgv="$(team_config_file_value "$cfg" TEAM_DOCS_DIR)"; then docs="$_cfgv"; fi
+    if [ -z "$pmwin" ] && _cfgv="$(team_config_file_value "$cfg" TEAM_PM_WINDOW)"; then pmwin="$_cfgv"; fi
+    if [ -z "$gates" ] && _cfgv="$(team_config_file_value "$cfg" TEAM_GATES)"; then
+      gates="$_cfgv"; gates_from_config=1
+    fi
+  fi
   session="${session:-$project}"
   agents="${agents:-dev verify}"
   vcs="${vcs:-$(team_detect_vcs)}"
   docs="${docs:-docs/team}"
   pmwin="${pmwin:-pm}"
-  local cfg="$TEAM_MAIN_ROOT/.pi/team/config.sh" had_config=0; [ -f "$cfg" ] && had_config=1
 
   # 0) 模型策略闸门（P235）：退休键 / 缺输入 / 非法值都在**任何写入之前**停住。
   #    已有合法新策略允许不带输入重入（保留策略）；退休键则连 --force 都不能当迁移捷径。
@@ -334,6 +349,8 @@ team_cmd_init() {
       gates="$(team_detect_gates)"
       TEAM_GATES="$_gates_keep"
     fi
+  elif [ "$gates_from_config" = "1" ]; then
+    :   # P402：契约现值（含空值）就是这次渲染的值，不再拿检测结果替换契约的「未配置」
   else
     gates="${gates:-$(team_detect_gates)}"
   fi
