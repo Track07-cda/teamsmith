@@ -11318,6 +11318,23 @@ section "19 · OpenSpec 五阶段流水线：每阶段有所有者与门禁（M9
 OS_PHASES="explore propose apply verify archive"
 OS_ROOT="$(cd -P "$SKILL_DIR/../.." && pwd)"
 
+# P404 · 声明面取值的助手：判据落在**段落**上（空行分界），不是「这两个词在文件里出现过」。
+#   os_para_with <file> <锚点正则> → 含锚点的那一段（没有 → 空）
+#   os_need <段落> <文件标签> <理由> <字面串…> → 段落里缺哪个字面串就点名哪个（字面匹配，不是正则）
+os_para_with() {
+  awk -v re="$2" 'BEGIN { RS = "" } $0 ~ re { print; exit }' "$1" 2>/dev/null
+}
+os_need() {
+  local para="$1" label="$2" why="$3" tok
+  shift 3
+  for tok in "$@"; do
+    case "$para" in
+      *"$tok"*) ;;
+      *) printf '%s: %s [%s]\n' "$label" "$why" "$tok" ;;
+    esac
+  done
+}
+
 os_pipeline_hits() { # <skill 目录> → 违规行（空 = 通过）
   local d="$1" f="$1/references/openspec.md" p t n
   if [ ! -f "$f" ]; then printf 'references/openspec.md: GUIDE-MISSING\n'; return 0; fi
@@ -11334,9 +11351,10 @@ os_pipeline_hits() { # <skill 目录> → 违规行（空 = 通过）
       END { if (!row) print "ROW-MISSING " p }
     ' "$f" | sed 's|^|references/openspec.md: |'
   done
-  # ② 两条硬规则：没人复验自己的工作；归档要用户确认
+  # ② 硬规则：没人复验自己的工作（「归档要用户确认」那一条由 ⑥ 的逐文件循环覆盖 —— 原来这里对
+  #    references/openspec.md 还查过一遍同样的正则，P404 按净零纪律把它退了：同一条断言写两遍，
+  #    删掉哪一遍都不改变判定，只会让红侧点名的理由有两条互相遮蔽）
   grep -qi 'verifies its own work' "$f" || printf 'references/openspec.md: RULE-INDEPENDENT-MISSING\n'
-  grep -qEi 'user[^|]*confirm|confirm[^|]*user' "$f" || printf 'references/openspec.md: RULE-USER-CONFIRM-MISSING\n'
   # ③ propose→apply 的记录式门：记录路径 + 判定词 + 「未 ACCEPTED 不得派 apply」
   grep -q 'reviews/<change>-proposal.md' "$f" || printf 'references/openspec.md: PROPOSAL-RECORD-MISSING\n'
   grep -q 'ACCEPTED' "$f" || printf 'references/openspec.md: PROPOSAL-VERDICT-MISSING\n'
@@ -11365,12 +11383,71 @@ os_pipeline_hits() { # <skill 目录> → 违规行（空 = 通过）
   for t in templates/AGENTS.section.md.tmpl templates/PROTOCOL.md.tmpl SKILL.md references/workflows.md references/openspec.md; do
     grep -qEi 'user[^|]*confirm|confirm[^|]*user' "$d/$t" || printf '%s: USER-CONFIRM-MISSING\n' "$t"
   done
+  # ⑦ P404 · 规格点名的两处声明面（V125 实测：这两处此前**没有断言守着**，删掉整句、把冻结措辞改成
+  #    禁语，门禁都还是绿的）。判据取**段落里的实质**：先按空行取出那一段，再要求段落内同时有两条命令、
+  #    各自的时间位置、以及「性能读数不构成判决」的结论 —— 只查「两个词在不在文件里」是橡皮章：
+  #    删掉整句、把否定改成正命题都必须红。
+  #
+  #    ⑦a 双门禁分工（verification#The two gates are discoverable, and the doctor names the next step）
+  local g_para p_para a_sec a_row a_desc
+  g_para="$(os_para_with "$d/SKILL.md" 'two gates answer different questions')"
+  if [ -z "$g_para" ]; then
+    printf 'SKILL.md: TWO-GATES-MISSING\n'
+  else
+    os_need "$g_para" SKILL.md TWO-GATES-MISSING \
+      'on every change' 'before a release' 'openspec validate --all --strict' \
+      'tests/smoke.sh' 'tests/perf.sh' 'no verdict' 'never blocks a merge'
+  fi
+  # 协议侧同一分工，且**正确性门禁段落**必须仍写着「不判墙钟」：把否定改成正命题 = 红
+  p_para="$(os_para_with "$d/references/protocol.md" 'correctness only')"
+  if [ -z "$p_para" ]; then
+    printf 'references/protocol.md: GATE-PARAGRAPH-MISSING\n'
+  else
+    os_need "$p_para" references/protocol.md GATE-NO-WALLCLOCK-MISSING \
+      'no wall-clock' 'red line' 'tests/perf.sh' 'team perf' 'no threshold' 'can fail a run'
+  fi
+  #    ⑦b Agent adapters 声明面（agent-adapters#The contract promises Pi; the launch and notify seam is an
+  #    internal frozen seam）：description / ## 小节 / 深读表行三处都带冻结措辞。非空与长度由 §0b 的 pi
+  #    解析器守，这里守的是**措辞**（同一个缺口不靠两条断言各守一半）。
+  a_desc="$(awk '/^---[[:space:]]*$/ { n++; next } n == 1 && /^description:/ { sub(/^description:[[:space:]]*/, ""); print; exit }' "$d/SKILL.md" 2>/dev/null)"
+  if [ -z "$a_desc" ]; then
+    printf 'SKILL.md: DESCRIPTION-MISSING\n'
+  else
+    os_need "$a_desc" SKILL.md DESCRIPTION-SEAM-MISSING \
+      'Works with Pi' 'internal seam (frozen)' 'no compatibility promise'
+  fi
+  a_sec="$(awk '/^## Agent adapters/ { on = 1 } on && /^## / && !/^## Agent adapters/ { exit } on' "$d/SKILL.md" 2>/dev/null)"
+  if [ -z "$a_sec" ]; then
+    printf 'SKILL.md: ADAPTERS-SECTION-MISSING\n'
+  else
+    os_need "$a_sec" SKILL.md ADAPTERS-SEAM-MISSING \
+      'internal seam (frozen)' 'reserved for a possible future' 'no compatibility promise' \
+      'not a public extension point'
+  fi
+  a_row="$(grep -F '| `references/agent-adapters.md` |' "$d/SKILL.md" 2>/dev/null | head -1)"
+  if [ -z "$a_row" ]; then
+    printf 'SKILL.md: ADAPTERS-ROW-MISSING\n'
+  else
+    os_need "$a_row" SKILL.md ADAPTERS-ROW-SEAM-MISSING 'internal seam (frozen)'
+  fi
+  # 负向一半：整份日常 skill 里不许出现「支持任意 TUI agent」这类统一口径（换掉冻结措辞的人写的
+  # 通常就是它）；这条把「每个非 Pi 提法都带冻结措辞」变成可证伪的 —— 提法本身可以保留，删掉限定不行。
+  while IFS= read -r t; do
+    [ -n "$t" ] || continue
+    grep -qF -- "$t" "$d/SKILL.md" && printf 'SKILL.md: CLAIMS-ANOTHER-HARNESS [%s]\n' "$t"
+  done <<'OS_BANNED'
+any TUI agent
+any TUI Agent
+another TUI agent
+其它 TUI agent
+任意 TUI agent
+OS_BANNED
   return 0
 }
 
 OS_HITS="$(os_pipeline_hits "$SKILL_DIR")"
 if [ -z "$OS_HITS" ]; then
-  ok "五阶段各有所有者与门禁；两条硬规则、记录式提案审查与十条清单都在（指南 + 模板 + SKILL + runbook）"
+  ok "五阶段各有所有者与门禁；硬规则、记录式提案审查与十条清单都在（指南 + 模板 + SKILL + runbook）；规格点名的两处声明面（双门禁段落实质 / adapters 冻结措辞）也在"
 else
   bad "五阶段契约被破坏："
   printf '%s\n' "$OS_HITS" | head -5 | sed 's/^/     /'
@@ -11424,7 +11501,7 @@ os_flip_red "掏空 propose 行的门禁单元格" "GATE-EMPTY propose" "referen
   's/\(^| 2 | .*`opsx-propose`.*\)|[^|]*|$/\1|  |/'
 os_flip_red "删掉「未 ACCEPTED 不得派 apply」" "APPLY-GATE-MISSING" "references/openspec.md" '/No apply brief may be dispatched/d'
 os_flip_red "删掉「没人复验自己的工作」" "RULE-INDEPENDENT-MISSING" "references/openspec.md" '/verifies its own work/d'
-os_flip_red "抹掉「归档要用户确认」" "RULE-USER-CONFIRM-MISSING" "references/openspec.md" \
+os_flip_red "抹掉「归档要用户确认」" "references/openspec.md: USER-CONFIRM-MISSING" "references/openspec.md" \
   -E 's/user[^|]*confirm[^|]*/ACCOUNTABILITY-REMOVED/g'
 os_flip_red "删掉提案审查记录路径" "PROPOSAL-RECORD-MISSING" "references/openspec.md" '/reviews\/<change>-proposal/d'
 os_flip_red "把十条清单砍掉一条" "CHECKLIST-COUNT 9" "references/openspec.md" '/^8\. \*\*Granularity\*\*/d'
@@ -11435,6 +11512,15 @@ os_flip_red "AGENTS 协议段不再提用户确认" "USER-CONFIRM-MISSING" "temp
   -E 's/user[^|]*confirm[^|]*/ACCOUNTABILITY-REMOVED/g'
 os_flip_red "任务书模板删掉 phase: 头" "PHASE-FIELD-MISSING" "templates/task.md.tmpl" '/^phase:/d'
 os_flip_red "runbook 里的 verify 不再写独立" "INDEPENDENT-VERIFY-MISSING" "references/workflows.md" '/independent/d'
+# P404 · 两处声明面的红侧（V125 的三个变异：此前每一个都还能全绿）
+os_flip_red "删掉 SKILL.md 的双门禁分工那段" "TWO-GATES-MISSING" "SKILL.md" \
+  '/^The two gates answer different questions/,/^$/d'
+os_flip_red "把 description 的冻结 seam 措辞换成统一口径" "CLAIMS-ANOTHER-HARNESS" "SKILL.md" \
+  -E 's/Works with Pi; the launch\/notify seam is an internal seam \(frozen\) reserved for a possible future non-Pi adapter, with no compatibility promise\./Works with any TUI agent./'
+os_flip_red "删掉 SKILL.md 的 Agent adapters 小节" "ADAPTERS-SECTION-MISSING" "SKILL.md" \
+  '/^## Agent adapters/,/^## Cross-project boundary/d'
+os_flip_red "协议的门禁段落把「不判墙钟」改成正命题" "GATE-NO-WALLCLOCK-MISSING" "references/protocol.md" \
+  's/it contains no wall-clock or CPU-share red line/it contains a wall-clock red line/'
 
 # ---------------------------------------------------------------- 20. done 证据的阶段感知（M9.2）
 # 契约：任务书声明 `phase:` 时，done **额外**接受该阶段的交付证据（OpenSpec 五阶段各一条路线，
