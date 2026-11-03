@@ -2116,3 +2116,9 @@ P383 内容已合（a71b3499），但门禁红在**夹具假红**：`key-replies
 
 边界：clinepass 恢复后是否切回，由用户定；自动 fallback 未实现，仍按 D219 的"明确失败→人工/PM 切换"。配置改动前已备份 `.pi/team/config.sh` 到 `/var/tmp/config.before-clinepass-exhaustion.sh`。
 
+### D225 · 看板收口：把已交付的历史行标成 done（2026-11-03）
+
+巡检一直报"待复验 4/5"，翻看板发现是历史行没结算：P390、P391、P392、V110–V116、V119、V120、P394、P397、P379、P385、P387、P389 的交付物都已存在（提案 accepted、实现已合、或结论已并入 D 系列），状态却停在 `review`。这次按各自的实际结局统一置 `done`，不删行、不改历史列——看板是账本，不是工作队列；行留着，状态说实话。
+
+同时记住一条：`team board set done` 需要 `docs/team/reviews/<ID>.md` 且第三行是 `判定: **PASS**`；V-类的交付报告常叫 `<ID>-verify.md`，PM 收口时要复制成 `<ID>.md`，否则 `team close` 会拦。
+

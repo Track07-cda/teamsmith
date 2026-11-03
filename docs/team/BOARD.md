@@ -606,37 +606,37 @@
 | P378 | npm全局信号入口污染 | dev-bob | - | - | done |
 | V107 | 61b单臂修复独立复核 | verify | - | - | done |
 | V108 | npm命令范围独立复核 | dev | - | - | done |
-| P379 | 门禁耗时拆解与精简方案 | dev2 | - | - | review |
+| P379 | 门禁耗时拆解与精简方案 | dev2 | - | - | done |
 | P380 | 真实测试运行时使用最新pi | dev3 | - | - | done |
 | P381 | 通知的git探测不污染Pi输入框 | dev-bob | - | - | done |
-| V109 | 最新pi运行时独立复核 | verify | - | - | review |
+| V109 | 最新pi运行时独立复核 | verify | - | - | done |
 | P382 | 公开CI账本夹具数字UID失败 | dev | - | - | done |
 | P383 | Key-replies mouse scroll clamp failure | dev-bob | - | - | done |
 | P384 | README三Skill安装表述 | dev3 | - | - | done |
-| P385 | Agent Self-Reminder探索 | dev2 | - | - | review |
-| V110 | P383 pty修复独立复核 | verify | - | - | review |
-| V111 | Self-Reminder架构独立复核 | dev3 | - | - | review |
+| P385 | Agent Self-Reminder探索 | dev2 | - | - | done |
+| V110 | P383 pty修复独立复核 | verify | - | - | done |
+| V111 | Self-Reminder架构独立复核 | dev3 | - | - | done |
 | P386 | 63嵌套摘要计数修正 | dev | - | - | done |
-| P387 | Agent Self-Reminder OpenSpec提案 | dev2 | - | - | review |
-| V112 | Self-Reminder提案独立评审 | dev3 | - | - | review |
+| P387 | Agent Self-Reminder OpenSpec提案 | dev2 | - | - | done |
+| V112 | Self-Reminder提案独立评审 | dev3 | - | - | done |
 | P388 | Agent Self-Reminder MVP实现 | dev-bob | - | - | blocked |
-| P389 | 指令上下文与AGENTS瘦身 | dev3 | - | - | review |
-| P390 | team say默认立即投递并移除now | dev2 | - | - | review |
-| P391 | 指令上下文瘦身OpenSpec提案 | dev3 | - | - | review |
-| P392 | team say默认直投OpenSpec提案 | dev2 | - | - | review |
-| V113 | 指令瘦身提案独立评审 | verify | - | - | review |
-| V114 | team say提案独立评审 | dev3 | - | - | review |
+| P389 | 指令上下文与AGENTS瘦身 | dev3 | - | - | done |
+| P390 | team say默认立即投递并移除now | dev2 | - | - | done |
+| P391 | 指令上下文瘦身OpenSpec提案 | dev3 | - | - | done |
+| P392 | team say默认直投OpenSpec提案 | dev2 | - | - | done |
+| V113 | 指令瘦身提案独立评审 | verify | - | - | done |
+| V114 | team say提案独立评审 | dev3 | - | - | done |
 | P393 | team say默认直投实现 | dev | - | - | done |
-| P394 | Pi插件标记式关键回复探索 | dev2 | - | - | review |
-| V115 | 标记式关键回复独立架构复核 | dev3 | - | - | review |
-| V116 | team say实现独立复验 | dev2 | - | - | review |
+| P394 | Pi插件标记式关键回复探索 | dev2 | - | - | done |
+| V115 | 标记式关键回复独立架构复核 | dev3 | - | - | done |
+| V116 | team say实现独立复验 | dev2 | - | - | done |
 | P395 | 标记式关键回复OpenSpec提案 | dev2 | - | - | done |
 | V117 | 标记式关键回复提案独立评审 | dev3 | - | - | done |
 | P396 | 标记式关键回复MVP实现 | dev | - | - | done |
-| P397 | Gate execution slimming proposal | dev2 | - | P379 | review |
+| P397 | Gate execution slimming proposal | dev2 | - | P379 | done |
 | V118 | 测试瘦身提案独立审查 | verify | - | P397 | done |
-| V119 | 指令瘦身与AGENTS边界提案定点复审 | dev2 | - | P391 | review |
-| V120 | P391 final S1-S4 diff independent review | verify | - | - | review |
+| V119 | 指令瘦身与AGENTS边界提案定点复审 | dev2 | - | P391 | done |
+| V120 | P391 final S1-S4 diff independent review | verify | - | - | done |
 | P398 | 61b 变异测试执行瘦身（首片） | dev3 | - | P397 | dropped |
 | P399 | 关键回复隔离守卫的比对范围（夹具假红） | dev | - | - | done |
 | V121 | 标记式关键回复独立复验 | dev | - | - | done |
@@ -646,6 +646,7 @@
 | P402 | init 渲染受管块要用契约值 | dev | - | - | done |
 | V123 | 指令瘦身第二片独立复验 | dev | - | - | done |
 | V124 | P402 独立复验 | dev | - | - | done |
+| P403 | 指令瘦身 Apply 第三片：SKILL 与参考手册 | dev | - | - | wip |
 
 ## 当前里程碑
 
