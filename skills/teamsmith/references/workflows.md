@@ -116,7 +116,7 @@ bash <skill>/scripts/team digest          # pending work: new notifications + re
 bash <skill>/scripts/team inbox --ack     # read and mark as read
 bash <skill>/scripts/team roster          # who is running, branch, dirty files, ahead of the protected branch, unpushed commits
 bash <skill>/scripts/team ps              # capacity (RAM/swap/how many more fit) + model concurrency + PM/pulse liveness
-bash <skill>/scripts/team up              # one-shot repair: session/PM/agents that stopped without delivering
+bash <skill>/scripts/team up              # manual rescue: build the tmux stage + start the PM (agents untouched)
 ```
 
 `digest` §[4] measures the push state **against `@{upstream}`** (`git rev-list --count @{upstream}..HEAD`), never
@@ -217,34 +217,37 @@ turn. A CLI without the Pi extension API does not have them: fall back to a back
 ### E3. Performance is a separate run (and a release step)
 
 The gate above judges **correctness only** — `openspec validate --all --strict && bash
-skills/teamsmith/tests/smoke.sh </dev/null` (front door `team smoke`). The wall-clock/CPU red lines (interactive
-first frame, frame assembly, steady-state pane CPU) live in a separate suite, are never part of a review, and are
-run **once before a release** in the reference image:
+skills/teamsmith/tests/smoke.sh </dev/null` (front door `team smoke`). The performance readings (interactive first
+frame, frame assembly, steady-state pane CPU) live in a separate suite, are never part of a review, and are run
+**once before a release** in the reference image:
 
 ```bash
 bash <skill>/scripts/team perf --container   # reference environment: the pinned ci/Containerfile image (default)
 bash <skill>/scripts/team perf --host        # this machine, explicitly labelled NOT the reference
 ```
 
-Exit `0` = all three judgements ran green; `2` = a red with its measured numbers; `4` = no conclusion (a visible
-SKIP: the load premise does not hold, the machine lacks a tool, or the reference engine/image is missing — the
-reason, the measured values and the exact build/run command are printed); `3` = setup failure. The suite takes its
-own lock (`TEAM_PERF_LOCK`, `TEAM_PERF_LOCK_WAIT`) and never queues behind the gate lock. Record the numbers where
-the release checklist says (`docs/team/PUBLISH.md`); a red performance run never delays a merge and never changes a
-review verdict.
+The suite only measures and prints reference readings, and names the environment it measured in: exit `0` = a reading
+was taken, `3` = it could not measure (setup failed, or the performance lock was unavailable). There is no threshold
+and no verdict to give, so a reading never delays a merge and never changes a review verdict. The suite takes its own
+lock (`TEAM_PERF_LOCK`, `TEAM_PERF_LOCK_WAIT`) and never queues behind the gate lock. Record the numbers where the
+release checklist says (`docs/team/PUBLISH.md`).
 
 ## F. Merging and wrapping up
 
-**Without a PR (local mode)**:
+**Local mode (`TEAM_VCS=local`, no remote — no push)**:
 
 ```bash
 git -C <root> status                    # the main worktree must be clean and on the protected branch
 git -C <root> merge --squash <branch>    # conflict handling: see protocol.md §8e
 git -C <root> commit -m "T1.1: <title>"
-git -C <root> push origin <protected-branch>
 bash <skill>/scripts/team board set T1.1 done   # only mark done once it is really in the protected branch
 bash <skill>/scripts/team close T1.1            # close the window, clear the task
 ```
+
+> A local deliverable is the committed report plus the settled task branch; there is no remote to push to. A
+> `TEAM_VCS=remote` project that merges without a PR still pushes the protected branch
+> (`git -C <root> push origin <protected-branch>`) — that push is a shared-state change and needs the user's
+> authorization like any other.
 
 > After a squash merge the branch still holds its own commits, so it stays "ahead of main" (and, with a forge,
 > may even look "unpushed"). `roster`/`digest` recognise the usual case (same content) and say "already merged
@@ -420,10 +423,9 @@ logged).
   for "the window was closed while the server still lives". It **cannot** help when the tmux *server* dies: the
   patrol runs in a pane of that server, so it dies with it, and nothing in the project restarts it (a human runs
   `team up`, which also rebuilds the session).
-- **It does manage stopped agents, in one narrow way**: a seat with an unfinished task whose process has stopped is
-  auto-dispatched back onto **the same task** (the resume path in `cmd-watch.sh`; each attempt writes
-  `resume agent=<a> task=<id>` to `state/watchdog.log`). This is not a substitute for the PM's own `team resume`
-  decision — it exists so a seat that died mid-task comes back without waiting for a human.
+- **It does not resume stopped agents**: a seat with an unfinished task whose process has stopped is reported as
+  pending work and left alone; starting it is the PM's call (`team resume --agent <a>`), or a human's
+  `team up --agents` rescue.
 - **It does not manage model quota and never merges**: those are the PM's job.
 - **The PM is not required to run continuously**: between pending batches the PM may sit quietly (or not be running at
   all); the pulse will not wake it just to "keep it alive".

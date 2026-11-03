@@ -18,13 +18,54 @@ session) and for anyone deciding whether upgrading is safe.
 | `TEAM_*` environment variables | override the config file (env beats config) and are read that way in every version |
 | the `docs/team/**` layout | `tasks/ reports/ reviews/ threads/ inbox/` plus `BOARD.md ROADMAP.md OWNERSHIP.md DECISIONS.md PROTOCOL.md` |
 | `docs/team/BOARD.md` columns | `ID · task · agent · branch · deps · status`, with the status vocabulary `todo/wip/review/done/blocked/dropped` |
-| the `AGENTS.md` protocol section | injected between markers and **refreshed in place** by `team init`, never appended twice; only the marker text changed once (§2) |
+| the `AGENTS.md` protocol section | injected between markers and **refreshed in place** by an explicit `team init` (never by `bootstrap`/`team up`), never appended twice; only the marker text changed once (§2). Outside the pair every byte is preserved — §1b |
 | `.pi/team/state/` | flat `key=value` files (agent records, `pm-loaded.env`, logs); version-agnostic and never migrated |
 | version bookkeeping | `team mark-loaded` + `team version --check` compare a version string and a content hash; deleting `state/pm-loaded.env` only makes the tool say "unknown", nothing breaks |
 
 The **text** of `SKILL.md`, `references/**` and the templates is the part that genuinely changes between versions.
 Commands always re-read `scripts/**` from disk, but text already read into a running session does not change under
 you — that is what `/reload` is for (§6), and §7 covers going back.
+
+## 1b. The AGENTS managed block: what an explicit refresh does, and what it does not
+
+`team init` (without `--force`) is the only refresh path for the generated AGENTS block. `team bootstrap` on an
+existing valid config installs the project-local skills and stops there — it does **not** run init's AGENTS writer —
+and `team up` never touches AGENTS. `--force` re-renders config and ledger as well, so it is not the refresh switch.
+
+**The boundary.** A delimiter is an exact standalone `<!-- teamsmith:begin -->` / `<!-- teamsmith:end -->` line
+outside a fenced code block. Exactly one such pair is replaced between its two delimiter lines; a file with no such
+line gains one block; any other shape is refused with the file left byte-identical and the reason named — two or more
+pairs, a begin without its end (or the reverse), current and legacy delimiter lines mixed, or no pair in a file that
+ends inside an unclosed fence. A marker quoted in prose, indented, sharing a line with text or sitting inside a closed
+fenced example is ordinary content: never a pair, never an error.
+
+**What survives.** Both delimiter lines and every byte outside them — preceding and following sections, ordinary
+headings, project rules, those examples, line order, line endings (LF, CRLF, mixed) and a final line without a
+newline. The inserted body uses the begin line's own terminator; nothing is normalized and no trailing newline is
+added. **What does not survive**: everything *inside* the pair is managed text and is replaced, including any project
+customization there. Project rules belong outside the markers — the managed block is not a customization surface.
+
+**Before a refresh.** The PM inventories the rules currently inside the block and preserves them outside under the
+project's own authorization, previews the exact command in a private copy with the project's actual inputs, and diffs
+the result. init classifies nothing and moves no text for you.
+
+**Render parameters.** Without the matching flag, a valid existing contract's present session, roster, docs path, PM
+window and gates are used; the ordinary defaults (main-root basename session, `dev verify` roster, `docs/team`, `pm`
+PM window, detected gates) apply only to a fresh project or an absent key, and an explicitly supplied flag still wins.
+The AGENTS render currently passes the protected branch `main` — a non-main protected branch is a known limitation,
+not something this recipe overrides.
+
+**Write target.** Run it from the main checkout: a linked worktree resolves to the main root, so the main-root AGENTS
+is the one refreshed and no private worktree AGENTS is created.
+
+**The rest of init's writes are not skipped.** init also writes or skips config (and chmods it), creates the docs
+skeleton, renders missing ledger files, overwrites the inbox/reviews `.gitignore` files, updates the root `.gitignore`,
+and — unless `--no-skills` — installs the project-local skills and the `/team` extension. `--no-skills` skips
+installation only, not the AGENTS refresh. The sequence is **not transactional**: a late install conflict can return
+non-zero after AGENTS, docs and ignore writes already happened. Without `--force`, an existing valid config and
+existing ledger documents keep their bytes; `--force` may replace config and ledger. A retired-model configuration is
+refused before any write, with or without `--force`. An existing generated `PROTOCOL.md` is skipped by a non-force
+init and keeps its old text.
 
 ## 2. The rename: `pi-team` → `teamsmith` (v1.13.0)
 
@@ -34,7 +75,7 @@ The name change touched three things and only one of them needs a command from y
 |---|---|---|
 | `skills/pi-team` (repository path **and** installed skill directory) | `skills/teamsmith` | **change the path** (since the release that carries M22): the compatibility symlink was **removed**, so an absolute path or a `settings.json` entry that still says `skills/pi-team` must be updated to `skills/teamsmith` (or to the installed `~/.agents/skills/teamsmith`). The installed copy is unaffected — it is a link to *this repository*, not to the old name. See §2b below |
 | the Pi command `/pi-team-reload` | `/teamsmith-reload` | **nothing**: the old spelling stays registered as an alias |
-| the `AGENTS.md` marker `<!-- pi-team:begin -->` … `<!-- pi-team:end -->` | `<!-- teamsmith:begin -->` … `<!-- teamsmith:end -->` | run `team init` (or `team bootstrap`) once: the marker is rewritten **in place** and idempotently, with no duplicate section. `team doctor` prints a pointer to this file while the old marker is still there |
+| the `AGENTS.md` marker `<!-- pi-team:begin -->` … `<!-- pi-team:end -->` | `<!-- teamsmith:begin -->` … `<!-- teamsmith:end -->` | run an explicit `team init` once: the legacy pair is converted **in place** and idempotently, with no duplicate section (§1b). An existing valid config's `team bootstrap` does not run this writer, and `team up` never does. `team doctor` prints a pointer to this file while the old marker is still there |
 | the repository name `pi-team` | `teamsmith` | only if your own notes or scripts hard-code it; the skill's contracts (command, config, `TEAM_*`, `docs/team/**`) were never renamed |
 | prose in your own docs, briefs or scripts | — | by hand: the skill cannot rewrite your files (the former name is also what a "stale session" error message used to say) |
 
@@ -73,7 +114,7 @@ period was ended early by the user's call. What this means for an existing proje
 | your `settings.json` `skills` array, or a config/`TEAM_*` value with an **absolute** path | replace the removed alias `skills/pi-team` with `skills/teamsmith` (a project that uses the CLI through `PATH` or a `~/.agents/skills/teamsmith` link needs nothing) |
 | your own notes, briefs or scripts | by hand — the skill cannot rewrite your files |
 | the installed directory `~/.agents/skills/pi-team` | re-run `./install.sh` (it installs the canonical directories only); `./install.sh --uninstall` also removes a legacy `pi-team` entry left by an older install |
-| an `AGENTS.md` marker `<!-- pi-team:begin -->` | **still automatic**: the next `team init`/`team bootstrap` rewrites the marker in place (§2) |
+| an `AGENTS.md` marker `<!-- pi-team:begin -->` | **still automatic, by an explicit `team init`**: it converts the legacy pair in place (§1b); `team bootstrap` on an existing valid config does not, and `team up` never does |
 | the Pi command `/pi-team-reload` | **still works**: it stays registered as an alias of `/teamsmith-reload` — a *command name*, not a path |
 
 A *copy* install (`./install.sh --copy`) made while the symlink existed simply carries a copy of the old alias;
@@ -289,6 +330,9 @@ and inference are **not** migration routes (§5b). Confirm the new shape before 
 ```bash
 team config list        # exit code 0, and no `migration_required` line at the end
 ```
+
+The AGENTS managed block is not part of this migration: `team up` and `bootstrap` do not refresh it. An explicit
+`team init` does, under the boundary and preservation rules in §1b.
 
 ### Step 3 — the PM launch identity (`state/pm-launch.env`)
 

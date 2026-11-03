@@ -18,31 +18,23 @@ PM(this session, tmux <session>:pm)     worker agents(each in .worktrees/<agent>
    task / dispatch ──────────────────▶  pi --session-id <s>-<a>  (interactive, watchable)
    digest / inbox  ◀── auto-notify on turn end ── extension/team-notify.ts → inbox + tmux wake-up
    long gate: team_bg_run → turn ends → woken once → team_bg_wait   (extension/team-bg.ts, both sides)
-   review(independent checkout, run gates) ──▶  reports/<ID>-<a>.md + PR/MR
+   review(independent checkout, run gates) ──▶  reports/<ID>-<a>.md  (local branch; remote on the PM's route)
    merge / close   ──────────────────▶  BOARD → done
 ```
 
 ## Starting a new project: use the `teamsmith-init` skill
 
-Initialization lives in its own skill: load the **`teamsmith-init`** skill and read its SKILL.md — install the CLI
-(`npm install -g teamsmith`) and run `team init`, which writes the config, the `docs/team/` skeleton and both skills
-into the project's **`.pi/skills/`** — then the ordered questions to settle with the user,
-`bash <teamsmith>/scripts/team bootstrap`, and the handoff back here. A machine-global install (`pi install …`,
-`~/.agents/skills` via `install.sh`, or a settings `skills` entry) is the alternative route to the same skill;
-everything below is the daily loop, which starts once the project is up.
+Initialization lives in its own skill: read **`teamsmith-init`**'s SKILL.md for the install, the ordered questions to
+settle with the user, `bash <teamsmith>/scripts/team bootstrap` and the handoff back here. Everything below is the
+daily loop, which starts once the project is up.
 
 ## Name and compatibility (former name: pi-team)
 
-- Renamed from **`pi-team`** to **`teamsmith`** in v1.13.0 (repo name included).
-- **Contracts unchanged**: the command is still **`team`**; project config is still **`.pi/team/config.sh`**;
-  env vars are still **`TEAM_*`**; team docs are still **`docs/team/**`**. Existing projects need no changes.
-- The old path `skills/pi-team` **no longer exists**: the compatibility symlink was removed (M22, the alias period
-  ended early by the user's call). A project or `settings.json` that hard-codes the old absolute path must change it
-  to `skills/teamsmith` (or to the installed `~/.agents/skills/teamsmith`) — see `references/migration.md` §2.
-- An `AGENTS.md` section marked `<!-- pi-team:begin -->` is migrated in place to the new marker by the next
-  `team init`/`bootstrap`.
-- Hot-reload command in Pi: `/teamsmith-reload` (the old `/pi-team-reload` stays registered as an alias — the
-  alias is a **command name**, unrelated to the removed path).
+Renamed from **`pi-team`** in v1.13.0; the contracts did not move (command `team`, `.pi/team/config.sh`, `TEAM_*`,
+`docs/team/**`). The `skills/pi-team` alias is **gone**, so a hard-coded old path must become `skills/teamsmith`; an
+`AGENTS.md` carrying the legacy `<!-- pi-team:begin -->` marker is converted in place by an **explicit `team init`**
+(an existing valid config's `team bootstrap` does not refresh it). Renames, removed commands, dependency changes and
+the upgrade recipe: [references/migration.md](references/migration.md) §§1b–4/6.
 
 ## Command table
 
@@ -87,128 +79,70 @@ when they conflict, the creed wins and the process gets fixed.
 
 ## The PM loop (what you actually do)
 
-> On start (or after being woken): `team digest` → `team inbox --ack` → `team resume --dry-run` → `team pulse status`.
-> If the pulse is not running and you are not on standby, bringing it up (`team pulse up`) is part of your job; on standby, leave it alone.
-> Division of labour: **the pulse is a metronome** ("is there work?" every 15 minutes by default): it wakes you
-> only when there is pending work, stays silent otherwise, and does not require you to keep running. Starting,
-> stopping and resuming agents, verification and merging are all yours.
-> If you have nothing to push or need a human decision: `team standby on --reason "…"` to stand down
-> (you will not be woken again until someone runs `team standby off`).
+> On start (or after a wake-up): `team digest` → `team inbox --ack` → `team resume --dry-run` → `team pulse status`.
+> Bring the pulse up (`team pulse up`) when it is not running and you are not on standby; on standby, leave it alone.
 
-1. **Model the work**: `team doctor`, `init` if needed; break the user's request into milestones in `ROADMAP.md`
-   and write each task as a **self-contained brief** (context / deliverables / boundaries / copy-pasteable
-   acceptance commands / report requirements) — a routine category usually runs a fast model that will not fix
-   vague requests, so the brief carries the whole context.
-2. **Dispatch**: `team dispatch <a> <ID> <taskfile>`. Check `team ps` (memory / model concurrency) first. The
-   brief's `category:` picks the model from `TEAM_TASK_MODELS` (routine for bounded work, analysis for complex
-   planning/judgment, verify for independent adversarial review — the project may use other category names);
-   record the rationale in the brief prose when the choice is not obvious.
-   One long-lived worktree per agent; dispatching again to the same agent resumes its session, use `--fresh` for a
-   new one. The brief's `change:`/`specs:`/`anchor:`/`deltas:` lines are checked **before the window opens**: one
-   change id per task (no override), a change-less brief must declare a resolvable anchor, two unfinished tasks of
-   one change cannot write the same delta file, and a verifier must not be an author of the change — the last three
-   have `--force` + one audit line, the first does not. A refusal names the offending line, the sibling and the fix;
-   `team change status <id>` shows the same facts read-only.
-3. **Wait for notifications**: when a worker's turn ends it appends to `inbox/<agent>.md` and knocks on your
-   window. Do not poll agent screens; read `team inbox --ack` and `team digest`.
-4. **Verify (never skip)**: `team review <ID> --dir <checkout>` — run the gates on a clean, independent checkout
-   and write `reviews/<ID>.md`. **A report is a claim; your verification is the evidence.** Re-read the diff
-   yourself against the brief.
-5. **Land the records, then merge** → `team review <ID> --pre-merge` lists every `docs/team/**` file the
-   task's worktree has **not committed** and exits non-zero while any exist: `git merge --squash` carries only
-   committed content, so an untracked report would silently stay behind and die with the reused worktree (D45 —
-   the same shape happened five times in one day). Commit them yourself with the `Agent: <agent>` trailer (the
-   tool never commits for you). Then run git/forge yourself: squash-merge (with a PR:
-   `gh pr merge --squash --delete-branch <PR>` first, then `git fetch && git merge --ff-only`) →
-   `team board set <ID> done` → `team close <ID>`.
-   **If a late delivery arrives after the merge** (the author lands commits on the branch afterwards), run
-   `team review <ID> --post-merge` before taking anything: records-only → take them with the printed
-   `git checkout <branch> -- …`; code (anything outside `docs/team/**`) → it exits non-zero: re-merge and
-   re-run the gates — the records alone are not enough.
-   **Fail** → `team thread <a> "<failure evidence + expectation>"` + `team say <a> "<one-line instruction>"` (if the target has a live inbox watcher it lands in the durable inbox and wakes the session; with no watcher it is typed straight into the window as one audited immediate attempt, even over a draft — an attempt, not a model receipt).
-6. **Wrap up / report**: update `BOARD.md`, record key decisions in `DECISIONS.md` (with rationale and impact),
-   and report to the user as "delivered + where the evidence is + next step". Users want conclusions and risk,
-   not a command log.
+1. **Model the work**: `team doctor`, `init` if needed; milestones in `ROADMAP.md`, and each task as a **self-contained
+   brief** (context / deliverables / boundaries / copy-pasteable acceptance commands / report requirements) — a
+   routine category usually runs a fast model that will not repair a vague request.
+2. **Dispatch**: `team dispatch <a> <ID> <taskfile>`, after `team ps` (memory / model concurrency). The brief's
+   `category:` picks a new dispatch's model; dispatching again to the same agent resumes its session, and `--fresh` is
+   the explicit new-session route. The `change:`/`specs:`/`anchor:`/`deltas:` header is checked **before the window
+   opens**, and a refusal names the offending line, the sibling and the fix.
+3. **Wait for notifications**: when a worker's turn ends it appends to `inbox/<agent>.md` and knocks on your window.
+   Do not poll agent screens; read `team inbox --ack` and `team digest`.
+4. **Verify (never skip)**: `team review <ID> --dir <checkout>` runs the gates on a clean, independent checkout and
+   writes `reviews/<ID>.md`. **A report is a claim; your verification is the evidence.** Re-read the diff against the
+   brief, and read each finding for what it changed.
+5. **Land the records, then merge**: `team review <ID> --pre-merge` first — it lists every `docs/team/**` file the
+   task's worktree has **not committed**, and a squash carries only committed content (an untracked report dies with
+   the reused worktree). Commit them yourself with the `Agent: <agent>` trailer, then run git yourself: squash-merge
+   (with a PR: merge it, then `fetch && merge --ff-only`) → `team board set <ID> done` → `team close <ID>`. A late
+   delivery after the merge goes through `team review <ID> --post-merge` before you take anything.
+6. **Wrap up / report**: update `BOARD.md`, record decisions in `DECISIONS.md` with rationale and impact, and report to
+   the user as "delivered + where the evidence is + next step".
 
-The only reasons to stop and ask the user: **shared-state changes** (merge/push — the skill expresses
-authorization with `--yes`), scope changes, and decisions that need the user's call (dispatch a research task
-first, then write `DECISIONS.md`).
+Stop and ask the user only for **shared-state changes** (merge/push — the skill expresses authorization with `--yes`),
+scope changes, and decisions that need their call (dispatch a research task first, then write `DECISIONS.md`). Exact
+sequences: [references/workflows.md](references/workflows.md) §§B–F; patrol: protocol §8, workflows §§D/§I; the gate and
+its queue: protocol §9b-2.
 
 ## Specs (OpenSpec)
 
 What the product **must hold** lives in `openspec/specs/<capability>/spec.md` as requirements with falsifiable
-scenarios; teamsmith keeps the **evidence** (briefs, reports, reviews, decisions) in `docs/team/`. Do not grow a
-second spec system: if a promise belongs to the product it goes into a spec, if it is reasoning or guidance it goes
-into `references/`.
+scenarios; teamsmith keeps the **evidence** (briefs, reports, reviews, decisions) in `docs/team/`. Do not grow a second
+spec system: a product promise goes into a spec, reasoning or guidance into `references/`.
 
 A change runs as **five phases, one brief each, one owner each**: `opsx-explore` (an explorer) → `opsx-propose` (the
 same explorer, planning only) → `opsx-apply` (a dev) → `opsx-verify` (a **different** agent) → `opsx-archive` (the
 PM). Two hard rules: **an `apply` brief starts only after the PM's proposal review is ACCEPTED**
 (`docs/team/reviews/<change>-proposal.md`), and **the PM never archives without independent verification and the
-user's confirmation**. **One change : N tasks** — the change is the dispatch unit and the brief's header maps the
-task to it (`team dispatch` refuses more than one `change:` id, a change-less brief without an anchor, two
+user's confirmation**. **One change : N tasks** — the change is the dispatch unit and the brief's header maps the task
+to it (`team dispatch` refuses more than one `change:` id, a change-less brief without a resolvable anchor, two
 unfinished tasks writing one delta file, and a verifier who authored the change; `team change status <id>` reports
-readiness and exits 0 only when every mapped task is finished). `openspec validate --all --strict` is part of
-`TEAM_GATES`; the phase table, the gates and the PM's review checklist are in
-[references/openspec.md](references/openspec.md), the four guards in [references/protocol.md](references/protocol.md) §5b.
+readiness). `openspec validate --all --strict` is part of `TEAM_GATES`. Phase table, gates and the PM's ten-point review
+checklist: [references/openspec.md](references/openspec.md); the four guards: protocol §5b.
 
-## Getting skill updates (three paths)
+## Getting skill updates (loaded text vs. the CLI)
 
-```bash
-bash <skill>/scripts/team mark-loaded      # once per PM session: record the version this session loaded
-bash <skill>/scripts/team version --check  # anytime: disk version vs session version + how to apply
-bash <skill>/scripts/team changelog        # change history (--since v1.8.0 for recent only)
-```
-
-| Content | How it takes effect |
-|---|---|
-| `scripts/**` (CLI) | **Nothing to do**: every call reads from disk |
-| `SKILL.md` / `references/**` / `templates/**` | Type **`/reload`** in Pi (or `/teamsmith-reload`, or let the model call the `reload_skills` tool). **Note**: `/reload` refreshes the skill list/descriptions (system prompt) and extensions; **text already read into the conversation history does not change**, so after reloading you must `read <skill>/SKILL.md` again (the extension sends a follow-up prompt that triggers that re-read) |
-| `extension/team-notify.ts`, `extension/team-bg.ts`, `extension/team-inbox-watch.ts` | **Restart the process** — the launch paths pass the extensions with `pi -e`, and `-e` modules are read at process start (`/reload` hot-reloads only extensions from Pi's auto-discovery locations, `~/.pi/agent/extensions/` and `.pi/extensions/`). PM: `team up`; worker: `team resume <agent>`. `team version --check` fingerprints them |
-| `extension/team.ts` (the `/team` slash command) | **`/reload`** — `team init` installs it into the project's `.pi/extensions/team.ts`, which Pi discovers from the working directory; it is deliberately **not** injected with `-e` (that needs a process restart, and `/reload` is the point) and it is installed only in the main worktree — a worker worktree has no `/team` (seats call the CLI from bash). `team doctor` reports its install state; it is **not** part of the session fingerprint |
-
-Rationale: Pi's `/reload` rediscovers skills, rebuilds the system prompt and re-imports extensions from its
-auto-discovery locations; extensions passed with `-e` (which is how the team launch paths load them) are a
-startup argument, so adding or changing one needs a process restart. When `team version --check` says your
-session is stale, follow the table above.
+`scripts/**` is read from disk on every call, so a CLI change needs nothing. Text is different: `/reload` refreshes the
+skill list/descriptions and extensions, but **text already read into this conversation does not change** — re-read
+`SKILL.md` after reloading (the extension sends a follow-up prompt that triggers that re-read). Extensions passed with
+`-e` are startup arguments, so a changed `team-notify.ts`/`team-bg.ts` needs a process restart (`team up` for the PM,
+`team resume <agent>` for a worker); `/team` is installed in the project's `.pi/extensions/` and follows `/reload` (a
+worker worktree has none). `team mark-loaded` once per session, `team version --check` to see whether the loaded version
+is current, `team changelog` for history. Upgrade and reload steps:
+[references/migration.md](references/migration.md) §6 step 4; why `-e` needs a restart: troubleshooting §22.
 
 ## git and forge: the PM uses the tools; the skill does not wrap them
 
-The skill **does not run** and **does not print recipes for** git/forge operations — that would be wrapping tools
-that already exist. The PM uses `git` and whatever forge tooling fits:
-
-```bash
-# 1) Preparation (one long-lived worktree per agent)
-git -C <root> worktree add -b <branch> <root>/.worktrees/<agent> <protected-branch>
-
-# 2) Before work starts (dispatch only checks, never does it): worktree clean, not on the protected branch
-git -C <root>/.worktrees/<agent> status --short
-
-# 3) Verification (the PM prepares the checkout; the skill only runs gates and writes evidence)
-git -C <root> worktree add --detach /tmp/review-<ID> <branch>
-team review <ID> --dir /tmp/review-<ID> --strong
-
-# 3b) Pre-merge: the branch's worktree may hold records that were never committed (`merge --squash` carries
-#     only committed content — an untracked report stays behind and dies with the reused worktree; D45)
-team review <ID> --pre-merge       # non-zero + per-file fix command while <docs>/** is uncommitted; silent when clean
-
-# 3c) Post-merge: the author may keep committing after the merge (`merge --squash` froze the branch at that
-#     moment — P82's two record-only commits never reached main; D49)
-team review <ID> --post-merge      # records → take them (checkout fix); code → non-zero: re-merge + re-run gates
-
-# 4) Merge (with a PR: merge the PR first, then fast-forward locally; without: squash locally)
-gh pr merge --squash --delete-branch <PR>          # or glab mr merge, or a curl/HTTP call
-git -C <root> fetch origin <protected-branch> && git -C <root> merge --ff-only FETCH_HEAD
-# no PR: git -C <root> merge --squash <branch> && git -C <root> commit -m "<ID>: <title>"
-git -C <root> push origin <protected-branch>
-
-# 5) Wrap up: mark done only after the code really landed on the protected branch
-team board set <ID> done
-```
-
-Forge-agnostic: GitHub via `gh`, GitLab via `glab`/`curl`, Gitea via `tea`, or the web UI — **the PM decides**;
-the skill assumes nothing. Tokens stay in the project's token files (`TEAM_TOKEN_FILE` /
-`TEAM_GITLAB_TOKEN_FILE`) and are injected only when the PM calls a tool: never echoed, never logged.
+The skill **does not run** and **does not print recipes for** git/forge operations — that would wrap tools that already
+exist. The PM uses `git` and whatever forge tooling fits (`gh`, `glab`, `tea`, `curl`, the web UI) and decides the
+route: it prepares the worktree and the independent review checkout, merges, and advances the protected branch only on
+the user's authorization. Tokens stay in the project's token files (`TEAM_TOKEN_FILE` / `TEAM_GITLAB_TOKEN_FILE`) and
+are injected only when the PM calls a real tool (`GH_TOKEN="$(< .gh-pat)" gh …`): never echoed, never logged, never
+committed. Exact preparation, merge and wrap-up steps: [references/workflows.md](references/workflows.md) §F; landed
+state: protocol §8e; the boundary: protocol §8h.
 
 ## Agent adapters (Pi; the seam is internal and frozen)
 
@@ -246,47 +180,30 @@ about them). They stay writable so the seam can be maintained and diagnosed; to 
 - Details: [references/meeting.md](references/meeting.md).
 
 ## Non-negotiable rules (verified during review)
-- **Never claim something passed without having run it.** Reports must include commands and output tails; the PM
+- **Never claim something passed without having run it.** Reports carry the real commands and output tails; the PM
   re-runs independently.
-- **Mark the reply — publication is a standing duty.** Whenever the reply is written for the user — an
-  answer, a status or progress report, a conclusion or a ruling, a delivery or verification summary, a decision you
-  ask the user for, however short, and never held back because it reads like process rather than like a conclusion —
-  write the complete reply (the substance the user needs to read, not a play-by-play) as the normal answer and end it
-  with the final control line `[[team-reply]]` (or `[[team-reply:<short title>]]`); the directed PM extension
-  publishes the sanitized body to the reply page while the answer itself goes out with only that line removed —
-  saved, input error, storage error, busy or unconfirmed never changes what you send (any failure notice is separate
-  from the answer, on stderr, and never stops it). A batch of user-facing replies may be one reply. A reply written
-  to the patrol, to another seat or to another project's PM, and a tool receipt, are not for the user and stay out;
-  when the reader is unclear, ask who the reply is written for and treat an unsettled case as written for the user.
-  An unmarked answer is never published by inference, and `team reply post --from <seat> --title "<short>" --stdin`
-  is the manual publication, backfill and recovery entry only — never post first and repeat the body. A saved
-  receipt means project-local durable publication only: not user delivery, not approval, not read status, not a
-  refreshed console, and it creates no pending work, no outbox/inbox entry and no wake-up. See
-  `references/protocol.md` §4b.
+- **Mark the reply — publication is a standing duty.** Whenever the answer is written for the user — an answer, a status
+  or progress report, a conclusion or a ruling, a delivery or verification summary, a decision you ask the user for,
+  however short — write the complete reply as the normal answer and end it with the final control line `[[team-reply]]`
+  (or `[[team-reply:<short title>]]`); the directed PM extension publishes the sanitized body and the answer goes out
+  with only that line removed. A batch may be one reply; patrol/seat/other-project traffic and tool receipts stay out;
+  a saved receipt is project-local publication, not user delivery, approval or read status. No temp file or heredoc, and
+  no post-then-repeat: `team reply post --from <seat> --title "<short>" --stdin` is the manual publication, backfill
+  and recovery entry only. `references/protocol.md` §4b.
 - Agents only touch directories they own (`OWNERSHIP.md`); cross-directory needs → write `BLOCKED:` in the report.
 - Agents must not push the protected branch, force-push, merge PR/MRs, or rebase/delete other people's branches.
-- Tokens live in project token files (`TEAM_TOKEN_FILE` / `TEAM_GITLAB_TOKEN_FILE`, gitignored) and are injected by
-  the PM when calling real tools (`GH_TOKEN="$(< .gh-pat)" gh …`); **never echoed, never written, never committed**.
-- Operations that change shared state require `--yes` (meaning the user authorized it): `team meeting open/close/agree`, etc.
-  git/forge writes do not go through the skill — the PM executes them (they are shared-state changes too, so they need authorization).
-- One long-lived worktree per agent: **do not move it** (sessions are keyed by cwd; moving loses the agent's memory).
-- Default `TEAM_BRANCH_MODE=task`: **one branch per task** (`task/<ID>-<slug>` cut from the protected branch); the task
-  is the unit of verification, merge and rollback. Set `agent` for one long-lived branch per agent.
-- **The pulse is configured by the PM**: `team pulse up` runs `team monitor` in a `pulse` window **in the
-  same tmux session** and patrols every 15 minutes (configurable) for pending work. `status` / `logs` / `down` are
-  supported. There is exactly one backend (the tmux window) — no container, no systemd: fewer moving parts is more
-  reliable, and if the tmux server dies the PM is gone too, so `team up` rebuilds both.
-  The name: it was called `watchdog` until v1.36.0 — the old command names, the `watchdog` window name and the
-  `TEAM_WATCH_*` variables keep working as aliases/fallbacks until v2.0.0 (`team pulse status` names every legacy
-  variable still in effect; a still-running `watchdog` window is recognized as the backend and `team pulse restart`
-  swaps it for a `pulse` window). The `state/watchdog.*` file names stay unchanged during the alias period —
-  never run two patrols side by side.
-- **The PM does not need to run continuously**: you are only needed when there is work. Patrols default to every
-  15 minutes (`TEAM_PULSE_INTERVAL=900`, 300–3600 recommended): pending work wakes you (if you are not running it
-  starts you with `pi -c`), otherwise it does nothing. **When there is nothing to do or a human is needed,
-  `team standby on --reason "…"` stands you down** — no further wake-ups; backlog still lands in
-  `state/watchdog.log`, and a human runs `team standby off`. Patrols **do not manage tmux layout or agents**;
-  resuming stopped agents is your call via `team resume`.
+- Tokens live in the project's token files and are injected by the PM when calling real tools: **never echoed, never
+  written, never committed**.
+- Operations that change shared state need the user's authorization (`--yes`); git/forge writes do not go through the
+  skill — the PM executes them, and they need authorization too.
+- One long-lived worktree per agent: **do not move it** (sessions are keyed by cwd). Default `TEAM_BRANCH_MODE=task`:
+  one branch per task (`task/<ID>-<slug>`), the unit of verification, merge and rollback.
+- **The pulse is a metronome, not a daemon**: it wakes you only when work is pending and never manages tmux layout,
+  agents or quota — a stopped worker is pending work, not an automatic resume (`team resume` is your call). Nothing to
+  do or a human needed: `team standby on --reason "…"` stands you down until a human runs `team standby off`.
+  Mechanism and boundaries: protocol §8; patrol steps: workflows §§D/§I.
+- **Four separate adoption gates** — changing the project's contract, launching a fresh PM, landing source on a shared
+  branch/skill path, and adopting a shared source: preview the exact command and get authorization per operation.
 
 ## Deeper reading (read on demand, not all at once)
 

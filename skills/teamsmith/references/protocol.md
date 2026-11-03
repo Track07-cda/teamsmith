@@ -346,7 +346,8 @@ one of which hit RAM and zram bottom at the same time):
 
 Why zram is looked at separately: the "free space" of `/dev/zram0` is really compressed pages in RAM, and once full it
 stays essentially full; counting it towards the concurrency budget systematically overestimates the headroom, and when
-an OOM happens RAM and zram bottom out together.
+an OOM happens RAM and zram bottom out together. These are the memory and swap legs only: the temp-root usability rule
+and the temp/worktree byte and inode floors that dispatch also judges are in §9.
 
 ## 7. Security red lines (non-negotiable)
 
@@ -427,10 +428,10 @@ an occupant (`unknown`).
 - Boundaries: it does not manage tmux layout by default (`TEAM_PULSE_REBUILD_TMUX=0`, a lost session/window is only
   reported; with the knob set to 1 it rebuilds the session and the PM window **when it notices they are gone** --
   which cannot help if the tmux *server* died, because the patrol itself lives in a pane of that server). It does
-  **not** leave agents alone, though: a seat that has stopped while its task is unfinished is auto-dispatched back
-  onto the same task (`cmd-watch.sh`'s resume path, one `resume agent=<a> task=<id>` line in `watchdog.log` per
-  attempt). It does not manage model quota and never merges automatically. Runaway protection: the auto-start quota
-  of 5 per hour plus the pulse's own pid lock.
+  **not** resume stopped agents either: a seat that stopped with an unfinished task is reported as pending work and
+  stays untouched until the PM runs `team resume` (the one exception is a human's `team up --agents` rescue, above).
+  It does not manage model quota and never merges automatically. Runaway protection: the auto-start quota of 5 per
+  hour plus the pulse's own pid lock.
 
 Why the boundaries are drawn this narrow: an "everything-managing" daemon would manipulate tmux layout, agent
 lifecycles and model quota at the same time, and when something breaks nobody can tell who corrupted the state;
@@ -668,14 +669,28 @@ otherwise widen the project's authority — and the schema note it renders names
 value rule is what `team config list --json` reports as the key's `warning` when a hand-edited file already
 carries an illegal token, so the read side and the write side can never disagree about what a seat name is.
 
-## 9. Capacity: the floor is that neither RAM nor disk swap bottoms out (zram does not count)
+## 9. Capacity: the floor protects the host, and the refusal names the leg it judged
 
-- There is only one condition for refusing a dispatch: free swap below `TEAM_MIN_FREE_SWAP_MB` (1024MB by default) or
-  RAM+swap below `TEAM_MIN_TOTAL_MB`.
-- Tight RAM (below `TEAM_WARN_AVAIL_MB`) only warns: slowness is acceptable, because slow is not broken; an OOM is the
-  real accident.
-- `team ps` / `team doctor` report from the same data source and add an estimate of "how many more agents fit"
-  (`TEAM_AGENT_MEM_MB`).
+`team dispatch` refuses to start a worker when any leg is below its floor — before a window opens and for `--print` as
+well:
+
+- **RAM**: RAM+swap below `TEAM_MIN_TOTAL_MB` (512MB) or `MemAvailable` below `TEAM_MIN_AVAIL_MB` (1024MB).
+- **Swap**: free **disk** swap below `TEAM_MIN_FREE_SWAP_MB` (1024MB). zram does not count (its pages live in RAM),
+  and zram occupancy above `TEAM_ZRAM_WARN_PCT` is a warning only.
+- **Disk and inodes**: the filesystems the worker will write to — the **resolved** temp root (the path the one
+  resolver returns, named with its `source=tmpdir|config|default`) and the worktree filesystem — need free bytes
+  above `TEAM_TMP_MIN_FREE_MB` (1024MB) and, only where the filesystem reports an inode table, free inodes above
+  `TEAM_TMP_MIN_FREE_INODES` (100000). A temp root that cannot be used (an explicit `TEAM_TMP_ROOT`/`TMPDIR` that is
+  missing, not a directory or not writable) refuses before the numbers are judged and is never silently replaced by
+  another root.
+
+Tight RAM (below `TEAM_WARN_AVAIL_MB`) only warns: slowness is acceptable, because slow is not broken; an OOM is the
+real accident. A figure that cannot be read is not judged and no number is invented for it. Each refusal names
+the path, the resolution source, the measured figures, the threshold crossed and a `修法：` line, and `0` disables one
+leg without disabling the others. Model concurrency is a separate limit (`TEAM_MODEL_LIMITS`, §6). `team ps` / `team
+doctor` report from the same data source, and `team ps` adds the "how many more agents fit" estimate
+(`TEAM_AGENT_MEM_MB`). Thresholds, defaults and the override/fixture seams: [config.md](config.md) §2 ("Guards
+(capacity)").
 
 ## 9b. Tests and gates must have a timeout (non-negotiable)
 
