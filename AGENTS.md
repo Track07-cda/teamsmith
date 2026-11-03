@@ -1,41 +1,41 @@
 <!-- teamsmith:begin -->
 ## Team protocol (teamsmith)
 
-This project runs a team of agents: a **PM (orchestrator)** in tmux `teamsmith:pm` owns tasks and merge
-authority, while **worker agents** implement in parallel inside their own git worktrees.
-Tooling: `bash skills/teamsmith/scripts/team help`.
+A **PM (orchestrator)** in tmux `teamsmith:pm` owns tasks and merge authority; **worker agents**
+implement in parallel inside their own git worktrees. Tooling: `bash /home/yikdata/Documents/syncthing/Work/Projects/pm-skills/skills/teamsmith/scripts/team help`.
+Roster: dev verify dev2 dev3 dev-bob (editable in `.pi/team/config.sh`).
 
-### Roles and boundaries
+**Project rules belong outside this block.** Everything between `<!-- teamsmith:begin -->` and
+`<!-- teamsmith:end -->` is generated and `team init` replaces it on refresh, so a rule written inside is lost at
+the next upgrade: the managed block is not a customization surface. Rules already inside the pair must be
+inventoried and preserved outside first -- the PM's job, recipe in `/home/yikdata/Documents/syncthing/Work/Projects/pm-skills/skills/teamsmith/references/migration.md`.
+
+### Roles and reading order
 
 | Role | Owns | Must not |
 |---|---|---|
 | PM | Briefs / roadmap / decision log, dispatch, independent verification, merging, wrap-up | Treat "the agent says it passed" as evidence |
 | agent:<name> | Exactly the brief, tests and reports, opening PR/MRs | push `main`, force-push, merge PR/MRs, touch other people's directories |
 
-Roster: dev verify dev2 dev3 dev-bob (editable in `.pi/team/config.sh`).
-
-### Reading order (before any agent starts)
-
-1. This file (especially this section)
-2. Your own thread `docs/team/threads/<agent>.md` (the PM may have added instructions)
-3. The task brief `docs/team/tasks/<ID>-<slug>.md` (the single source of scope and acceptance commands)
+Before starting, in this order: this file (especially this section), your own thread
+`docs/team/threads/<agent>.md` (the PM may have added instructions), and the task brief
+`docs/team/tasks/<ID>-<slug>.md` -- the brief is the single source of scope and acceptance commands.
+`docs/team/OWNERSHIP.md` decides whose directory is whose.
 
 ### Specs (OpenSpec)
 
 Specs and change proposals live in `openspec/` -- a **required dependency** (`openspec init --tools none` creates
-the spec root; `openspec init --tools pi` also generates the five phase commands, see
-`skills/teamsmith/references/openspec.md`). Before implementing a change, read its proposal in
-`openspec/changes/<id>/` and the capability spec it touches (`openspec/specs/<capability>/spec.md`; finished changes
-move to `openspec/changes/archive/`). `openspec validate --all --strict` is part of the gate. **Do not create a
-parallel spec system**: no requirement lists, spec copies or design sections in task briefs or docs -- if it must
-hold, it goes into a spec.
+the spec root). Read the change's proposal in `openspec/changes/<id>/` and the capability spec it touches
+(`openspec/specs/<capability>/spec.md`; finished changes move to `openspec/changes/archive/`).
+`openspec validate --all --strict` is part of the gate. **Do not create a parallel spec system**: no requirement
+lists, spec copies or design sections in task briefs or docs -- if it must hold, it goes into a spec.
 
-A change runs as **five phases, one brief and one owner each**: an explorer runs `opsx-explore`, then
-`opsx-propose` (planning only); a dev runs `opsx-apply`; a **different** agent runs `opsx-verify`; the PM runs
-`opsx-archive`. Two hard rules: **no `apply` brief before the PM's proposal review
-(`docs/team/reviews/<change>-proposal.md`) is ACCEPTED**, and no agent verifies its own work; the PM archives
-only after independent verification **and the user's confirmation**. The phase names go in the brief's `phase:`
-line; the full pipeline and its gates are in `skills/teamsmith/references/openspec.md`.
+A change runs as **five phases, one brief and one owner each**: `opsx-explore`, then `opsx-propose` (planning only);
+a dev runs `opsx-apply`; a **different** agent runs `opsx-verify`; the PM runs `opsx-archive`. Two hard rules: **no
+`apply` brief before the PM's proposal review (`docs/team/reviews/<change>-proposal.md`) is ACCEPTED**, and no
+agent verifies its own work; the PM archives only after independent verification **and the user's confirmation**.
+Phase names go in the brief's `phase:` line; flags, phase-command source and pinned-toolchain caveat are in
+`/home/yikdata/Documents/syncthing/Work/Projects/pm-skills/skills/teamsmith/references/openspec.md`.
 
 **The change is the assignment unit** (`1 change : N tasks`, `1 task : 0..1 change`): the brief's header is the
 foreign key — `change:` (exactly one id, or `-`), `specs:`/`anchor:` (a change-less brief must resolve
@@ -45,6 +45,71 @@ opens a window**: more than one `change:` id (no override), an unresolvable anch
 change writing the same delta file, and a `verify` task whose agent authored an `apply` task of that change (the
 last three take `--force` + one audited line). `team change status <id>` shows the tasks/deltas/blockers and exits
 0 only when every mapped task is finished; an `archive` task cannot be set `done` while a sibling is unfinished.
+
+### Non-negotiable discipline
+
+- **Only change directories you own** (`docs/team/OWNERSHIP.md`); for cross-directory work write `BLOCKED:` in
+  the report and hand it back to the PM.
+- **Never stop mid-task to ask for confirmation**: end the turn in exactly three states -- **delivered** (gates run
+  + report written + branch settled), **hard-blocked** (notify the PM + `BLOCKED:` in the report), or
+  **suspended on background jobs** (this session's jobs still running, every step that does not depend on them
+  done; the turn's last line names every awaited job id). The lane rule is the suspend default: `team_bg_run`
+  starts a long job and the turn ends -- the completion wake-up is the normal harvest point -- and in-turn waiting
+  is the bounded exception, only inside the inline-wait budget (about 2 minutes), when the result blocks the next
+  step and nothing else can advance. A previous session's wake-ups died with its process: find its jobs on disk
+  (`state/bg.log`, `team bg list`) before awaiting or re-running them (`/home/yikdata/Documents/syncthing/Work/Projects/pm-skills/skills/teamsmith/references/workflows.md` §E2).
+- **Never claim tests passed without having run them.** The PM re-runs in an independent worktree; a false report
+  fails the task.
+- Never write tokens/secrets into code, config, logs or commit messages; never read credential files
+  (e.g. `~/.pi/agent/auth.json`).
+- **A brief declares one task category; models belong to the project, not to your seat.** The `category:` line
+  selects the model the PM dispatches with (`routine` ordinary bounded work, `analysis` planning/judgment,
+  `verify` independent adversarial review -- or the project's own names). A same-task recovery keeps its committed
+  model/SID: do not re-select, and never treat model strength as a substitute for a self-contained brief.
+  **Independent verification cannot be waived by a strong model.**
+- **Scope, report and disk handover survive a fresh takeover**: keep exactly the brief's scope, commit in small
+  steps, write `docs/team/reports/<ID>-<agent>.md`, and leave the next step and evidence on disk -- a new
+  session (or a verifier) must be able to continue from the files alone, never from your conversation.
+- **A report is read for its answer first, and every sentence carries its evidence**: state what the brief's
+  question resolves to before the account of how you got there. A caution, a limitation or a boundary earns its
+  place by what it cites -- a measurement, a counterexample, a gap in the reasoning, or a boundary you did not
+  observe -- and a sentence that names none is deleted; one that carries its evidence stays. Every finding states
+  what it changed: the implementation, the next step, the conclusion, or nothing; an observation that changed
+  nothing stays out of the body. See `/home/yikdata/Documents/syncthing/Work/Projects/pm-skills/skills/teamsmith/references/protocol.md` §11b.
+- Never push `main`, never `git push --force`, never merge PR/MRs or rebase/delete other branches.
+- Commit in small steps: every verifiable step gets a commit (Conventional Commits + task ID + `Agent: <name>` trailer).
+
+### Delivering
+
+Gates are `openspec validate --all --strict && bash skills/teamsmith/tests/smoke.sh`; a brief may require stricter commands and then the brief wins. One gate at a time -- the full
+suite is the machine's shared resource, and `TEAM_SMOKE_FAST=1` runs a bounded batch. A selected run covers only
+the sections it executed and names the ones it did not run; a full run stays a milestone/delivery check, not a
+claim attached to a selected run. Review queues on the gate lock before its own timeout starts.
+
+Implement in scope, small commits, run the brief's acceptance commands, then write
+`docs/team/reports/<ID>-<agent>.md` with the real commands and output tails (plus flip evidence for a defect
+fix) and settle the branch: a local branch stays local, and a remote push/PR follows only the PM's authorized
+route. The PM verifies in an independent worktree, merges itself, sets the board and closes the task. Messages are
+not deliverables -- evidence lives in `docs/team/reports/`, `docs/team/reviews/` and the commits (recipes:
+`/home/yikdata/Documents/syncthing/Work/Projects/pm-skills/skills/teamsmith/references/workflows.md` §B dispatch, §E verification, §F merge). `docs/team/inbox/<agent>.md`
+and the knock on `teamsmith:pm` happen at turn end automatically. Blocked, or someone else's bug:
+`bash /home/yikdata/Documents/syncthing/Work/Projects/pm-skills/skills/teamsmith/scripts/team notify <agent> "<one line>"` and a report that says `BLOCKED:`.
+
+### The rest of the machine (read on demand)
+
+- New project, first step: `bash /home/yikdata/Documents/syncthing/Work/Projects/pm-skills/skills/teamsmith/scripts/team bootstrap` (idempotent); recipe in
+  `/home/yikdata/Documents/syncthing/Work/Projects/pm-skills/skills/teamsmith/references/workflows.md` §A.
+- The pulse is the PM's metronome, not a daemon: `team pulse up|status|logs|down` every `TEAM_PULSE_INTERVAL`
+  seconds (default 900), waking the PM only when work is pending. It never manages tmux layout, agents or quota,
+  and a stopped worker is pending work for the PM to `resume`, not an automatic dispatch; `team standby on|off` is
+  a human's call. Mechanism: `/home/yikdata/Documents/syncthing/Work/Projects/pm-skills/skills/teamsmith/references/protocol.md` §8; patrol: `references/workflows.md` §D/§I.
+- Capacity floor (`team ps`): neither RAM nor disk swap may bottom out; model quotas are a separate limit
+  (`/home/yikdata/Documents/syncthing/Work/Projects/pm-skills/skills/teamsmith/references/protocol.md` §9).
+- Cross-project meetings are PM-to-PM only: workers do not attend, and no agent touches another project's
+  repository or session (`/home/yikdata/Documents/syncthing/Work/Projects/pm-skills/skills/teamsmith/references/meeting.md`).
+- The ledger is `docs/team/` (`tasks/ reports/ reviews/ threads/ inbox/` and `BOARD·ROADMAP·OWNERSHIP·DECISIONS.md`);
+  seats are `.worktrees/<agent>/` and sessions are keyed by cwd, so keep that directory stable.
+<!-- teamsmith:end -->
 
 ### Code discipline: no non-stick code (user rule, 2026-10-19)
 
@@ -74,126 +139,6 @@ Two rules, both checkable:
 
 The rule is subtractive on purpose: the failure mode is not "too few guards", it is a tool that needs its own team.
 
-### Non-negotiable discipline
-
-- **Only change directories you own** (`docs/team/OWNERSHIP.md`); for cross-directory work write `BLOCKED:` in
-  the report and hand it back to the PM.
-- **Never stop mid-task to ask for confirmation**: end the turn in exactly three states -- **delivered** (gates run
-  + report written + branch settled), **hard-blocked** (notify the PM + `BLOCKED:` in the report), or
-  **suspended on background jobs** (this session's jobs still running, every step independent of them done; its
-  last line names every awaited job id). The lane rule is the suspend default: `team_bg_run` starts a long job and
-  the turn ends -- the completion wake-up is the normal harvest point -- while in-turn waiting is the bounded
-  exception, only inside the inline-wait budget (about 2 minutes), when the result blocks the next step and nothing
-  else can advance.
-- **Never claim tests passed without having run them.** The PM re-runs in an independent worktree; a false report
-  fails the task.
-- Never write tokens/secrets into code, config, logs or commit messages; never read credential files
-  (e.g. `~/.pi/agent/auth.json`).
-- **A brief declares one task category; models belong to the project, not to your seat.** The `category:` line
-  selects the model the PM dispatches with (`routine` for bounded ordinary work, `analysis` for complex
-  planning/judgment, `verify` for independent adversarial review — or the project's own names). A same-task
-  recovery keeps its committed model/SID: do not re-select, and never treat model strength as a substitute for a
-  self-contained brief. **Independent verification cannot be waived by a strong model.**
-- **Scope, report and disk handover survive a fresh takeover**: keep exactly the brief's scope, commit in small
-  steps, write `docs/team/reports/<ID>-<agent>.md`, and leave the next step and evidence on disk — a new session
-  (or a verifier) must be able to continue from the files alone, never from your conversation.
-- **A report is read for its answer first, and every sentence carries its evidence**: state what the brief's
-  question resolves to before the account of how you got there. A caution, a limitation or a boundary earns its
-  place by what it cites — a measurement, a counterexample, a gap in the reasoning, or a boundary you did not
-  observe — and a sentence that names none is deleted; one that carries its evidence stays. Every finding states
-  what it changed: the implementation, the next step, the conclusion, or nothing; an observation that changed
-  nothing stays out of the body. See `skills/teamsmith/references/protocol.md` §11b.
-- Never push `main`, never `git push --force`, never merge PR/MRs or rebase/delete other branches.
-- Commit in small steps: every verifiable step gets a commit (Conventional Commits + task ID + `Agent: <name>` trailer).
-
-### Collaboration loop
-
-```
-PM writes the brief + creates the agent worktree
-      │  team dispatch <agent> <ID> <task-file>
-      ▼
-agent implements in its worktree → small commits → runs gates → writes report → pushes branch → opens PR/MR
-      │  on turn end, automatically: appends docs/team/inbox/<agent>.md + knocks teamsmith:pm
-      ▼
-PM reads the inbox → team review <ID> (independent worktree, runs gates)
-      ▼
-pass → the PM runs git itself (`merge --squash` + commit + push; with a PR, merge the PR first then
-  `fetch && merge --ff-only`) → `team board set <ID> done` → `team close <ID>` → **`git branch -D <branch>`**
-  (a merged branch is deleted at once; the deliverable is the commit on `main`, the branch is only a vehicle)
-fail → team say <agent> "..." with the concrete failure evidence
-```
-
-- Blocked, or found someone else's bug: `bash skills/teamsmith/scripts/team notify <agent> "<one line>"`, and write a
-  PARTIAL report.
-- Gates: `openspec validate --all --strict && bash skills/teamsmith/tests/smoke.sh` (a brief may require stricter commands; the brief wins).
-- One gate at a time: the full suite is the machine's shared resource — `TEAM_SMOKE_FAST=1` inside a batch, the
-  full suite before delivery and review. `team review` queues on the gate lock (`TEAM_SMOKE_LOCK`,
-  `TEAM_SMOKE_LOCK_WAIT`, holder in `<companion>.holder` — the pair is published path + dot-prefixed companion,
-  never unlinked) before its hard timeout starts, so the record shows
-  `queued` and `ran` separately; a queue past the cap is a loud `FAIL` naming the holder, not a `TIMEOUT`. On a
-  busy machine the panel timing lines (2000 ms frame, 1 % CPU — medians of three printed samples) print the
-  measured values and the load and **skip visibly** instead of reporting a red the machine owes; the premise is
-  `loadavg ≤ factor × cores` with `factor` 0.75 in the gate and 0.25 for the cold-start fixture.
-- Messages are not deliverables: the real evidence lives in `docs/team/reports/`, `docs/team/reviews/` and commits.
-
-### Bootstrap (first step in a new project)
-
-```bash
-bash skills/teamsmith/scripts/team bootstrap   # idempotent: config + docs skeleton + worktrees + pulse window + next steps
-```
-
-### Cross-project meetings (PM to PM)
-
-```bash
-bash skills/teamsmith/scripts/team meeting inbox          # meetings waiting for my reply
-bash skills/teamsmith/scripts/team meeting say <slug> --intent proposal "…"
-```
-
-Allowed: interface work, advice with evidence, problem reports, scheduling joint test windows. Not allowed:
-commanding another PM, deciding on their behalf, impersonating a human. Consensus requires both sides to `agree`;
-landing the work always happens in each side's own project. **Workers do not attend** (cross-project traffic is PM-only).
-
-### Periodic patrol (not a heartbeat)
-
-The pulse is a **metronome that wakes the PM**, not a daemon that keeps it alive:
-
-- **The PM owns the pulse**: `team pulse up|status|logs|down` -- by default it runs `team monitor` in a
-  `pulse` window of the same tmux session (team status on top, per-agent activity below, optional) and patrols
-  on an interval. There is exactly one backend (that window) -- no container, no systemd.
-- **Bring it up at session start**: if the pulse is not running and you are not on standby, `team pulse up` is part of
-  the PM's job -- no one else will do it; while `standby on` is set, leave it alone.
-- Every **15 minutes** by default (`TEAM_PULSE_INTERVAL=900`, 300-3600 recommended) it asks "is there work for the
-  PM?": unread notifications / reports awaiting verification / board todo·wip (opt-in) / blocked / agents with
-  unfinished tasks that stopped running.
-- **Pending work** → wake the PM (nudge it if running, start it if not). **Nothing pending** → do nothing at all --
-  the team stays quiet and the PM is not required to be running.
-- If there is nothing to do, or a human is needed, the PM can `team standby on --reason "…"` and stand down; the
-  pulse stops waking it (backlog still lands in `state/watchdog.log`). A human runs `team standby off`.
-- It **does not manage tmux layout or agents** (agents belong to the PM: `team resume`).
-
-```bash
-bash <skill>/scripts/team pulse status        # interval / standby / pending / PM state
-bash <skill>/scripts/team standby on --reason "waiting for the user to pick a stack"
-bash <skill>/scripts/team standby off
-bash <skill>/scripts/team up                  # manual rescue: build the tmux stage + start the PM (agents untouched)
-bash <skill>/scripts/team up --agents         # also resume agents that have tasks but no window
-bash <skill>/scripts/team watch --once        # run a single patrol tick
-```
-
-- The capacity floor is **swap must not be exhausted** (tight RAM only means slowness, not refusal); `team ps` shows headroom.
-
-### Directories
-
-| Path | Owner | Purpose |
-|---|---|---|
-| `docs/team/tasks/` | PM | Task briefs |
-| `docs/team/reports/` | agent (its own file only) | Delivery reports |
-| `docs/team/reviews/` | PM | Independent verification records |
-| `docs/team/threads/` | PM + that agent (append-only) | Decision/clarification messages |
-| `docs/team/inbox/` | generated (gitignored) | Turn-end briefings |
-| `docs/team/{BOARD,ROADMAP,OWNERSHIP,DECISIONS}.md` | PM | Board / milestones / ownership / decisions |
-| `.worktrees/<agent>/` | that agent | Long-lived worktree (sessions are keyed by cwd -- keep it stable) |
-<!-- teamsmith:end -->
 
 ## 项目模型额度切换
 
