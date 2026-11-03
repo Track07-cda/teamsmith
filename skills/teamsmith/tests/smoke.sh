@@ -3108,6 +3108,40 @@ assert_has "$TMP/print.log" "agent:dev" "提示词声明了 agent 身份"
 assert_has "$TMP/print.log" "reports/T1.1-dev.md" "提示词指明报告路径"
 assert_has "$TMP/print.log" "git commit" "提示词要求小步提交"
 
+# P401（instruction-context-slimming · worker 提示）：交付步骤只写真实存在的东西。
+# ① 报告形状指向真实模板 templates/report.md.tmpl（旧文本引用一个并不存在的 "AGENTS.md report template"）
+# ② local 模式下没有远端：提示词不许带无条件的 push 命令或 PR/MR 要求（worker 会照做并失败）；
+# ③ 三种合法收尾都在；缺一种，worker 就会自己发明第四种。
+assert_has "$TMP/print.log" "templates/report.md.tmpl" "交付步骤指向真实报告模板 templates/report.md.tmpl"
+assert_not "$TMP/print.log" "AGENTS.md report template" "不再引用不存在的 AGENTS.md 报告模板"
+assert_has "$TMP/print.log" "local 模式" "local 模式的提示词点名自己的投递路线"
+assert_has "$TMP/print.log" "不要 push" "local 模式明确不要 push"
+assert_has "$TMP/print.log" "不要开 PR/MR" "local 模式明确不要开 PR/MR"
+assert_not "$TMP/print.log" "git push" "local 模式没有无条件 push 步骤"
+assert_not "$TMP/print.log" "PR/MR is open" "local 模式不再声称交付=分支已推+PR 已开"
+assert_has "$TMP/print.log" "**delivered**" "三种收尾：delivered 在场"
+assert_has "$TMP/print.log" "**hard-blocked**" "三种收尾：hard-blocked 在场"
+assert_has "$TMP/print.log" "**suspended on background jobs**" "三种收尾：suspended on background jobs 在场"
+assert_has "$TMP/print.log" "waiting on: <id>" "三种收尾：挂起要在末行点名在等的 job id"
+assert_has "$TMP/print.log" "Your task branch is" "提示词声明任务分支"
+assert_has "$TMP/print.log" "$REPO/.worktrees/dev" "提示词点明自己的工作树"
+assert_has "$TMP/print.log" "OWNERSHIP assigns to you" "提示词把目录归属指向 OWNERSHIP"
+assert_has "$TMP/print.log" "auth.json" "提示词禁止读凭据文件"
+assert_has "$TMP/print.log" "BLOCKED:" "越界/阻塞必须写成 BLOCKED:"
+
+# P401：远端模式（代表性 TEAM_VCS=github）的同一份提示词——投递路线由 PM 决定，不替 PM 承诺 PR。
+env TEAM_VCS=github $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/p401-remote-prompt.log" 2>&1 \
+  && ok "远端模式（TEAM_VCS=github）的 --print 渲染成功" \
+  || bad "远端模式的 --print 渲染失败（见 $TMP/p401-remote-prompt.log）"
+assert_has "$TMP/p401-remote-prompt.log" "按 PM 指定的投递方式" "远端模式把投递方式交给 PM 决定"
+assert_match "$TMP/p401-remote-prompt.log" 'push 到 `[A-Za-z0-9._/-]+`' "远端模式点名要 push 的远端（具体远端名由配置给出）"
+assert_has "$TMP/p401-remote-prompt.log" "开不开 PR/MR" "远端模式的 PR/MR 与否也是 PM 的决定"
+assert_not "$TMP/p401-remote-prompt.log" "local 模式" "远端模式不再渲染 local 的「不向远端收尾」"
+assert_not "$TMP/p401-remote-prompt.log" "git push" "远端模式也没有写死的 push 命令"
+assert_not "$TMP/p401-remote-prompt.log" "PR/MR is open" "远端模式同样不声称 PR 已开"
+assert_has "$TMP/p401-remote-prompt.log" "templates/report.md.tmpl" "远端模式的报告形状同样指向真实模板"
+assert_has "$TMP/p401-remote-prompt.log" "**suspended on background jobs**" "位移投递路线不改变三种收尾"
+
 if [ "$FAST" = "1" ]; then
   fast_skip "6·dispatch 真拉起" "要真实 tmux 窗口 + 假 pi 进程（pi-sleep，sleep 600）"
 elif [ "$HAVE_TMUX" = "1" ]; then
@@ -3149,11 +3183,20 @@ env TEAM_AGENT_CMD="$P237_TPL_NOBG" TEAM_AGENT_BIN=bash $TEAM dispatch dev T1.1 
   || bad "A template without the lane placeholder：无 {bg_ext} 的模板派单 --print 失败（见 $TMP/p237-nolane.log）"
 assert_not "$TMP/p237-nolane.log" "team_bg_run" "A template without the lane placeholder：无 {bg_ext} → 不注入车道段"
 assert_not "$TMP/p237-nolane.log" "inline-wait budget" "A template without the lane placeholder：无 {bg_ext} → 没有内联等待预算段"
+assert_not "$TMP/p237-nolane.log" "team_bg_wait" "A template without the lane placeholder：无 {bg_ext} → 也不教 team_bg_wait（不存在的东西不许发明）"
+# P401：三态不属于车道段——没有车道工具的适配器也拿得到「三种合法收尾」。
+assert_has "$TMP/p237-nolane.log" "**delivered**" "A template without the lane placeholder：无车道也有第一态 delivered"
+assert_has "$TMP/p237-nolane.log" "**hard-blocked**" "A template without the lane placeholder：无车道也有第二态 hard-blocked"
+assert_has "$TMP/p237-nolane.log" "**suspended on background jobs**" "A template without the lane placeholder：无车道也有第三态 suspended on background jobs"
 assert_has "$TMP/p237-nolane.log" "state/bg.log" "The resume guidance points at the on-disk evidence：无车道段的适配器也拿得到盘上证据指引"
 env TEAM_AGENT_CMD="$P237_TPL_BG" TEAM_AGENT_BIN=bash $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/p237-lane.log" 2>&1 \
   && ok "A template without the lane placeholder：带 {bg_ext} 的模板派单 --print 成功" \
   || bad "A template without the lane placeholder：带 {bg_ext} 的模板派单 --print 失败（见 $TMP/p237-lane.log）"
 assert_has "$TMP/p237-lane.log" "team_bg_run" "A template without the lane placeholder：带 {bg_ext} → 车道段出现"
+# P401：车道段的例外判据是三条**同时**成立（缺一条就变成「任何时候都内联等」，正是旧措辞的病）。
+assert_has "$TMP/p237-lane.log" "inline-wait budget (about 2 minutes)" "P401：车道例外带内联等待预算"
+assert_has "$TMP/p237-lane.log" "its result blocks your immediate next step" "P401：车道例外第二条——结果挡住下一步"
+assert_has "$TMP/p237-lane.log" "no other task work can advance meanwhile" "P401：车道例外第三条——没有别的活能干"
 
 # ---------------------------------------------------------------- 6b. 容量守卫矩阵（D2：zram 不当额度）
 section "6b · 容量守卫矩阵（zram / 磁盘 swap 分账）"
@@ -7677,7 +7720,7 @@ fi
 # 哲学与记忆：信条要有落盘位置，PM 提示词要带 credo
 assert_file "$SKILL_DIR/references/philosophy.md" "信条文档存在"
 assert_has "$SKILL_DIR/references/philosophy.md" "Status is a promise" "creed content present (status is a promise)"
-assert_has "$SKILL_DIR/templates/pm-prompt.md.tmpl" "Your creed" "PM prompt carries the creed at the top"
+assert_has "$SKILL_DIR/templates/pm-prompt.md.tmpl" "Your creed" "PM prompt carries the creed (on demand: after the first moves, not a detour before them)"
 assert_has "$SKILL_DIR/SKILL.md" "references/philosophy.md" "SKILL 指向信条文档"
 assert_file "$SKILL_DIR/templates/memory-seed.md.tmpl" "项目记忆种子模板存在"
 # 必需依赖矩阵（D10）：全部用 $TMP 夹具，不读本机真实状态
@@ -8465,6 +8508,9 @@ assert_has "$TMP/print.log" "waiting on: <id>" "The built-in Pi prompt carries t
 assert_has "$TMP/print.log" "end your turn" "The built-in Pi prompt carries the three states：起完默认结束回合"
 assert_has "$TMP/print.log" "$P237_LANE" "The built-in Pi prompt carries the three states：完成叫醒是正常收割点"
 assert_has "$TMP/print.log" "$P237_BUDGET" "The built-in Pi prompt carries the three states：例外三条带内联预算数字"
+# P401：例外的三条要**同时**成立；只留给预算数字，读到的人就会把「等一下子」当成默认。
+assert_has "$TMP/print.log" "its result blocks your immediate next step" "P401：车道例外第二条（结果挡住下一步）也在提示词里"
+assert_has "$TMP/print.log" "no other task work can advance meanwhile" "P401：车道例外第三条（没有别的活能干）也在提示词里"
 # 阻塞那条的示例必须点名通知 PM，不能是席位自己（否则按它照做的工人会通知自己、PM 静默收不到）
 assert_has "$TMP/print.log" 'notify pm "<one line>"' "The built-in Pi prompt carries the three states：hard-blocked 示例点名通知 PM"
 
@@ -8474,7 +8520,7 @@ assert_has "$TMP/print.log" "team bg list" "The resume guidance points at the on
 
 # 场景 3（一份合同跨面）：四个面向同一组三态、同一条车道规则（同一个预算数字），零退休措辞；
 # PM 模板是参照措辞 —— 既有规则行仍在，且没被写成别的口径（其余面缺第三态即在这里红）。
-P237_SURFACES=("worker prompt:$TMP/print.log" "AGENTS template:$P237_TMPL" "protocol.md:$P237_PROTO" "workflows.md §E2:$P237_WF")
+P237_SURFACES=("worker prompt:$TMP/print.log" "AGENTS template:$P237_TMPL" "PM prompt template:$P237_PMP" "protocol.md:$P237_PROTO" "workflows.md §E2:$P237_WF")
 for P237_PAIR in "${P237_SURFACES[@]}"; do
   P237_SURFACE="${P237_PAIR%%:*}"; P237_FILE="${P237_PAIR#*:}"
   p237_has "$P237_SURFACE" "$P237_FILE" "$P237_LANE" "车道默认（完成叫醒是正常收割点）"

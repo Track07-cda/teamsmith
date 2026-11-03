@@ -88,12 +88,14 @@ team_build_prompt() { # <agent> <ID> <taskfile-abs> <worktree> <model> [<session
   grep -qE '^[[:space:]]*issue:' "$taskfile" 2>/dev/null && \
     issue="$(grep -E '^[[:space:]]*issue:' "$taskfile" | head -1 | grep -oE '[0-9]+' | head -1 || true)"
 
-  # 交付步骤与 forge 无关：skill 不假设任何 forge CLI（gh/glab/tea/curl 都行，由 PM 决定）
+  # 交付步骤与 forge 无关：skill 不假设任何 forge CLI（gh/glab/tea/curl 都行，由 PM 决定）。
+  # local 模式**没有远端**：不许写一条无条件的 push/PR 步骤（那是假指令，worker 会照做并失败）；
+  # 远端模式的投递方式由 PM 指定，prompt 只说「按 PM 的方式」，不替 PM 承诺 PR。
   local pr_step
   case "$TEAM_VCS" in
-    local|"") pr_step="本仓库是 local 模式（没有远端）：**不用 push**，把分支留在本地即可，PM 复验后本地合并" ;;
-    *)        pr_step="交付方式由 PM 决定：把分支 push 到你们的远端（如有），开 PR/MR 与否听 PM 安排
-     （skill 不代做、也不假设 gh/glab；需要你手动调 API 时按 PM 给的方式做，token 不要读进上下文）" ;;
+    local|"") pr_step="**不向远端收尾**：本仓库是 local 模式（没有远端）-- 不要 push、不要开 PR/MR，把工作提交在你的任务分支上即可，PM 复验后本地合并" ;;
+    *)        pr_step="按 PM 指定的投递方式：push 到 \`$TEAM_REMOTE\`（PM 另有指定的远端就按 PM 的），开不开 PR/MR、用哪个 forge 工具都由 PM 决定
+     （skill 不代做、也不假设 gh/glab；要你手动调 API 时按 PM 给的方式做，token 不要读进上下文）" ;;
   esac
 
   # 通知段（F1/F7/F8）：worker 的摘要是**数据**，永远走文件通道 —— 提示词里不含任何 worker 文本，
@@ -141,8 +143,7 @@ Read these first, in order:
 3. The task brief \`$taskfile\`$rel_note -- the single source of scope and acceptance commands
 
 Scope discipline: do only what the brief says, and only change directories that OWNERSHIP assigns to you.
-For cross-directory work, do not do it yourself: write \`BLOCKED:\` in your report naming who should change what,
-then end the turn.
+For cross-directory work, do not do it yourself: write \`BLOCKED:\` naming who should change what, then end the turn.
 
 Red lines: never push $TEAM_PROTECTED_BRANCH, never force-push, never merge PR/MRs, never rebase or delete other
 branches, never change repository settings. Never write tokens/secrets into code, logs or commit messages; never
@@ -156,27 +157,25 @@ needs to do what -- **cross-project communication is the PM's job via \`$cli mee
 advice, problem reports); workers do not attend**. Only decisions that need the user's call go through the user.
 
 **Never stop mid-task to ask for confirmation**: end the turn in exactly three situations --
-(a) **delivered**: every acceptance command in the brief has been run + the report is written + the branch is pushed + the PR/MR is
-    open (or, in local mode, the branch state is settled);
+(a) **delivered**: every acceptance command in the brief has been run + the report is written + the branch is settled
+    (local: the commits stay on your task branch, nothing is pushed; remote: delivery as the PM directed, with any
+    PR/MR the PM asked for);
 (b) **hard-blocked** (missing dependency, missing permission, someone else's bug): notify the PM with
     \`$cli notify pm "<one line>"\`, state \`BLOCKED:\` clearly in the report, then end the turn;
 (c) **suspended on background jobs**: jobs this session started are still running and every step that does not depend
-    on their results is done. A suspension is neither a delivery nor a blockage -- do not write the report's final
-    verdict and do not notify \`BLOCKED:\` for it; end the turn with its **last line** naming every job you are
-    waiting on (\`waiting on: <id>[, <id>…]\`), so the PM can see the ending was deliberate.
+    on their results is done. A suspension is neither a delivery nor a blockage: do not write the report's final
+    verdict or notify \`BLOCKED:\`; end the turn with its **last line** naming every awaited job
+    (\`waiting on: <id>[, <id>…]\`), so the PM can see the ending was deliberate.
     **Never work around a boundary on your own.**
 
 Delivery process:
 1. Actually run the acceptance commands from the brief. **Never claim something passed without running it** (the PM
    re-verifies independently; a false report fails the task).
 2. Commit every verifiable small step (\`git commit\`, Conventional Commits + task ID + trailer \`Agent: $agent\`${issue:+ + \`Refs #$issue\`}); never one big dump at the end.
-3. Write the report \`$rel_report\` and commit it on your branch (format: the AGENTS.md report template; include the
-   real commands and their output tails).
-   For **defect-fix** tasks the report must contain **flip evidence**: red before -> green after, or
-   "break the implementation -> the guard test must fail -> restore it"
-   (the PM checks this section with \`$cli review $id --strong\` and will send it back if missing).
-4. \`git push -u $TEAM_REMOTE HEAD\`.
-5. $pr_step.
+3. Write the report \`$rel_report\` and commit it on your branch, following \`$TEAM_SKILL_DIR/templates/report.md.tmpl\`
+   (deliverables, the real command/output tails, the ledger-ban line, and flip evidence for a defect fix): the PM
+   reads it as evidence, not as intentions.
+4. Settle the branch: $pr_step
 
 Task: **$id**${issue:+ (issue #$issue)}. The brief \`$taskfile\` is the PM's read-only file -- do not modify it.${bg_block}${notify_block}
 If this is a resumed run: start with \`git status\` / \`git log --oneline -5\` to see how far you got, and continue
