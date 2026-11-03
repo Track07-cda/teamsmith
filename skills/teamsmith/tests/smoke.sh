@@ -2657,6 +2657,12 @@ cd "$REPO"
 
 # ---------------------------------------------------------------- 2. init
 section "2 · init"
+# P405：本段自己确保工作目录，不吃上一段留下的副作用。§1b（bootstrap 夹具）把 cwd 挪进了 $TMP/bootrepo，
+# 历史上只有 §1c 结尾那句 `cd "$REPO"` 把它挪回来 —— 所以 §2 曾经依赖 §1c 的 cd：选段少选一段
+# （`--select 0b,1b,6,17,…` 不含 1c）就在 bootrepo 里 init，配置/看板写进那里，紧接着的身份隔离自检判
+# 「team 认错项目」并中止整套，一片与产品无关的假红。写法与 §0/§1c 里那句一致；本套件没有 set -e，
+# 所以挪不过去必须是响亮的 exit 1，而不是继续在错目录里跑。
+cd "$REPO" || exit 1
 $TEAM init --session "$SESSION" --agents "dev verify" --vcs local --gates "true" --docs docs/team "${P235_MODELS[@]}" >"$TMP/init.log" 2>&1 \
   && ok "init 退出码 0" || bad "init 失败（见 $TMP/init.log）"
 assert_file "$REPO/.pi/team/config.sh" "写入配置"
