@@ -646,7 +646,8 @@
 | P402 | init 渲染受管块要用契约值 | dev | - | - | done |
 | V123 | 指令瘦身第二片独立复验 | dev | - | - | done |
 | V124 | P402 独立复验 | dev | - | - | done |
-| P403 | 指令瘦身 Apply 第三片：SKILL 与参考手册 | dev | - | - | wip |
+| P403 | 指令瘦身 Apply 第三片：SKILL 与参考手册 | dev | - | - | done |
+| V125 | 指令瘦身第三片独立复验 | dev | - | - | done |
 
 ## 当前里程碑
 
