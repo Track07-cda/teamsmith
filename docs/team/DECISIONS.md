@@ -2107,3 +2107,12 @@ P383 内容已合（a71b3499），但门禁红在**夹具假红**：`key-replies
 
 另记一条 PM 自己的操作缺陷：`cmd | tail` 会吞掉退出码，曾让一条红在门禁里被读成过得去；此后跑门禁一律先捕 rc 再看输出。
 
+### D224 · clinepass 额度耗尽，按 D219 切到 opencode-go（2026-11-03）
+
+2026-11-03T01:43Z，dev2 的 P401 三次重试后报 `429 INFERENCE_CAP_ERROR: You have reached your monthly Clinepass limit. The limit resets in 11d`。这正是用户 2026-10-30 预先授权的情形（D219），因此不再请示，直接执行：
+
+1. 四个任务类别 `code/verify/analysis/infra` 由 `clinepass/cline-pass/deepseek-v4.1-flash-1017:max` 改为 `opencode-go/deepseek-v4.1-flash:max`，经 `team config set-task-model` 写入（审计在案）；`docs` 类别（kimi）与 PM 模型（`kimi-coding/k3.1-pro:max`）未动。
+2. P401 换到新分支 `task/P401-instruction-apply-2-v2`（原 `-2` 分支只有我自己写进主检出后同步过去的任务书、无实现），显式 `--model opencode-go/deepseek-v4.1-flash:max` + `--fresh` 新 SID；分支、任务书与证据保留。
+
+边界：clinepass 恢复后是否切回，由用户定；自动 fallback 未实现，仍按 D219 的"明确失败→人工/PM 切换"。配置改动前已备份 `.pi/team/config.sh` 到 `/var/tmp/config.before-clinepass-exhaustion.sh`。
+
