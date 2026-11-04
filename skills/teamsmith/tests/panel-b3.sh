@@ -152,6 +152,20 @@ wait_file_has() { # <file> <needle> <label>
   return 1
 }
 
+# 等某个窗口名从会话里消失（命令自己跑完，tmux 关窗）：30 轮 × 0.5s = 15s。
+# P412：collapse 的辅助窗口 `cmd` 命令末尾有 `sleep 1`；它的存在与否会改变 `list-windows | wc -l` 的读数。
+wait_window_gone() { # <window> <label>
+  local win="$1" label="$2" i=1
+  while [ "$i" -le 30 ]; do
+    tmux -L "$sock" list-windows -t "$sess" -F '#{window_name}' 2>/dev/null | grep -qx -- "$win" || return 0
+    sleep 0.5
+    i=$((i + 1))
+  done
+  printf '  \033[33m·\033[0m 等待超时：%s（窗口 %s 还在；当前窗口表：%s）\n' \
+    "$label" "$win" "$(tmux -L "$sock" list-windows -t "$sess" -F '#{window_name}' 2>/dev/null | tr '\n' ',')" >&2
+  return 1
+}
+
 # 等窗格里的进程参数命中 <needle>（q 收起后窗口里应换成 --headless 巡检循环）：30 轮 × 0.5s = 15s。
 wait_pane_args() { # <pane> <needle> <label>
   local pane="$1" needle="$2" label="$3" i=1 pid args
@@ -930,15 +944,30 @@ scn_collapse() {
   else
     b3_wait_verdict $? "pulse 窗口里是控制台" "pulse 窗口里没等到（超过等待上限）控制台"
   fi
-  # 计数放在控制台起来之后：`cmd` 辅助窗口的命令末尾有 `sleep 1`，它自己退掉后剩下的才是后端窗口。
-  local wins_before; wins_before="$(tmux -L "$sock" list-windows -t "$sess" | wc -l | tr -d ' ')"
+  # 计数前先等辅助窗口 cmd 自己退掉：它的命令末尾有 `sleep 1`。P412 实测（2026-11-04 的快机）：控制台
+  # 出首帧比它快，于是 wins_before 数到 [bootstrap,cmd,pulse] = 3；等到 q 收起 + wait_pane_args 之后 cmd
+  # 已退，wins_after = 2，断言假红「期望 [3]，实际 [2]」（轮询实测窗口表：bootstrap → bootstrap,cmd →
+  # bootstrap,cmd,pulse → bootstrap,pulse）。慢机上反而绿——读数时点压在竞态上。这条等待把读数钉在
+  # 「只剩后端窗口」上，断言本身（q 收起不增删窗口）不变。
+  wait_window_gone cmd "collapse：辅助窗口 cmd 自己退掉" \
+    || bad "collapse：辅助窗口 cmd 没退掉（窗计数会把辅助窗口算进后端）"
+  local wins_before wins_names_before
+  wins_before="$(tmux -L "$sock" list-windows -t "$sess" | wc -l | tr -d ' ')"
+  wins_names_before="$(tmux -L "$sock" list-windows -t "$sess" -F '#{window_name}' 2>/dev/null | tr '\n' ',')"
   # q collapses: same window, a headless tick loop, capacity.log keeps gaining lines.
   tmux -L "$sock" send-keys -t "$sess:pulse" q
   # P68：等窗口里的进程真的换成 --headless 巡检循环（原来是 sleep 3 后单次看 ps）。
   wait_pane_args "pulse" "--headless" "q 收起后的无界面巡检" \
     || bad "q 收起后窗口里的进程不是 --headless"
-  local wins_after; wins_after="$(tmux -L "$sock" list-windows -t "$sess" | wc -l | tr -d ' ')"
-  assert_eq "收前后窗口数不变（一个后端、一个窗口）" "$wins_after" "$wins_before"
+  local wins_after wins_names_after
+  wins_after="$(tmux -L "$sock" list-windows -t "$sess" | wc -l | tr -d ' ')"
+  wins_names_after="$(tmux -L "$sock" list-windows -t "$sess" -F '#{window_name}' 2>/dev/null | tr '\n' ',')"
+  # 失败时把两张窗口表都写进结果行：下一次真走到这条红的人不必再轮询一次才知道差的是哪个窗口。
+  if [ "$wins_after" = "$wins_before" ]; then
+    ok "收前后窗口数不变（一个后端、一个窗口；窗口表 ${wins_names_before}）"
+  else
+    bad "收前后窗口数不变（一个后端、一个窗口）（期望 [$wins_before:${wins_names_before}]，实际 [$wins_after:${wins_names_after}]）"
+  fi
   local pane_pid args
   pane_pid="$(tmux -L "$sock" list-panes -t "$sess:pulse" -F '#{pane_pid}' | head -1)"
   args="$(ps -o args= -p "$pane_pid" 2>/dev/null || true)"

@@ -6,6 +6,7 @@
 # 范围：tests/*.sh + tests/lib/*.sh 的**自身** while+sleep 循环；heredoc/字符串里拼出来的
 # 脚本（如 container-tmux.sh 写进容器的 inner 脚本、嵌入的 python/awk）不在扫描面内。
 panel-b3.sh	144	cap="$i" -le "${B3_FILE_ITERS:-600}"	  while [ "$i" -le "${B3_FILE_ITERS:-600}" ]; do
+panel-b3.sh	159	cap="$i" -le 30	  while [ "$i" -le 30 ]; do
 panel-b3.sh	158	cap="$i" -le "${B3_ARGS_ITERS:-600}"	  while [ "$i" -le "${B3_ARGS_ITERS:-600}" ]; do
 panel-b3.sh	173	cap="$i" -le "${B3_CAP_ITERS:-600}"	  while [ "$i" -le "${B3_CAP_ITERS:-600}" ]; do
 panel-cpu.sh	248	bound=sub_end 计算出的截止时间（到点自己退出）	  while :; do

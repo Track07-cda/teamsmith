@@ -916,7 +916,8 @@ if [ -n "$SMOKE_INVOKE_ROOT" ]; then
 fi
 
 # 「真实账本」的夹具痕迹扫描（M7.2 纪律）——所有隔离断言共用同一口径：
-#   扫 <root>/docs/team/inbox 与 <root>/.pi/team/state，排**三条流量记录**（按确切路径）与**一处取样范围**（按前缀）。
+#   扫 <root>/docs/team/inbox 与 <root>/.pi/team/state，排**三条流量记录**（按确切路径）与**两处取样范围**
+#   （按前缀：release-*/** 与 meta-suite/**）。
 # 排除之一：.pi/team/state/bg/**（M30 实测）——team_bg_run 把后台作业的 stdout 存进 state/bg/<id>.log，
 # 门禁自己的 stdout（含各段夹具的名字）就在里面 —— 不排它，下一次门禁的 M16/M98 隔离断言会把「按提示词
 # 把门禁放后台跑」判成夹具泄漏（假红：同一棵树、同一套断言，只因上一次的作业日志还在）。
@@ -940,6 +941,17 @@ fi
 # `release-scan-current.log` 这类同前缀的**文件**（不在 release-* 目录里）也照旧算账本。
 # 残余风险点名：真有夹具往 `release-*/` 里写东西，这条判据不会再抓它——由评审与发布复核兜（发布证据目录
 # 里只该出现发布复核自己写下的日志）。
+# 排除之五（P412）：`.pi/team/state/meta-suite/**` —— **元套件自己的运行记录**。tests/meta-suite.sh（P410）
+# 每跑一次就往 `<项目根>/.pi/team/state/meta-suite/<时间>.log` 落一份门禁日志（项目根取 git-common-dir 的主
+# 检出，所以从 worktree 跑也落在主检出）。这份文件整份就是**门禁自己的 stdout**：各段夹具的会话名
+# （`teamsmith-smoke-<pid>`）与断言消息里的夹具代号（P10Z / M16A / M98G）按定义就在里面。它和 release-*/**
+# 是同一种东西——「**关于**一次夹具运行的日志」，不是「夹具自己写进账本的东西」——所以同样收窄**取样范围**，
+# 不加内容匹配。P411 已在「主项目易变写入者」清单里按名字登记过同一个目录，两处口径一致。
+# 这条也按**前缀**豁免，而且前缀带结尾的 `/`：只有 `state/meta-suite/` 目录**下面**的文件被跳过；
+# `state/meta-suite.log`（同前缀的普通账本文件）与 `state/nested/meta-suite/x.log`（前缀没锚上）仍被点名
+# （M16 的边界腿钉住）。
+# 残余风险点名：真往 `meta-suite/` 里写夹具痕迹，这条判据不会再抓它——由「那个目录里只该有元套件记录」
+# 这条评审纪律兜（与 release-*/ 的先例同形）。
 real_ledger_hits() { # <grep -E 模式> <root> → 命中的文件（排序去重）
   local pats="$1" root="${2%/}" d
   { for d in "$root/docs/team/inbox" "$root/.pi/team/state"; do
@@ -949,14 +961,16 @@ real_ledger_hits() { # <grep -E 模式> <root> → 命中的文件（排序去�
     | awk -v audit="$root/.pi/team/state/tmux-calls.log" \
           -v forensics="$root/.pi/team/state/tmux-calls.log.forensics" \
           -v jobs="$root/.pi/team/state/bg/" \
-          -v releases="$root/.pi/team/state/release-" '
+          -v releases="$root/.pi/team/state/release-" \
+          -v metasuite="$root/.pi/team/state/meta-suite/" '
         # P342：发布证据目录 <root>/.pi/team/state/release-<名字>/ —— 前缀命中且**目录名后面还有路径分量**
         # （即它确实是那个目录下的文件；同前缀的文件名 release-scan-current.log 不算）。
         function in_release_dir(p) {
           if (index(p, releases) != 1) return 0
           return index(substr(p, length(releases) + 1), "/") > 0
         }
-        $0 != audit && $0 != forensics && index($0, jobs) != 1 && !in_release_dir($0)' \
+        $0 != audit && $0 != forensics && index($0, jobs) != 1 && !in_release_dir($0) \
+          && index($0, metasuite) != 1' \
     | sort -u || true
 }
 
@@ -12561,10 +12575,10 @@ mkdir -p "$P10_SESSDIR"
 P10_START="$(date -u -d '-1 hour 5 minutes' +%Y-%m-%dT%H:%M:%S.000Z 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%S.000Z)"
 {
   printf '{"type":"session","cwd":"%s","timestamp":"%s"}\n' "$P10WT" "$P10_START"
-  printf '{"type":"message","timestamp":"%s","message":{"role":"assistant","content":[{"type":"text","text":"wrote the report"}]}}\n' "$P10_START"
+  printf '{"type":"message","timestamp":"%s","message":{"role":"assistant","content":[{"type":"text","text":"P10Z-LEAK"}]}}\n' "$P10_START"
 } > "$P10_SESSDIR/2026-01-01T00-00-00-000Z_$P10SESS-dev.jsonl"
 P10_AGENTLOG="$TMP/p10-agentlog-dev.log"
-printf 'first line\nwrote the report\n' > "$P10_AGENTLOG"
+printf 'first line\nP10Z-LEAK\n' > "$P10_AGENTLOG"
 
 # 假 tmux：pulse 会话里只有 dev 窗口（没有 pm 窗口 → PM absent）；只服务 headless 夹具
 P10_SHIM="$TMP/p10-shim"; mkdir -p "$P10_SHIM"
@@ -12614,7 +12628,12 @@ else
   bad "26-l 隔离：team paths 不是沙盒"
 fi
 P10_LEAK_SCAN() { # <根…> → 命中行
-  local pats="P10 夹具阻塞行|P10Z|wrote the report|$P10SESS"
+  # 词表只放**不可能自然出现的串**（P412）：每条要么是夹具专用中文串，要么带夹具前缀（P10Z / 会话名）。
+  # 曾经的 `wrote the report` 是一句普通英文：真实账本里必然出现（那是 2026-11-03 一条 auto·suspended
+  # 投递消息的正文，落在 docs/team/inbox/dev2.md:228 与 state/notify.log）—— 双语项目里拿这种短语当标记，
+  # 只会把真人写下的交付消息判成泄漏。夹具自己的活动文本（会话 JSONL 与 agent 日志）因此改成 `P10Z-LEAK`：
+  # 它由 `P10Z` 这个夹具代号前缀住，不可能在真实账本里自然出现。
+  local pats="P10 夹具阻塞行|P10Z|$P10SESS"
   local r
   for r in "$@"; do
     [ -n "$r" ] && [ -d "$r" ] || continue
@@ -12627,6 +12646,23 @@ P10_NEG="$TMP/p10-neg"; mkdir -p "$P10_NEG/docs/team/inbox"
 printf 'P10 夹具阻塞行\n' > "$P10_NEG/docs/team/inbox/leak.md"
 if [ -n "$(P10_LEAK_SCAN "$P10_NEG")" ]; then ok "26-l 隔离守卫自检：故意泄漏会被抓到（负对照）"
 else bad "26-l 隔离守卫自检：故意泄漏没被抓到（这条隔离断言是空的）"; fi
+# 反向对照（P412）：词表里只许有「不可能自然出现的串」。把**一句普通英文**放进同一个形状的假真项目——
+# 真实世界里这种句子必然出现（本仓 docs/team/inbox/dev2.md:228 就是一句 "… because I wrote the report
+# while it ran"，一条 auto·suspended 投递消息）——它**不许**被点名；同一根里再栽一条真标记，同一个扫描
+# 必须抓到（证明「不点名」不是因为扫描空转）。红侧：把 `wrote the report` 写回词表，第一条必变红。
+P10_NEG_EN="$TMP/p10-neg-en"; rm -rf "$P10_NEG_EN"
+mkdir -p "$P10_NEG_EN/docs/team/inbox" "$P10_NEG_EN/.pi/team/state"
+printf 'The first attempt was invalidated because I wrote the report while it ran.\n' \
+  > "$P10_NEG_EN/docs/team/inbox/plain.md"
+printf 'The first attempt was invalidated because I wrote the report while it ran.\n' \
+  > "$P10_NEG_EN/.pi/team/state/notify.log"
+assert_eq "26-l 隔离守卫自检：普通英文（含 wrote the report）不算标记，不许点名" \
+  "$(P10_LEAK_SCAN "$P10_NEG_EN" | wc -l | tr -d ' ')" "0"
+printf 'P10Z-LEAK\n' > "$P10_NEG_EN/docs/team/inbox/leak.md"
+assert_eq "26-l 隔离守卫自检：同一根里栽真标记仍被抓到（反向对照不是空转）" \
+  "$(P10_LEAK_SCAN "$P10_NEG_EN" | grep -c 'inbox/leak\.md' || true)" "1"
+assert_eq "26-l 隔离守卫自检：反向对照根恰一条命中（普通英文那两条腿仍静默）" \
+  "$(P10_LEAK_SCAN "$P10_NEG_EN" | wc -l | tr -d ' ')" "1"
 
 # ---------------------------------------------------------------- 26-a. bundle（单文件 + 无安装）
 P10_COPY="$TMP/p10-copy"
@@ -12905,14 +12941,14 @@ p10m $TEAM monitor --print >"$TMP/p10-act.txt" 2>/dev/null
 p10m $TEAM monitor --print --no-activity >"$TMP/p10-act-off.txt" 2>/dev/null
 p10m $TEAM monitor --json --no-activity >"$TMP/p10-act-off.json" 2>/dev/null
 p10_frame_ok "$TMP/p10-act-off.txt" "26-h 夹具：--no-activity 帧非空"
-assert_has "$TMP/p10-act.txt" "wrote the report" "26-h 活动列：默认就有（夹具事件出现在帧里）"
-assert_not "$TMP/p10-act-off.txt" "wrote the report" "26-h 活动列：--no-activity 去掉事件"
+assert_has "$TMP/p10-act.txt" "P10Z-LEAK" "26-h 活动列：默认就有（夹具事件出现在帧里）"
+assert_not "$TMP/p10-act-off.txt" "P10Z-LEAK" "26-h 活动列：--no-activity 去掉事件"
 p10_check "$TMP/p10-act-off.json" 'd["activity"] == []' "26-h 活动列：--no-activity 的 --json activity 为空"
 p10m env TEAM_MONITOR_ACTIVITY=0 $TEAM monitor --print >"$TMP/p10-act-env0.txt" 2>/dev/null
 p10_frame_ok "$TMP/p10-act-env0.txt" "26-h 夹具：TEAM_MONITOR_ACTIVITY=0 帧非空"
-assert_not "$TMP/p10-act-env0.txt" "wrote the report" "26-h 活动列：TEAM_MONITOR_ACTIVITY=0 恢复旧布局"
+assert_not "$TMP/p10-act-env0.txt" "P10Z-LEAK" "26-h 活动列：TEAM_MONITOR_ACTIVITY=0 恢复旧布局"
 p10m env TEAM_MONITOR_ACTIVITY=0 $TEAM monitor --print --activity >"$TMP/p10-act-env0-flag.txt" 2>/dev/null
-assert_has "$TMP/p10-act-env0-flag.txt" "wrote the report" "26-h 活动列：--activity 反向覆盖 key"
+assert_has "$TMP/p10-act-env0-flag.txt" "P10Z-LEAK" "26-h 活动列：--activity 反向覆盖 key"
 # 一帧只读一次数据（不是忙轮询）：运行时换成会记日志的包装器 → 一帧至多两行（面板 + 一次数据读）
 P10_JSWRAP="$TMP/p10-js-wrap"; mkdir -p "$P10_JSWRAP"
 P10_REAL_NODE="$(command -v node || echo /usr/bin/node)"
@@ -15404,6 +15440,36 @@ assert_eq "M16 隔离对照·P342：普通账本 plain.log 仍被点名（豁免
 assert_eq "M16 隔离对照·P342：release-* 边界腿恰三条命中（只有发布证据目录那一条静默）" \
   "$(printf '%s\n' "$M16_SCOPE_HITS" | wc -l | tr -d ' ')" "3"
 rm -rf "$M16_SCOPE"
+# P412：**元套件记录目录豁免的边界**（`.pi/team/state/meta-suite/**`，与 P342 的 release-*/** 同一种取样范围）。
+# 事故现场（2026-11-04 13:30 那次全量）：12b-j / 26-l / M16 三条隔离断言同时点名
+# `.pi/team/state/meta-suite/<时间>.log` —— 那份文件是元套件正在写的门禁 stdout，各段夹具的会话名与代号
+# 按定义就在里面（实测：`teamsmith-smoke-<pid>` 1 行、`M16[.A-E]` 6 行、`M98[.A-G]` 4 行、`P10Z` 1 行）。
+# 收窄取样之后，这里用同一个扫描器、一个合成根钉住它的四条边：
+#   ① 目录里的记录 meta-suite/<时间>.log 不命中；
+#   ② 同前缀的普通账本文件 state/meta-suite.log 必须被点名（前缀带结尾的 `/`，不是「含 meta-suite」；
+#      这正是 P342 那条边界腿的同形检查：豁免一旦放宽成子串匹配，②变红）；
+#   ③ 前缀没锚上的 nested/meta-suite/a.log 必须被点名；
+#   ④ 普通账本 plain.log 仍被点名（豁免没有把判断关掉）。
+# 红侧：删掉 real_ledger_hits 里的 meta-suite 前缀 → ① 与「恰三条」变红；把前缀改成不带 `/` 的
+# `meta-suite` → ② 变红。
+M16_MS="$TMP/m16-metasuite-probe"; rm -rf "$M16_MS"
+mkdir -p "$M16_MS/.pi/team/state/meta-suite" "$M16_MS/.pi/team/state/nested/meta-suite"
+for m16_f in "state/meta-suite/2026-11-04T13-30-26Z.log" "state/meta-suite.log" \
+             "state/nested/meta-suite/a.log" "state/plain.log"; do
+  printf 'M16A phantom\n' > "$M16_MS/.pi/team/$m16_f"
+done
+M16_MS_HITS="$(real_ledger_hits 'M16[.A-E]|nomatch-ses' "$M16_MS")"
+assert_eq "M16 隔离对照·P412：元套件记录 meta-suite/<时间>.log 不命中（取样范围，不是账本痕迹）" \
+  "$(printf '%s\n' "$M16_MS_HITS" | grep -c 'state/meta-suite/2026-11-04T13-30-26Z\.log$' || true)" "0"
+assert_eq "M16 隔离对照·P412：同前缀的普通账本文件 state/meta-suite.log 必须被点名（前缀带结尾的 /）" \
+  "$(printf '%s\n' "$M16_MS_HITS" | grep -c 'state/meta-suite\.log$' || true)" "1"
+assert_eq "M16 隔离对照·P412：nested/meta-suite/a.log 必须被点名（前缀没锚上就不是元套件记录）" \
+  "$(printf '%s\n' "$M16_MS_HITS" | grep -c 'nested/meta-suite/a\.log$' || true)" "1"
+assert_eq "M16 隔离对照·P412：普通账本 plain.log 仍被点名（豁免没有把判断关掉）" \
+  "$(printf '%s\n' "$M16_MS_HITS" | grep -c 'state/plain\.log$' || true)" "1"
+assert_eq "M16 隔离对照·P412：meta-suite 边界腿恰三条命中（只有元套件记录那一条静默）" \
+  "$(printf '%s\n' "$M16_MS_HITS" | wc -l | tr -d ' ')" "3"
+rm -rf "$M16_MS"
 # ---------------------------------------------------------------- 31. tmux 接触面（M28）
 # 五次 tmux server 全灭事故 → 两条护栏在这里钉死：
 #   31a 裸 tmux 调用 lint（纯逻辑，FAST 也跑）：tests/** 与 docs/team/reports/*/pkg/** 里凡会改变
