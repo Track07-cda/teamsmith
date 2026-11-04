@@ -1642,6 +1642,43 @@ team_with_lock() ( # <resource> <command> [args...]
   "$@"
 )
 
+# ---------------------------------------------------------------- 项目状态权威（P406 · agent-self-reminder 1.1/1.2）
+# 一个状态根、一份版本化快照、一把 flock 事务锁：CLI / Pulse（Bash）与 Pi（Node）共用
+# scripts/state-authority.mjs 这一份实现。这里只做身份与入口 —— 锁、原子写、快照校验、错误语义
+# 全在助手里。**没有**不持锁的落回路径：缺 flock / 等锁超时 / 快照读不懂都是显式失败。
+#
+# 身份只认目录：继承的 TEAM_MAIN_ROOT 只有在与当前目录所属项目一致时才接受；不一致 → 拒绝
+# （不挑一个状态权威、也不把提醒/Standby 写进另一个项目）。状态根本身由项目自己的定位器钉住：
+# 首次使用写 <main>/.pi/team/reminder-locator.json，之后每次比对 —— 改 override 需要显式迁移。
+team_authority_main_root() { # → 本项目的物理主工作树（继承值必须与目录一致）
+  local inherited="${TEAM_MAIN_ROOT:-}" dir_main main
+  dir_main="$(team_main_root)" || dir_main=""   # 留：不在 git 仓库里 = 空答案，下一行具名拒绝
+  [ -n "$dir_main" ] || { team_err "state-authority：当前目录不在 git 工作树里，定不出项目主工作树"; return 1; }
+  main="${inherited:-$dir_main}"
+  if [ -n "$inherited" ] && [ "$(team_identity_norm_dir "$inherited")" != "$(team_identity_norm_dir "$dir_main")" ]; then
+    team_err "state-authority：继承的 TEAM_MAIN_ROOT=$inherited 与当前目录所属项目（$dir_main）不一致 —— 不挑一个状态权威；清掉继承值或 cd 到目标项目"
+    return 1
+  fi
+  printf '%s\n' "$main"
+}
+team_authority_cli() { # <resolve|init|read|allocate> [参数]；助手自己取 flock，这里只解析运行时
+  local runner main state
+  runner="$(team_js_runner)"
+  [ -n "$runner" ] || { team_err "state-authority：缺 JS 运行时（node/bun/tsx 都解析不到）—— 装一个或设 TEAM_JS_BIN 指向绝对路径"; return 1; }
+  main="$(team_authority_main_root)" || return 1
+  state="${TEAM_STATE_DIR:-}"
+  [ -n "$state" ] || { team_err "state-authority：TEAM_STATE_DIR 未解析（先 team_load_config）"; return 1; }
+  "$runner" "${TEAM_SKILL_DIR:-$(team_skill_dir)}/scripts/state-authority.mjs" --cli "$main" "$state" "$@"
+}
+team_authority_state_root() { team_authority_cli resolve --print stateRoot; }
+team_authority_init() { team_authority_cli init; }
+team_authority_read() { team_authority_cli read; }
+team_authority_allocate() { # <reminder|batch|queue> → 分配到的序号（持久 high-water，不重用）
+  local kind="${1:-}"
+  [ -n "$kind" ] || { team_err "state-authority：allocate 需要序号类别（reminder|batch|queue）"; return 1; }
+  team_authority_cli allocate "$kind" --print value
+}
+
 team_identity_snapshot() { # One bounded DATA snapshot, for worker and PM records.
   local f="$1" data='' bytes
   TEAM_IDENTITY_DATA=''; TEAM_IDENTITY_DIAGNOSTIC='missing identity record'

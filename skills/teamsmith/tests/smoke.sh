@@ -24206,6 +24206,34 @@ else
   bad "65 缺 tests/slash-team-e2e.sh"
 fi
 
+# ---------------------------------------------------------------- 66. 项目状态权威（P406 · agent-self-reminder 1.1/1.2）
+# 夹具本体是 tests/state-authority.sh：每个仓库先 git init、显式给主根/状态根、隔离 HOME/TMPDIR，
+# 覆盖 mock 掉的 1.1（状态根定位：主检出 / link worktree / 冲突 override / 外来项目 / 继承错的 TEAM_*）
+# 与 1.2（版本化快照 / flock 事务 / 原子写 / 有界锁失败 / 持锁者被杀 / Bash+Node 并发）。
+# 三条翻转臂在 scratch 副本上把实现改坏，用同一个判据确认会红（不持锁的直写 / 删版本检查 / 删外来检查）。
+section "66 · 项目状态权威：状态根 / 版本化快照 / flock 事务（P406 · agent-self-reminder 1.1/1.2）"
+P406_FIX="$SKILL_DIR/tests/state-authority.sh"
+if [ ! -f "$P406_FIX" ]; then
+  bad "P406 缺 tests/state-authority.sh（权威层夹具）"
+else
+  bash "$P406_FIX" >"$TMP/p406-state-authority.log" 2>&1; P406_RC=$?
+  if [ "$P406_RC" -eq 0 ]; then
+    P406_SUM="$(smoke_inner_summary "$TMP/p406-state-authority.log" state-authority)" || P406_SUM=""
+    if [ -n "$P406_SUM" ]; then
+      ok "P406 权威层夹具全绿（$P406_SUM：状态根 / 快照 / flock / 原子写 / 四条翻转臂）"
+    else
+      bad "P406 权威层夹具绿了但读不到它自己的结果行（夹具契约破了）"
+    fi
+    assert_has "$TMP/p406-state-authority.log" "主项目 .pi/team：非白名单路径零变化" "P406 隔离证明：主项目的非白名单路径零变化"
+    assert_has "$TMP/p406-state-authority.log" "state/ 下的杂散文件必须被点名" "P406 隔离证明：state/ 下的杂散文件会被点名（事故形状）"
+  elif [ "$P406_RC" -eq 3 ]; then
+    cond_skip "P406 权威层夹具" "$(grep -a '前提缺失' "$TMP/p406-state-authority.log" | tail -1 | sed 's/^state-authority: //')"
+  else
+    bad "P406 权威层夹具红（rc=$P406_RC）"
+    grep -a '✗' "$TMP/p406-state-authority.log" | head -10 | sed 's/^/      /'
+  fi
+fi
+
 section "14d · P70 本套自述对账（段落账目 + 无误判）"
 P70_S_STARTS="$(grep -c '^== #[0-9][0-9]* ' "$SG_LOG" 2>/dev/null || true)"
 P70_S_SHAPED="$(grep -cE '^== #[0-9]+ .+ == [0-9]{4}-[0-9]{2}-[0-9]{2}T[^ ]+$' "$SG_LOG" 2>/dev/null || true)"

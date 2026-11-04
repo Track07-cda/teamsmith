@@ -1,0 +1,674 @@
+#!/usr/bin/env bash
+# state-authority.sh — P406（change: agent-self-reminder 1.1/1.2）的隔离夹具
+#
+# 它证三件事，全部在**自己的**临时根里（每个夹具仓库先 git init、显式给主根与状态根、
+# HOME/TMPDIR 隔离）：
+#   1.1 状态根定位：主检出与 link worktree 得到同一个权威；继承错的 TEAM_* / 冲突的 override /
+#       别的项目的状态根都被拒绝，且拒绝发生在建目录之前。
+#   1.2 版本化快照 + flock 事务：Bash/Node 不同 TMPDIR 并发仍然逐个序号；持锁者被杀后立刻恢复；
+#       损坏 / 不支持版本 / 半个快照是显式失败且一个字节都不改；原子写在被杀写入者下不露半个文件。
+#
+# 红侧（各自具名，都用**同一个**判据判定，变异体在 scratch 副本上，产品与工作树不动）：
+#   --flip=unlocked  把事务助手换成不持锁的直写      → 并发序号断言必须红
+#   --flip=version   删掉快照版本检查                → “版本 2 必须被拒”必须红
+#   --flip=foreign   删掉外来项目检查                → “别的项目的 .pi/team 必须被拒”必须红
+#   --flip=manifest  把隔离清单退回“整段跳过 state/” → “state/ 下的杂散文件必须被报”必须红
+# 不带 --flip 时四条臂全跑；带一条时只跑那一条，其余臂跳过（跳过即不计入，不是通过）。
+# 用法：bash tests/state-authority.sh [--flip=unlocked|version|foreign|manifest]
+# 退出码：0 全绿 / 1 有失败 / 2 参数不认识 / 3 前提缺失（JS 运行时或 flock；可见跳过，不算通过）
+set -uo pipefail
+
+HERE="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SKILL="$(cd -P "$HERE/.." && pwd)"
+
+# 参数面：只有这四个 --flip 值；认不出来就拒绝（静默照跑等于把一条臂当成了四条）。
+FLIP=""
+flip_err() { printf 'state-authority: %s\n' "$1" >&2; }
+for arg in "$@"; do
+  case "$arg" in
+    --flip=unlocked|--flip=version|--flip=foreign|--flip=manifest)
+      if [ -n "$FLIP" ] && [ "$FLIP" != "${arg#--flip=}" ]; then
+        flip_err "互相冲突的 --flip（$FLIP / ${arg#--flip=}）：一次只跑一条臂"; exit 2
+      fi
+      FLIP="${arg#--flip=}" ;;
+    --flip=*)
+      flip_err "不认识的 --flip 值 [${arg#--flip=}]；只接受 unlocked|version|foreign|manifest"; exit 2 ;;
+    -h|--help)
+      printf 'usage: bash tests/state-authority.sh [--flip=unlocked|version|foreign|manifest]\n'; exit 0 ;;
+    *)
+      flip_err "不认识的参数 [$arg]（只接受 --flip=<unlocked|version|foreign|manifest>）"; exit 2 ;;
+  esac
+done
+arm_selected() { [ -z "$FLIP" ] || [ "$FLIP" = "$1" ]; }
+FLIPS_RUN=""
+# shellcheck source=lib/tmp-root.sh
+. "$HERE/lib/tmp-root.sh"
+
+NODE_HELPER="$SKILL/scripts/state-authority.mjs"
+RUNNER="$(team_js_runner)"
+if [ -z "$RUNNER" ]; then
+  printf 'state-authority: 前提缺失 —— 没有 JS 运行时（node/bun/tsx）；这是可见跳过，不是通过\n' >&2
+  exit 3
+fi
+if ! command -v flock >/dev/null 2>&1; then
+  printf 'state-authority: 前提缺失 —— 这台机器没有 flock；权威层按设计拒绝工作（可见跳过，不是通过）\n' >&2
+  exit 3
+fi
+
+ROOT="$(tmp_root_create state-authority)" || exit 3
+cleanup() { tmp_root_reap_all; }
+trap cleanup EXIT
+mkdir -p "$ROOT/home" "$ROOT/tmp" "$ROOT/flip"
+export HOME="$ROOT/home"
+# 夹具自己的进程也不许继承团队身份（每个孩子还会再清一次）。
+unset TEAM_ROOT TEAM_MAIN_ROOT TEAM_PROJECT TEAM_SESSION TEAM_STATE_DIR TEAM_CONFIG_FILE \
+      TEAM_IDENTITY_LOCKED TEAM_IDENTITY_ROOT TEAM_IDENTITY_MAIN_ROOT TEAM_IDENTITY_PROJECT \
+      TEAM_IDENTITY_INHERIT_ROOT TEAM_IDENTITY_INHERIT_MAIN_ROOT TEAM_IDENTITY_INHERIT_PROJECT \
+      TEAM_IDENTITY_INHERIT_SESSION TEAM_ALLOW_FOREIGN_IDENTITY 2>/dev/null || true
+
+PASS=0; FAIL=0
+ok()  { printf '  \033[32m✓\033[0m %s\n' "$1"; PASS=$((PASS + 1)); }
+bad() { printf '  \033[31m✗\033[0m %s\n' "$1"; FAIL=$((FAIL + 1)); }
+note() { printf '    %s\n' "$1"; }
+result() {
+  printf '\nflip 臂：%s\n' "${FLIPS_RUN:-none}"
+  # 结果行形状是与门禁的契约（smoke.sh 的 smoke_inner_summary 严格匹配这一行），臂信息另起一行。
+  printf '== state-authority 结果 == ✓%d ✗%d SKIP0\n' "$PASS" "$FAIL"
+  [ "$FAIL" -eq 0 ]
+}
+
+# ---------------------------------------------------------------- 夹具与子进程
+make_repo() { # <名字> → 打印仓库目录（先 git init，绝不落在别人的检出里）
+  local dir="$ROOT/$1"
+  mkdir -p "$dir"
+  git -C "$dir" init -q || return 1
+  git -C "$dir" -c user.email=fixture@example.invalid -c user.name=Fixture commit -q --allow-empty -m fixture || return 1
+  printf '%s\n' "$dir"
+}
+
+# 子进程：cwd 显式、HOME/TMPDIR 隔离、所有团队身份变量清空（env -u，不用 env -i —— 见 P270：
+# env -i 会把 distrobox 的 PATH 支撑也清掉，真 pi/node 起不来，测试会红在与被测行为无关的地方）。
+runchild() { # <cwd> [VAR=VAL…] -- <bash 代码>
+  local cwd="$1"; shift
+  local envs=()
+  while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do envs+=("$1"); shift; done
+  [ "${1:-}" = "--" ] && shift
+  ( cd "$cwd" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
+      -u TEAM_STATE_DIR -u TEAM_CONFIG_FILE -u TEAM_ALLOW_FOREIGN_IDENTITY \
+      -u TEAM_IDENTITY_LOCKED -u TEAM_IDENTITY_ROOT -u TEAM_IDENTITY_MAIN_ROOT -u TEAM_IDENTITY_PROJECT \
+      -u TEAM_IDENTITY_INHERIT_ROOT -u TEAM_IDENTITY_INHERIT_MAIN_ROOT -u TEAM_IDENTITY_INHERIT_PROJECT \
+      -u TEAM_IDENTITY_INHERIT_SESSION \
+      HOME="$ROOT/home" TMPDIR="$ROOT/tmp" SKILL="$SKILL" ROOT="$ROOT" RUNNER="$RUNNER" \
+      ${envs[@]+"${envs[@]}"} bash -c "$*" )
+}
+
+PREP='set -uo pipefail; . "$SKILL/scripts/lib/common.sh"; team_identity_resolve >/dev/null 2>&1; team_load_config'
+PREP_UNLOCKED='set -uo pipefail; . "$SKILL/scripts/lib/common.sh"; team_load_config'
+
+jget() { # <json> <字段…> —— 用运行时解析 JSON，不在 bash 里拼语义
+  local json="$1"; shift
+  printf '%s' "$json" | "$RUNNER" -e '
+    let s = ""; process.stdin.on("data", d => s += d).on("end", () => {
+      let v; try { v = JSON.parse(s); } catch (e) { process.exitCode = 2; return; }
+      for (const path of process.argv.slice(1)) {
+        for (const k of path.split(".")) {
+          if (v === null || typeof v !== "object" || !(k in v)) { process.exitCode = 3; return; }
+          v = v[k];
+        }
+      }
+      process.stdout.write(v === null || v === undefined ? "" : String(v));
+    })' "$@"
+}
+
+assert_eq_local() { [ "$2" = "$3" ] && ok "$1" || bad "$1（期望 [$3]，实际 [$2]）"; }
+state_root_of() { runchild "$1" -- "$PREP; team_authority_state_root"; }
+
+# ---------------------------------------------------------------- 真实项目的隔离清单（事故形状的证明）
+# 活团队在跑：巡检、派单、派发日志确实在动。所以判据不是「state/ 整段跳过」，而是**命名的易变白名单**：
+# 只有白名单里的形状允许新增/变化；其余任何路径出现、消失或内容变化都算违规 —— 包括 state/ 下任何一个
+# 杂散文件。P171 把整份 state/ 划为运行时；这里的收窄是 V128-F3 要求的：白名单按形状命名，不是按目录。
+# 权威自己的写面：**永不**属于易变白名单。这条判据独立于白名单，所以「往白名单加个名字」遮不住事故形状。
+authority_surface() { # <相对路径（以 ./ 开头）>
+  case "$1" in
+    ./reminder-locator*|./state/reminders|./state/reminders/*|./state/standby|./state/standby.*) return 0 ;;
+  esac
+  return 1
+}
+# 活团队的运行时写入者，按形状命名。两段式：state 根下的**一层**文件名按后缀/前缀放行；子目录只放行已知的
+# 那几个（bash 的 case `*` 会连 `/` 一起匹配，所以子目录必须显式分支，不能靠 `./state/*.log` 这种写法）。
+state_volatile() { # <相对路径（以 ./ 开头）>
+  local p="$1" rest dir base
+  authority_surface "$p" && return 1
+  case "$p" in
+    ./state/*)
+      rest="${p#./state/}"
+      case "$rest" in
+        */*)
+          dir="${rest%%/*}"
+          case "$dir" in
+            bg|inbox-watch|outbox|spool|draft|key-replies) return 0 ;;
+            release-*|product-field-trial) return 0 ;;
+          esac
+          return 1 ;;
+      esac
+      base="$rest"
+      case "$base" in
+        *.log|*.log.[0-9]*|*.last|*.nudge|*.tick|*.pid*) return 0 ;;
+        *.spawn|*.exit|*-tail.txt|*.tmp|*.attempts.*|*.pending|*.inbox|*.lock|*.conf) return 0 ;;
+        *.env|*.env.bak-*) return 0 ;;
+        inbox-*|pm-*|pm.*|dispatch-*|draft-*|held) return 0 ;;
+        notify*|nudge*|watchdog*|capacity*|digest-*|deaths.*|bg.log|panel*) return 0 ;;
+        changes.json|refs|pane|_watch.*|reload-requested|interrupt.*|update-check.*|config.*) return 0 ;;
+        summary-*|prompt-*|pm-loaded.*|pm-launch*) return 0 ;;
+      esac
+      return 1 ;;
+  esac
+  return 1
+}
+manifest_snapshot() { # <dir> → "path<TAB>hash"，按路径排序（不存在的目录 = 空清单）
+  [ -d "$1" ] || return 0
+  ( cd "$1" && find . -type f -print0 | sort -z | xargs -0 -r sha256sum 2>/dev/null ) |
+    awk '{ h = $1; $1 = ""; sub(/^ /, ""); print $0 "\t" h }' | sort -t "$(printf '\t')" -k1,1
+}
+# MANIFEST_BREAK=skip-state 是**自检红侧**：把「整段跳过 state/」这个旧缺陷形状放回来（与 tmp-root.sh 的
+# TMP_ROOT_BREAK 同一手法），用于证明这条判据真的会红。产品不读它，只有 --flip=manifest 会设。
+manifest_violations() { # <before> <after> → 每个非白名单变化一行（路径）
+  local before="$1" after="$2" path b a
+  join -t "$(printf '\t')" -a1 -a2 -e MISSING -o '0,1.2,2.2' "$before" "$after" |
+    while IFS="$(printf '\t')" read -r path b a; do
+      [ "$b" = "$a" ] && continue
+      if [ "${MANIFEST_BREAK:-}" = "skip-state" ]; then
+        case "$path" in ./state/*) continue ;; esac
+      fi
+      state_volatile "$path" && continue
+      printf '%s\n' "$path"
+    done
+}
+manifest_volatile_count() { # <before> <after> → 白名单内发生变化的路径数（证明判据真的看见了现场在动）
+  local before="$1" after="$2" path b a n=0
+  while IFS="$(printf '\t')" read -r path b a; do
+    [ "$b" = "$a" ] && continue
+    state_volatile "$path" && n=$((n + 1))
+  done < <(join -t "$(printf '\t')" -a1 -a2 -e MISSING -o '0,1.2,2.2' "$before" "$after")
+  printf '%s\n' "$n"
+}
+# 证明对象是**本项目的主检出**（不是本工作树）：夹具从工作树跑，权威却绝不能落到主检出上。
+REAL_MAIN="$(cd "$SKILL/.." && pwd)"
+REAL_MAIN="$(git -C "$SKILL" rev-parse --path-format=absolute --git-common-dir 2>/dev/null | xargs -r dirname)"
+[ -n "${REAL_MAIN:-}" ] && [ -d "$REAL_MAIN" ] || REAL_MAIN=""
+REAL_BEFORE="$ROOT/real-before.txt"
+REAL_AFTER="$ROOT/real-after.txt"
+manifest_snapshot "${REAL_MAIN:-/nonexistent}/.pi/team" >"$REAL_BEFORE"
+
+# ---------------------------------------------------------------- 夹具仓库
+A="$(make_repo A)" || { bad "夹具建不出仓库 A"; result; exit 1; }
+B="$(make_repo B)" || { bad "夹具建不出仓库 B"; result; exit 1; }
+C="$(make_repo C)" || { bad "夹具建不出仓库 C"; result; exit 1; }
+D="$(make_repo D)" || { bad "夹具建不出仓库 D"; result; exit 1; }
+E="$(make_repo E)" || { bad "夹具建不出仓库 E"; result; exit 1; }
+F="$(make_repo F)" || { bad "夹具建不出仓库 F"; result; exit 1; }
+G="$(make_repo G)" || { bad "夹具建不出仓库 G"; result; exit 1; }
+A_WT="$ROOT/A-wt"
+if ! git -C "$A" worktree add --detach "$A_WT" >/dev/null 2>&1; then
+  bad "夹具建不出 A 的 link worktree"
+  result; exit 1
+fi
+A_STATE="$A/.pi/team/state"
+note "夹具根：$ROOT（A/B/C/D/E/F/G 各自 git init；A-wt 是 A 的 link worktree）"
+
+# ---------------------------------------------------------------- 1. 空权威：read 必须先要求初始化
+out="$(runchild "$A" -- "$PREP; team_authority_read" 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"not initialized"*) true ;; *) false ;; esac; then
+  ok "未初始化的权威：read 显式失败并点名 not initialized（不当作空快照）"
+else
+  bad "未初始化的权威：read 没有显式失败（rc=$rc，输出：$(printf '%s' "$out" | tr '\n' '|')）"
+fi
+
+# ---------------------------------------------------------------- 2. 状态根定位：主检出 / worktree 同一权威
+root_main="$(state_root_of "$A")"; rc_main=$?
+root_wt="$(state_root_of "$A_WT")"; rc_wt=$?
+assert_eq_local "主检出解析出项目自己的状态根" "$root_main" "$A_STATE"
+assert_eq_local "主检出解析 rc" "$rc_main" "0"
+assert_eq_local "link worktree 解析出同一个状态根" "$root_wt" "$A_STATE"
+assert_eq_local "link worktree 解析 rc" "$rc_wt" "0"
+
+init_a="$(runchild "$A" -- "$PREP; team_authority_init")"
+A_PID="$(jget "$init_a" projectId)"
+A_CREATED="$(jget "$init_a" created)"
+assert_eq_local "首次 init 建出快照（created=true）" "$A_CREATED" "true"
+if [[ "$A_PID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+  ok "快照带持久的项目身份（projectId=$A_PID）"
+else
+  bad "快照没有持久的项目身份（projectId=[$A_PID]）"
+fi
+if [ -f "$A/.pi/team/reminder-locator.json" ] && [ -f "$A_STATE/reminders/state.json" ]; then
+  ok "定位器与版本化快照都落在项目自己的路径上（.pi/team/reminder-locator.json / state/reminders/state.json）"
+else
+  bad "定位器或快照没有落在预期路径"
+fi
+loc_pid="$(jget "$(cat "$A/.pi/team/reminder-locator.json")" projectId)"
+assert_eq_local "定位器与快照记录同一个项目身份" "$loc_pid" "$A_PID"
+init_wt="$(runchild "$A_WT" -- "$PREP; team_authority_init")"
+assert_eq_local "worktree 的 init 是幂等的（created=false）" "$(jget "$init_wt" created)" "false"
+assert_eq_local "worktree 的 init 复用同一个项目身份" "$(jget "$init_wt" projectId)" "$A_PID"
+alloc_a="$(runchild "$A" -- "$PREP; team_authority_allocate reminder")"
+alloc_wt="$(runchild "$A_WT" -- "$PREP; team_authority_allocate reminder")"
+assert_eq_local "主检出与 worktree 共用一个持久序号（1）" "$alloc_a" "1"
+assert_eq_local "主检出与 worktree 共用一个持久序号（2）" "$alloc_wt" "2"
+
+# ---------------------------------------------------------------- 3. 拒绝冲突 override / 外来项目（建目录之前）
+out="$(runchild "$A" TEAM_STATE_DIR="$ROOT/alt-state" -- "$PREP; team_authority_state_root" 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"canonical state-root mismatch"*) true ;; *) false ;; esac; then
+  ok "冲突的 TEAM_STATE_DIR：显式拒绝（canonical state-root mismatch）"
+else
+  bad "冲突的 TEAM_STATE_DIR 没有被拒绝（rc=$rc，输出：$(printf '%s' "$out" | tr '\n' '|')）"
+fi
+[ ! -e "$ROOT/alt-state" ] && ok "冲突的 override 被拒绝时没有建出第二个权威目录" || bad "冲突的 override 留下了目录 $ROOT/alt-state"
+
+out="$(runchild "$C" TEAM_STATE_DIR="$B/.pi/team/state" -- "$PREP; team_authority_state_root" 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"inside another project's .pi/team"*) true ;; *) false ;; esac; then
+  ok "别的项目的 .pi/team 作为状态根：显式拒绝（inside another project's .pi/team）"
+else
+  bad "别的项目的状态根没有被拒绝（rc=$rc，输出：$(printf '%s' "$out" | tr '\n' '|')）"
+fi
+[ ! -e "$B/.pi" ] && ok "拒绝外来状态根时没有在 B 里建出任何东西" || bad "拒绝外来状态根时 B/.pi 被建了出来"
+
+# 定位器内容指向别的项目 → 显式拒绝（不在别人/自己的 .pi/team 里继续猜）
+cp "$A/.pi/team/reminder-locator.json" "$ROOT/locator-A.json"
+sed "s#\"mainRoot\":\"$A\"#\"mainRoot\":\"$B\"#" "$ROOT/locator-A.json" >"$A/.pi/team/reminder-locator.json"
+out="$(state_root_of "$A" 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"belongs to another project"*) true ;; *) false ;; esac; then
+  ok "定位器指向别的项目：显式拒绝（belongs to another project）"
+else
+  bad "指向别的项目的定位器没有被拒绝（rc=$rc，输出：$(printf '%s' "$out" | tr '\n' '|')）"
+fi
+cp "$ROOT/locator-A.json" "$A/.pi/team/reminder-locator.json"
+
+# 快照与定位器的项目身份对不上（把 B 的快照换进 A）→ 显式拒绝
+runchild "$B" -- "$PREP; team_authority_init" >/dev/null
+cp "$A_STATE/reminders/state.json" "$ROOT/state-A.json"
+cp "$B/.pi/team/state/reminders/state.json" "$A_STATE/reminders/state.json"
+out="$(runchild "$A" -- "$PREP; team_authority_read" 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"project identity mismatch"*) true ;; *) false ;; esac; then
+  ok "外来快照（项目身份不符）：显式拒绝（project identity mismatch）"
+else
+  bad "外来快照没有被拒绝（rc=$rc，输出：$(printf '%s' "$out" | tr '\n' '|')）"
+fi
+cp "$ROOT/state-A.json" "$A_STATE/reminders/state.json"
+
+# ---------------------------------------------------------------- 4. 继承错的 TEAM_* 不许重定向权威
+out="$(runchild "$A_WT" TEAM_MAIN_ROOT="$B" TEAM_ROOT="$B" -- "$PREP_UNLOCKED; team_authority_state_root" 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"继承的 TEAM_MAIN_ROOT"*) true ;; *) false ;; esac; then
+  ok "未锁定入口（继承的 TEAM_MAIN_ROOT=$B 与目录不一致）：显式拒绝，不挑一个权威"
+else
+  bad "继承错的主根没有被拒绝（rc=$rc，输出：$(printf '%s' "$out" | tr '\n' '|')）"
+fi
+out="$(runchild "$A_WT" TEAM_MAIN_ROOT="$B" TEAM_ROOT="$B" -- "$PREP; printf 'main=%s\n' \"\$TEAM_MAIN_ROOT\"; team_identity_gate remind 2>/dev/null; printf 'gate_rc=%s\n' \$?; team_authority_state_root; printf 'root_rc=%s\n' \$?" 2>&1)"
+assert_eq_local "锁定入口按目录解析出本项目" "$(printf '%s\n' "$out" | sed -n '1p')" "main=$A"
+assert_eq_local "锁定入口对会改共享状态的命令返回拒绝" "$(printf '%s\n' "$out" | sed -n '2p')" "gate_rc=1"
+assert_eq_local "锁定入口的状态根仍是本项目的" "$(printf '%s\n' "$out" | sed -n '3p')" "$A_STATE"
+assert_eq_local "锁定入口的状态根解析成功" "$(printf '%s\n' "$out" | sed -n '4p')" "root_rc=0"
+
+# Node 侧（Pulse/Pi 的形状）：cwd 在 A 的 worktree 里、继承的主根指向另一个项目 → 拒绝，且那里什么都不建
+node_foreign() { # <cwd> <main-root> <state-root>
+  ( cd "$1" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION HOME="$ROOT/home" \
+      "$RUNNER" "$HERE/state-authority-node.mjs" --foreign "$2" "$3" 2>&1 )
+}
+N="$(make_repo N)" || { bad "夹具建不出仓库 N"; result; exit 1; }
+out="$(node_foreign "$A_WT" "$N" "$N/.pi/team/state")"; rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"does not belong to the working directory's project"*) true ;; *) false ;; esac; then
+  ok "Node 入口（Pulse/Pi 形状）：cwd 属于 A、继承的主根指向别的项目 → 显式拒绝"
+else
+  bad "Node 入口没有拒绝继承错的主根（rc=$rc，输出：$(printf '%s' "$out" | tr '\n' '|')）"
+fi
+[ ! -e "$N/.pi" ] && ok "Node 入口拒绝时没有在继承的主根里建出第二个权威" || bad "Node 入口拒绝时继承的主根里被建出了定位器"
+
+# ---------------------------------------------------------------- 5. 损坏 / 不支持的快照：显式失败且不改一个字节
+SNAP="$A_STATE/reminders/state.json"
+corrupt_case() { # <名字> <内容>
+  local name="$1" content="$2" before after rc out
+  printf '%s' "$content" >"$SNAP"
+  before="$(sha256sum "$SNAP" | cut -d' ' -f1)"
+  out="$(runchild "$A" -- "$PREP; team_authority_read" 2>&1)"; rc=$?
+  after="$(sha256sum "$SNAP" | cut -d' ' -f1)"
+  if [ "$rc" -ne 0 ] && [ "$before" = "$after" ]; then
+    ok "快照损坏（$name）：read 显式失败且文件一字未改"
+  else
+    bad "快照损坏（$name）：rc=$rc，前后哈希 $before/$after"
+  fi
+  out="$(runchild "$A" -- "$PREP; team_authority_init" 2>&1)"; rc=$?
+  after="$(sha256sum "$SNAP" | cut -d' ' -f1)"
+  if [ "$rc" -ne 0 ] && [ "$before" = "$after" ]; then
+    ok "快照损坏（$name）：init 不会用空快照覆盖它"
+  else
+    bad "快照损坏（$name）：init 竞把坏快照覆盖了（rc=$rc）"
+  fi
+}
+corrupt_case "unsupported version" '{"version":2}
+'
+corrupt_case "half snapshot" '{"version":1,"project":{
+'
+corrupt_case "no project identity" '{"version":1,"sequences":{"reminder":1,"batch":1,"queue":1},"pruned":0,"standby":{"on":false,"generation":0},"reminders":[],"batches":[],"audit":[]}
+'
+cp "$ROOT/state-A.json" "$SNAP"
+
+# 孤儿临时文件（被杀写入者的残留）不许被当成快照
+orphan="$A_STATE/reminders/.state.json.999999.00000000-0000-4000-8000-000000000000.tmp"
+printf 'half written garbage' >"$orphan"
+out="$(runchild "$A" -- "$PREP; team_authority_read" 2>&1)"; rc=$?
+seq_after="$(jget "$out" sequences.reminder 2>/dev/null)"
+if [ "$rc" -eq 0 ] && [ -n "$seq_after" ] && [ -f "$orphan" ]; then
+  ok "孤儿 .tmp 不会被当成快照（read 正常，残留文件不被误删）"
+else
+  bad "孤儿 .tmp 干扰了权威（rc=$rc，seq=[$seq_after]）"
+fi
+rm -f "$orphan"
+
+# ---------------------------------------------------------------- 6. 有界锁失败 + 持锁者被杀
+LOCK="$A_STATE/reminders/authority.lock"
+bash -c 'exec 9>"$1"; flock -x 9; sleep 30' _ "$LOCK" &
+HOLDER=$!
+sleep 0.4
+start_ns="$(date +%s%N)"
+out="$(runchild "$A" -- "$PREP; team_authority_init" 2>&1)"; rc=$?
+elapsed_ms=$(( ($(date +%s%N) - start_ns) / 1000000 ))
+if [ "$rc" -ne 0 ] && case "$out" in *"lock wait timed out after 5s"*) true ;; *) false ;; esac; then
+  ok "锁被占：显式超时失败（点名 5s），不静默重试"
+else
+  bad "锁被占时没有显式超时（rc=$rc，输出：$(printf '%s' "$out" | tr '\n' '|')）"
+fi
+if [ "$elapsed_ms" -ge 4500 ] && [ "$elapsed_ms" -le 12000 ]; then
+  ok "锁等待有界（实测 ${elapsed_ms}ms ≈ 5s 上限）"
+else
+  bad "锁等待不是有界的 5s（实测 ${elapsed_ms}ms）"
+fi
+kill -9 "$HOLDER" 2>/dev/null
+wait "$HOLDER" 2>/dev/null
+start_ns="$(date +%s%N)"
+out="$(runchild "$A" -- "$PREP; team_authority_allocate queue")"; rc=$?
+elapsed_ms=$(( ($(date +%s%N) - start_ns) / 1000000 ))
+if [ "$rc" -eq 0 ] && [ -n "$out" ] && [ "$elapsed_ms" -lt 4000 ]; then
+  ok "持锁者被杀后锁立刻释放（${elapsed_ms}ms 内下一个事务成功）"
+else
+  bad "持锁者被杀后下一个事务没有立刻成功（rc=$rc，${elapsed_ms}ms，输出：$out）"
+fi
+
+# ---------------------------------------------------------------- 6b. 助手自己死掉：必须报状态，不许冒充等锁超时
+# 实测：助手被 SIGKILL 时 flock 以 128+9=137 退出、耗时 ~1ms；而真等满锁是 -E 75、满 5s。
+# 这里让助手以 137 退出（对调用方与 SIGKILL 同形：flock 原样转发状态），判据是措辞与「没有写状态」。
+DYING="$ROOT/flip/dying-helper.mjs"
+cp "$NODE_HELPER" "$DYING"
+python3 - "$DYING" <<'PYEOF'
+import sys
+path = sys.argv[1]
+text = open(path).read()
+old = """  if (mode === '--transaction') {"""
+new = """  if (mode === '--transaction') {
+    if (process.env.SA_DYING_HELPER === '137') process.exit(137);"""
+if old not in text:
+    sys.stderr.write('state-authority: dying-helper 变异没落地（源码形状变了）\n')
+    sys.exit(1)
+open(path, 'w').write(text.replace(old, new, 1))
+PYEOF
+dying_rc_ok=$?
+before_hash="$(sha256sum "$A_STATE/reminders/state.json" | cut -d' ' -f1)"
+start_ns="$(date +%s%N)"
+out="$( cd "$A" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION HOME="$ROOT/home" \
+    SA_DYING_HELPER=137 "$RUNNER" "$DYING" --cli "$A" "$A_STATE" init 2>&1 )"; rc=$?
+elapsed_ms=$(( ($(date +%s%N) - start_ns) / 1000000 ))
+after_hash="$(sha256sum "$A_STATE/reminders/state.json" | cut -d' ' -f1)"
+assert_eq_local "dying-helper 变异已落地" "$dying_rc_ok" "0"
+if [ "$rc" -ne 0 ] && case "$out" in *"transaction helper exited with status 137"*) true ;; *) false ;; esac; then
+  ok "助手自己死掉：报 transaction helper exited with status 137（不冒充等锁超时）"
+else
+  bad "助手死掉时的报错不对（rc=$rc，输出：$(printf '%s' "$out" | tr '\n' '|')）"
+fi
+# 只有一条错：同一时刻这条错误不许出现「超时」措辞（超时在下面另有具名断言）
+if case "$out" in *"timed out"*) false ;; *) true ;; esac; then
+  ok "助手死掉时没有多余的「超时」措辞（两种失败不再混为一谈）"
+else
+  bad "助手死掉时仍在说等锁超时（输出：$(printf '%s' "$out" | tr '\n' '|')）"
+fi
+if [ "$elapsed_ms" -lt 4000 ]; then
+  ok "助手死掉时立即返回（${elapsed_ms}ms，没有白等 5s）"
+else
+  bad "助手死掉时白等了 ${elapsed_ms}ms"
+fi
+assert_eq_local "助手死掉时状态一个字节没动" "$after_hash" "$before_hash"
+
+# ---------------------------------------------------------------- 7. Bash/Node 并发：不同 TMPDIR 仍逐个序号
+H="$(make_repo H)" || { bad "夹具建不出仓库 H"; result; exit 1; }
+H_STATE="$H/.pi/team/state"
+CONC="$ROOT/conc"; mkdir -p "$CONC"
+for i in 1 2 3 4 5 6; do
+  mkdir -p "$CONC/tmp-b$i"
+  runchild "$H" TMPDIR="$CONC/tmp-b$i" -- "$PREP; team_authority_allocate reminder" >"$CONC/b$i.out" 2>&1 &
+done
+for i in 1 2 3 4 5 6; do
+  mkdir -p "$CONC/tmp-n$i"
+  ( cd "$H" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
+      HOME="$ROOT/home" TMPDIR="$CONC/tmp-n$i" "$RUNNER" "$HERE/state-authority-node.mjs" \
+      "$H" "$H_STATE" 1 >"$CONC/n$i.out" 2>&1 ) &
+done
+wait
+got="$(cat "$CONC"/*.out | tr -d '\r' | sort -n | tr '\n' ' ' | sed 's/ *$//')"
+want="$(seq 1 12 | tr '\n' ' ' | sed 's/ *$//')"
+assert_eq_local "6 个 Bash + 6 个 Node 写入者（TMPDIR 各不相同）拿到 1..12" "$got" "$want"
+hw="$(jget "$(runchild "$H" -- "$PREP; team_authority_read" 2>&1)" sequences.reminder 2>/dev/null)"
+assert_eq_local "并发结束后持久 high-water = 13（没有丢更新）" "$hw" "13"
+lock_count="$(find "$H_STATE/reminders" -maxdepth 1 -name 'authority.lock' | wc -l)"
+assert_eq_local "锁是状态根下唯一的一份（与 TMPDIR 无关）" "$lock_count" "1"
+tmp_locks="$(find "$CONC" -maxdepth 2 -name '*authority.lock*' -o -maxdepth 2 -name '*.lock' | wc -l)"
+assert_eq_local "TMPDIR 里没有落下任何锁文件" "$tmp_locks" "0"
+
+# ---------------------------------------------------------------- 8. 原子写：被杀写入者不露半个快照
+K="$(make_repo K)" || { bad "夹具建不出仓库 K"; result; exit 1; }
+K_STATE="$K/.pi/team/state"
+runchild "$K" -- "$PREP; team_authority_init" >/dev/null
+( cd "$K" && for i in $(seq 1 40); do
+    env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION HOME="$ROOT/home" \
+      "$RUNNER" "$NODE_HELPER" --cli "$K" "$K_STATE" read >/dev/null 2>>"$CONC/reader.err" || printf 'BAD-READ\n'
+  done ) >"$CONC/reader.out" 2>&1 &
+READER=$!
+killed=0
+for i in $(seq 1 12); do
+  ( cd "$K" && exec env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION HOME="$ROOT/home" \
+      "$RUNNER" "$NODE_HELPER" --cli "$K" "$K_STATE" allocate reminder >/dev/null 2>&1 ) &
+  victim=$!
+  sleep 0.005
+  kill -9 "$victim" 2>/dev/null && killed=$((killed + 1))
+  wait "$victim" 2>/dev/null
+done
+wait "$READER" 2>/dev/null
+final="$(runchild "$K" -- "$PREP; team_authority_read" 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && grep -qx 'BAD-READ' "$CONC/reader.out" 2>/dev/null; then
+  bad "并发读者看到了读不懂的快照（原子写破了）"
+  tail -3 "$CONC/reader.err" 2>/dev/null | sed 's/^/      /'
+elif [ "$rc" -eq 0 ]; then
+  ok "12 个被杀写入者之后快照仍可读（读者 ${killed} 次命中 kill 窗口，无半个文件）"
+else
+  bad "被杀写入者之后快照读不出来（rc=$rc）"
+fi
+if [ -z "$(find "$K_STATE/reminders" -maxdepth 1 -name '*.tmp' -newer "$K_STATE/reminders/state.json" 2>/dev/null)" ]; then
+  ok "没有比权威快照更新的残留临时快照"
+else
+  note "（有残留 .tmp，但它们被忽略；上面已验证读者不受影响）"
+fi
+
+# ---------------------------------------------------------------- 9. 1.3 边界：本片不动活的 standby
+MARKER="$E/.pi/team/state/standby"
+mkdir -p "$E/.pi/team/state"
+printf '2026-10-29T10:00:00+00:00 waiting for human\n' >"$MARKER"
+marker_before="$(sha256sum "$MARKER" | cut -d' ' -f1)"
+runchild "$E" -- "$PREP; team_authority_init; team_authority_allocate batch" >/dev/null
+marker_after="$(sha256sum "$MARKER" | cut -d' ' -f1)"
+assert_eq_local "本片（1.1/1.2）不读不动旧的 standby 标记" "$marker_after" "$marker_before"
+generation="$(jget "$(runchild "$E" -- "$PREP; team_authority_read" 2>&1)" standby.generation 2>/dev/null)"
+assert_eq_local "新快照的 Standby 槽位是 generation 0（迁移留给 1.3）" "$generation" "0"
+
+# ---------------------------------------------------------------- 10. 红侧：同一个判据，改坏实现必须红
+flip_copy() { # <名字> <sed 表达式> —— 变异必须真的改到（否则红侧就是橡皮章）
+  cp "$SKILL/scripts/state-authority.mjs" "$ROOT/flip/$1.mjs"
+  sed -i "$2" "$ROOT/flip/$1.mjs" || return 1
+  ! cmp -s "$SKILL/scripts/state-authority.mjs" "$ROOT/flip/$1.mjs"
+}
+# 10a. 不持锁的直写：只把生产代码里那条 flock 调用换成直接事务（一行之差，不放大任何窗口）
+if arm_selected unlocked; then
+FLIPS_RUN="${FLIPS_RUN:+$FLIPS_RUN,}unlocked"
+sed 's/  return flock(authorityLock(state), \[.--transaction., located.mainRoot, state\], JSON.stringify(requestData));/  return transaction(located.mainRoot, state, requestData);/' \
+  "$SKILL/scripts/state-authority.mjs" >"$ROOT/flip/unlocked.mjs"
+# 判据本体：W 个进程各做 P 次分配，得到的序号必须恰好是 1..W*P、持久 high-water = W*P+1。
+race_arm() { # <helper> <repo> <state> <writers> <per-writer> → 打印 "<序号…>|<high-water>"
+  local helper="$1" repo="$2" state="$3" w="$4" per="$5" i dir values hw
+  dir="$ROOT/race-$(basename "$helper" .mjs)-$w-$per"; rm -rf "$dir"; mkdir -p "$dir"
+  if [ ! -f "$helper" ]; then bad "红侧夹具：变异副本不存在（$helper）"; return 0; fi
+  for i in $(seq 1 "$w"); do
+    ( cd "$repo" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION HOME="$ROOT/home" \
+        STATE_AUTHORITY_HELPER="$helper" STATE_AUTHORITY_BARRIER="$dir/go" \
+        "$RUNNER" "$HERE/state-authority-node.mjs" "$repo" "$state" "$per" \
+        >"$dir/$i.out" 2>&1 ) &
+  done
+  sleep 1        # 等所有写入者起来（它们在 go 文件出现前不动笔）
+  : >"$dir/go"
+  wait
+  values="$(cat "$dir"/*.out 2>/dev/null | tr -d '\r' | sort -n | tr '\n' ' ' | sed 's/ *$//')"
+  hw="$(jget "$(runchild "$repo" -- "$PREP; team_authority_read" 2>&1)" sequences.reminder 2>/dev/null)"
+  printf '%s|%s\n' "$values" "$hw"
+}
+F_STATE="$F/.pi/team/state"
+runchild "$F" -- "$PREP; team_authority_init" >/dev/null
+W=6; PER=10; TOTAL=$((W * PER))
+want_values="$(seq 1 "$TOTAL" | tr '\n' ' ' | sed 's/ *$//')"
+locked="$(race_arm "$NODE_HELPER" "$F" "$F_STATE" "$W" "$PER")"
+assert_eq_local "原实现（flock -x）：$W×$PER 并发分配恰好拿到 1..$TOTAL" "${locked%|*}" "$want_values"
+assert_eq_local "原实现（flock -x）：持久 high-water = $((TOTAL + 1))（没有丢更新）" "${locked#*|}" "$((TOTAL + 1))"
+unlocked="$(race_arm "$ROOT/flip/unlocked.mjs" "$F" "$F_STATE" "$W" "$PER")"
+u_values="${unlocked%|*}"; u_hw="${unlocked#*|}"
+u_distinct="$(printf '%s' "$u_values" | tr ' ' '\n' | grep -c . || true)"
+if [ "$u_values" != "$(seq $((TOTAL + 1)) $((2 * TOTAL)) | tr '\n' ' ' | sed 's/ *$//')" ] || [ "$u_hw" != "$((2 * TOTAL + 1))" ]; then
+  ok "flip（不持锁的直写）：并发断言变红 —— $TOTAL 次分配得到 $u_distinct 个不同序号、high-water=$u_hw（逐条无丢更新应为 $((2 * TOTAL + 1))）"
+else
+  bad "flip（不持锁的直写）：并发断言仍然是绿的（变异没被咬住）"
+fi
+else
+  note "跳过红侧臂 unlocked（本次 --flip=${FLIP}）"
+fi
+
+# 10b. 删掉版本检查（直接跑 scratch 助手，不经 bash 入口）
+if arm_selected version; then
+FLIPS_RUN="${FLIPS_RUN:+$FLIPS_RUN,}version"
+if flip_copy version 's/if (snapshot.version !== SNAPSHOT_VERSION) fail/if (false) fail/'; then
+  ok "flip 变异已落地：快照版本检查被删"
+else
+  bad "flip 变异没落地（源码形状变了，夹具需要更新）"
+fi
+flip_helper() { # <helper> <repo> <state> <op> → 打印输出
+  ( cd "$2" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION HOME="$ROOT/home" \
+      "$RUNNER" "$1" --cli "$2" "$3" "$4" 2>&1 )
+}
+cp "$A_STATE/reminders/state.json" "$ROOT/state-good.json"
+sed 's/"version":1/"version":2/' "$ROOT/state-good.json" >"$SNAP"
+out="$(flip_helper "$NODE_HELPER" "$A" "$A_STATE" read)"; rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"unsupported state version"*) true ;; *) false ;; esac; then
+  ok "原实现：版本 2 的快照被拒绝（判据成立）"
+else
+  bad "原实现没有拒绝版本 2（rc=$rc，输出：$(printf '%s' "$out" | tr '\n' '|')）"
+fi
+out="$(flip_helper "$ROOT/flip/version.mjs" "$A" "$A_STATE" read)"; rc=$?
+if [ "$rc" -eq 0 ]; then
+  ok "flip（删掉版本检查）：同一份版本 2 快照被接受 —— 上一条具名断言会红"
+else
+  bad "flip（删掉版本检查）：版本 2 仍被拒绝（rc=$rc，输出：$(printf '%s' "$out" | tr '\n' '|')）"
+fi
+cp "$ROOT/state-good.json" "$SNAP"
+else
+  note "跳过红侧臂 version（本次 --flip=${FLIP}）"
+fi
+
+# 10c. 删掉外来项目检查
+if arm_selected foreign; then
+FLIPS_RUN="${FLIPS_RUN:+$FLIPS_RUN,}foreign"
+if flip_copy foreign 's/if (inside \&\& inside\[1\] !== main) {/if (false) {/'; then
+  ok "flip 变异已落地：外来项目检查被删"
+else
+  bad "flip 变异没落地（源码形状变了，夹具需要更新）"
+fi
+out="$( cd "$G" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION HOME="$ROOT/home" "$RUNNER" "$ROOT/flip/foreign.mjs" --cli "$G" "$B/.pi/team/state" resolve 2>&1 )"; rc=$?
+if [ "$rc" -eq 0 ] && [ -f "$B/.pi/team/reminder-locator.json" ]; then
+  ok "flip（删掉外来项目检查）：别的项目的 .pi/team 被接受 —— 上一条具名断言会红"
+else
+  bad "flip（删掉外来项目检查）：外来状态根仍被拒（rc=$rc，输出：$(printf '%s' "$out" | tr '\n' '|')）"
+fi
+rm -rf "$B/.pi"
+else
+  note "跳过红侧臂 foreign（本次 --flip=${FLIP}）"
+fi
+
+# ---------------------------------------------------------------- 11. 事故形状的证明：主项目 .pi/team 没被碰过
+manifest_snapshot "${REAL_MAIN:-/nonexistent}/.pi/team" >"$REAL_AFTER"
+violations="$(manifest_violations "$REAL_BEFORE" "$REAL_AFTER")"
+volatile_n="$(manifest_volatile_count "$REAL_BEFORE" "$REAL_AFTER")"
+pinned_n="$(awk -F"\t" '$1 !~ /^\.\/state\//' "$REAL_BEFORE" | wc -l | tr -d ' ')"
+if [ -z "$violations" ]; then
+  ok "主项目 .pi/team：非白名单路径零变化（钉住 $pinned_n 个文件；同期白名单内 $volatile_n 个运行时文件在动，按名字放行）"
+else
+  bad "主项目 .pi/team 出现了非白名单变化（$(printf '%s' "$violations" | tr '\n' ' ')）"
+  printf '%s\n' "$violations" | head -12 | sed 's/^/      /'
+fi
+# 事故形状（2026-10-31：往主项目写了提醒与 Standby 状态）：这些路径在真实项目里必须**不存在**
+for leaked in "$REAL_MAIN/.pi/team/reminder-locator.json" "$REAL_MAIN/.pi/team/state/reminders" \
+              "$REAL_MAIN/.pi/team/state/standby" "$REAL_MAIN/reminder-locator.json"; do
+  [ -n "$REAL_MAIN" ] || break
+  if [ ! -e "$leaked" ]; then
+    ok "事故形状：主项目里没有出现 ${leaked#"$REAL_MAIN"/}"
+  else
+    bad "事故形状：夹具在主项目里留下了 ${leaked#"$REAL_MAIN"/}"
+  fi
+done
+note "证明对象：${REAL_MAIN:-（本检出没有主工作树）}/.pi/team（非白名单路径逐字节；白名单形状按名字放行）"
+
+# 白名单自检：权威的写面一个都不许被白名单放行（防止用「加个名字」把事故形状藏起来）
+leaked_names=""
+for probe in ./reminder-locator.json ./reminder-locator.lock ./state/reminders ./state/reminders/state.json \
+             ./state/reminders/authority.lock ./state/standby ./state/standby.lock; do
+  state_volatile "$probe" && leaked_names="$leaked_names $probe"
+done
+assert_eq_local "白名单没有覆盖权威写面（加名字遮不住事故形状）" "$leaked_names" ""
+
+# 判据本身必须可证伪：在 scratch 树上故意写 state/<杂散文件>，那条必须报；写白名单内的形状必须不报。
+f3="$ROOT/f3-tree"
+mkdir -p "$f3/.pi/team/state/bg" "$f3/.pi/team/state/inbox-watch"
+printf 'session=fixture\n' >"$f3/.pi/team/config.sh"
+printf 'a\n' >"$f3/.pi/team/state/watchdog.log"
+printf 'holds\n' >"$f3/.pi/team/state/inbox-watch/dev.reg"
+manifest_snapshot "$f3/.pi/team" >"$ROOT/f3-1.txt"
+printf 'b\n' >>"$f3/.pi/team/state/watchdog.log"
+printf 'tick\n' >"$f3/.pi/team/state/bg/job.log"
+printf 'holds2\n' >"$f3/.pi/team/state/inbox-watch/dev.reg"
+manifest_snapshot "$f3/.pi/team" >"$ROOT/f3-2.txt"
+out="$(manifest_violations "$ROOT/f3-1.txt" "$ROOT/f3-2.txt")"
+assert_eq_local "只动白名单形状的运行时文件：不算违规（判据不是「一切都不许变」）" "$out" ""
+printf 'stray\n' >"$f3/.pi/team/state/stray-evidence.txt"
+manifest_snapshot "$f3/.pi/team" >"$ROOT/f3-3.txt"
+out="$(manifest_violations "$ROOT/f3-2.txt" "$ROOT/f3-3.txt")"
+assert_eq_local "state/ 下的杂散文件必须被点名（事故形状）" "$out" "./state/stray-evidence.txt"
+printf 'stray\n' >"$f3/.pi/team/note.txt"
+manifest_snapshot "$f3/.pi/team" >"$ROOT/f3-4.txt"
+out="$(manifest_violations "$ROOT/f3-3.txt" "$ROOT/f3-4.txt")"
+assert_eq_local "state/ 之外的新文件同样被点名" "$out" "./note.txt"
+# 10d. F3 的红侧：把「整段跳过 state/」这个旧形状放回来，杂散文件那条必须不再被报（=会红）
+if arm_selected manifest; then
+  FLIPS_RUN="${FLIPS_RUN:+$FLIPS_RUN,}manifest"
+  out="$(MANIFEST_BREAK=skip-state manifest_violations "$ROOT/f3-2.txt" "$ROOT/f3-3.txt")"
+  if [ -z "$out" ]; then
+    ok "flip（跳过 state/ 的旧形状）：state/ 下的杂散文件不再被报 —— 上一条具名断言会红"
+  else
+    bad "flip（跳过 state/ 的旧形状）没落地：仍然报了 [$out]"
+  fi
+  out="$(MANIFEST_BREAK=skip-state manifest_violations "$ROOT/f3-3.txt" "$ROOT/f3-4.txt")"
+  assert_eq_local "flip（跳过 state/ 的旧形状）：state/ 之外的杂散文件仍然被报（没收窄判据）" "$out" "./note.txt"
+else
+  note "跳过红侧臂 manifest（本次 --flip=${FLIP}）"
+fi
+
+result
