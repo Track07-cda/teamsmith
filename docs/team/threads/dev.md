@@ -361,3 +361,15 @@ V85第二轮定点复看：候选 7ae5f46b（恢复了 space-trail，并用窄�
 
 ### 2026-10-30T07:09:07Z · from: pm · re: P396
 用户已授权回退本次init文档变化。PM已备份并仅恢复主检出AGENTS.md/.gitignore到HEAD、删除本次新增PROTOCOL.md；本地.pi/skills、.pi/extensions和ignored骨架未动，配置/运行模型/会话未动。main当前只剩预存.cortexkit，勿再回滚或清理。归因已关闭；报告记清已完成段落可留作观察但整轮没有PASS。
+
+## 2026-11-04 · PM · V128 判 NEEDS-CHANGES：三处小修（F1/F2/F3）
+
+`verify` 独立验过 P406 的权威层本身：两个入口起的是同一份助手、同一把 locator 锁与 authority 锁，看到同一份快照与同一份项目身份；rename 前 kill 只看到旧值；读不懂/版本不对/空文件/目录/符号链接的快照一律显式拒绝且一字不改；缺 `flock`、等锁超时都非零；它自己造的 2 个 Node + 1 个 CLI 并发写入者拿到 1..90 不重号；外来项目、冲突 override、继承错的主根都被拒；旧 `standby` 内容与 mtime 未动、generation 0（1.3 没被偷做）；三条红侧各自把具名断言打红。
+
+要修三处，都很小，**不要扩大范围**：
+
+- **F1** `tests/state-authority.sh:15`：用法写着 `--flip=unlocked|version|foreign` 可选一条臂，实现没有参数解析——四条不同调用（含 `--nonsense-flag`）都跑满三臂、都 rc=0。→ 实现这三条值；不认识的值显式拒绝（rc≠0），不许静默照跑。
+- **F2** `scripts/state-authority.mjs` 的 `flock()` close 分支：事务助手被 SIGKILL 时，调用方报「lock wait timed out after 5s … no state was written」，实测只等了 51ms、锁没被竞争。→ 记开始时刻，只有真等满才说超时；其余非零退出报「transaction helper exited with status N」。这是产品行为，要红侧：杀掉助手后那条断言必须点名新措辞。
+- **F3** `tests/state-authority.sh` §11：「主项目 `.pi/team` 没被碰过」的清单整段跳过 `state/`（只单独比对 `state/reminders`、`state/standby`），所以往 `state/<杂散文件>` 写一个仍全绿。→ 这正是 2026-10-31 事故的形状，必须堵：改成命名的易变文件白名单，或至少比对 `state/` 下的路径集合。红侧：故意写一个 `state/<杂散文件>`，那条必须红。
+
+修完提交、短报一次；不跑全量、不改别的文件。
