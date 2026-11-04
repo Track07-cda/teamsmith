@@ -53,14 +53,30 @@ else
   bad "门禁面里出现了这一种墙钟阈值比较（时间成了判决）：$DUR_HITS"
 fi
 
-# ② 门禁不点名测量夹具（它们只在参考读数路径里被调用）
+# ② 门禁**不调用**测量夹具（它们只在参考读数路径里被调用）。
+# P410：这里原先按「文件里出现即红」判，而 P404 的声明面走查（§19 的 `os_need …`）必须把
+# `tests/<fixture>.sh` 作为**字面期望文本**写进 smoke.sh 才能核对 SKILL.md / protocol.md 的那句话 ——
+# 于是 main 上这一条自 P404 合并起就是红的（2026-11-04 实测：main 的 smoke.sh 11405/11413 行，
+# `bash gate-guard.sh` rc=1），§0e 的「干净副本绿」跟着红。
+# 判据改成行为面，只保留一种合法写法：**单引号里的字面量**（= 拿来跟文档正文比对的期望词）；
+# 单引号之外出现这个文件名（`"$SKILL_DIR/tests/…"`、裸 `tests/…`、`x=tests/…`）= 指向/调用 → 红。
+# 边界照实说：它仍然只是「这一种写法」的机械证明 —— 单引号包住的执行形态它看不见（路径也写不对，
+# 真要调用的人不会那么写）；两种非字面形态各有一条具名翻转在 §0e。
 FIX_RE='panel-cpu\.sh|panel-cpu-premise\.sh|perf\.sh|load-experiment\.sh'
 if [ -f "$smoke" ]; then
-  fixes="$(grep -nE -- "$FIX_RE" "$smoke" || true)"
+  fixes=""
+  while IFS= read -r ln; do
+    [ -n "$ln" ] || continue
+    # 剥掉单引号字面量（`'tests/perf.sh'`）后再判：剩下的部分里还有就说明它不在文档期望的位置上。
+    rest="$(printf '%s' "${ln#*:}" | sed -E "s/'[^']*'//g")"
+    printf '%s' "$rest" | grep -qE -- "$FIX_RE" && fixes="$fixes$ln; "
+  done <<FIXEOF
+$(grep -nE -- "$FIX_RE" "$smoke" || true)
+FIXEOF
   if [ -z "$fixes" ]; then
-    ok "smoke.sh 不点名测量/参考夹具（性能读数不在正确性门禁里跑）"
+    ok "smoke.sh 不调用测量/参考夹具（只把它们的文件名当单引号字面期望）"
   else
-    bad "smoke.sh 点名了测量/参考夹具：$(printf '%s' "$fixes" | head -3 | tr '\n' ';')"
+    bad "smoke.sh 调用/指向了测量夹具（单引号之外出现文件名 = 不是文档期望文本）：$(printf '%s' "$fixes" | head -3 | tr '\n' ';')"
   fi
 else
   bad "缺 $smoke"

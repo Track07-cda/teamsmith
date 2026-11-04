@@ -140,12 +140,17 @@ SMOKE_CALLER_TMUX_TMPDIR="${TMUX_TMPDIR:-/tmp}"   # 调用者原本的 socket �
 KEEP="${TEAM_SMOKE_KEEP:-0}"
 # P98：参数 = --keep / --paths <路径>… / --select <key>[,<key>…] / --floor [--paths <路径>…] / --slice <k>/<N>；不认识的参数**拒绝**（不静默忽略：
 # 「以为传了选段、其实跑了全套或什么都没跑」是同一种危险）。选择决定在拿机器锁之前算（见下）。
+ORIG_ARGS=("$@")      # P410：快照转发要用**原始**参数（下面的解析会把 "$@" shift 光）
 SELECT_MODE_REQ=""
 SELECT_ARGS=()
 SELECT_SLICE=""        # P346：--slice k/N（与三种基线决策正交；只有它是「不带决策」的唯一入口）
 while [ $# -gt 0 ]; do
   case "$1" in
     --keep) KEEP=1; shift ;;
+    # P410 · 冻结快照运行：把被验的那个**提交**导成一个独立工作树，在它里面跑（活树上的后续提交/未提交
+    # 改动都不再影响这次判定）。默认 sha = 当前 HEAD；`--snapshot=<sha>` 指定别的提交。
+    --snapshot) SNAPSHOT_REQ=1; shift ;;
+    --snapshot=*) SNAPSHOT_REQ=1; SNAPSHOT_SHA="${1#--snapshot=}"; shift ;;
     --break)
       [ $# -ge 2 ] || { printf 'smoke: --break 需要阶段名（no-lock-guard|no-entry-check；只有 TEAM_SMOKE_FIXTURE=1 时生效）\n' >&2; exit 2; }
       TEAM_SMOKE_BREAK="$2"; export TEAM_SMOKE_BREAK; shift 2 ;;
@@ -175,9 +180,83 @@ while [ $# -gt 0 ]; do
       SELECT_MODE_REQ="select"; shift
       [ $# -gt 0 ] || { printf 'smoke: --select 需要 key\n' >&2; exit 2; }
       SELECT_ARGS+=("$1"); shift ;;
-    *) printf 'smoke: 未知参数 %s（用法：smoke.sh [--keep] [--break=<阶段>] [--slice <k>/<N>] [--paths <路径>… | --select <key>[,<key>…] | --floor [--paths <路径>…]]）\n' "$1" >&2; exit 2 ;;
+    *) printf 'smoke: 未知参数 %s（用法：smoke.sh [--keep] [--break=<阶段>] [--slice <k>/<N>] [--snapshot[=<sha>]] [--paths <路径>… | --select <key>[,<key>…] | --floor [--paths <路径>…]]）\n' "$1" >&2; exit 2 ;;
   esac
 done
+
+# ── P410 · 冻结快照：被指纹判定的运行必须跑在一个不动的树上 ─────────────────────────────────────
+# 为什么（2026-11-04，同一形状发生过两次：P398、P410 第三轮）：门禁的「本次运行无效」指纹会抓到
+# **运行中提交**（HEAD 变了 / 脏文件数变了）并把整轮作废 —— 判据是对的（夹具改树就该作废），错的
+# 是把「跑的时候别提交」当成纪律去要求人。改成机制：`--snapshot` 把被验的**提交**导成独立工作树，
+# 在那里跑；活树后面怎么改都不影响。快照内部指纹照旧生效（它还能抓到夹具自己改树）。
+#   · 快照只含**已提交**内容：活树上有未提交改动时先说一声（那些改动不在这次判定里）；
+#   · 记录里写死 sha：外层打印一次，内层把它带进运行摘要（TEAM_SNAPSHOT_SHA）；
+#   · 收尾删快照工作树 + prune（`TEAM_SNAPSHOT_KEEP=1` 留着看现场）。
+if [ "${SNAPSHOT_REQ:-0}" = "1" ]; then
+  SNAP_ROOT_TREE="$(cd -P "$SKILL_DIR/../.." && pwd)"
+  SNAP_REPO="$(git -C "$SNAP_ROOT_TREE" rev-parse --show-toplevel 2>/dev/null || true)"
+  [ -n "$SNAP_REPO" ] || { printf 'smoke --snapshot：当前树不是一个 git 工作树（%s）\n' "$SNAP_ROOT_TREE" >&2; exit 2; }
+  SNAP_SHA="${SNAPSHOT_SHA:-$(git -C "$SNAP_REPO" rev-parse HEAD 2>/dev/null || true)}"
+  SNAP_FULL="$(git -C "$SNAP_REPO" rev-parse --verify --quiet "${SNAP_SHA}^{commit}" || true)"
+  [ -n "$SNAP_FULL" ] || { printf 'smoke --snapshot：解析不出提交 %s\n' "${SNAP_SHA:-<HEAD>}" >&2; exit 2; }
+  SNAP_DIRTY="$(git -C "$SNAP_REPO" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+  # 快照根**不放在调用者的 TMPDIR 里**：§40 会拿 TMPDIR 清点「本轮的临时根家族」，一个装着整份仓库的
+  # 外姓目录出现在那里会让它误判（而且快照不是门禁的现场）。默认 /var/tmp（本机磁盘，140G），可用
+  # TEAM_SNAPSHOT_DIR 覆盖。
+  SNAP_PARENT="${TEAM_SNAPSHOT_DIR:-/var/tmp}"
+  [ -d "$SNAP_PARENT" ] && [ -w "$SNAP_PARENT" ] || SNAP_PARENT="${TMPDIR:-/var/tmp}"
+  SNAP_BASE="$(mktemp -d "$SNAP_PARENT/teamsmith-snapshot.XXXXXX")" || { printf 'smoke --snapshot：建不了快照目录（%s）\n' "$SNAP_PARENT" >&2; exit 2; }
+  if ! git -C "$SNAP_REPO" worktree add --detach "$SNAP_BASE/tree" "$SNAP_FULL" >/dev/null 2>"$SNAP_BASE/add.err"; then
+    printf 'smoke --snapshot：`git worktree add --detach` 失败：\n' >&2
+    sed 's/^/  /' "$SNAP_BASE/add.err" >&2
+    rm -rf "$SNAP_BASE"; exit 2
+  fi
+  printf '\033[36m快照运行\033[0m：committed=%s · 快照=%s · 活树未提交改动 %s 项（不在本次判定里）\n' \
+    "$SNAP_FULL" "$SNAP_BASE/tree" "$SNAP_DIRTY"
+  printf '  （活树上的后续提交不再让这一轮作废；快照内部指纹照旧抓「夹具改了树」）\n'
+  # 收尾必须抗「被打断」：Ctrl-C / 被 kill / 管道那头先关（SIGPIPE）之后，/var/tmp 下不能攒下完整仓库
+  # 副本与已注册的工作树（实测：管道被 `head` 关掉就漏一个）。所以内层运行**放后台**、外层用 `wait`
+  # 等 —— `wait` 被 trap 住的信号打断时会立刻返回（前台命令则不会），trap 才有机会收尾。
+  snap_cleanup() {
+    [ -n "${SNAP_BASE:-}" ] || return 0
+    trap - EXIT INT TERM HUP
+    if [ -n "${SNAP_CHILD:-}" ] && kill -0 "$SNAP_CHILD" 2>/dev/null; then
+      printf 'smoke --snapshot：中途收尾，先停快照里的运行（pid=%s）\n' "$SNAP_CHILD" >&2
+      kill -TERM "$SNAP_CHILD" 2>/dev/null || true
+      SNAP_W=0; while kill -0 "$SNAP_CHILD" 2>/dev/null && [ "$SNAP_W" -lt 50 ]; do sleep 0.2; SNAP_W=$((SNAP_W + 1)); done
+      kill -KILL "$SNAP_CHILD" 2>/dev/null || true
+    fi
+    if [ "${TEAM_SNAPSHOT_KEEP:-0}" = "1" ]; then
+      printf 'smoke --snapshot：保留快照 %s（TEAM_SNAPSHOT_KEEP=1）\n' "$SNAP_BASE/tree"
+      SNAP_BASE=""; return 0
+    fi
+    if ! git -C "$SNAP_REPO" worktree remove --force "$SNAP_BASE/tree" >/dev/null 2>&1; then
+      # 不静默：说清是哪一条没成（目录仍会尽力删，prune 兜住注册表）。
+      printf 'smoke --snapshot：⚠ `git worktree remove --force` 没成功（%s），改用 prune + rm 兜底\n' "$SNAP_BASE/tree" >&2
+    fi
+    git -C "$SNAP_REPO" worktree prune >/dev/null 2>&1 || true
+    rm -rf "$SNAP_BASE" || printf 'smoke --snapshot：⚠ 快照目录删不掉：%s\n' "$SNAP_BASE" >&2
+    SNAP_BASE=""
+  }
+  trap 'snap_cleanup' EXIT INT TERM HUP
+  # 除 --snapshot 之外的参数原样转发；在快照里跑**快照自己的** smoke.sh。
+  SNAP_ARGS=()
+  for a in "${ORIG_ARGS[@]}"; do
+    case "$a" in --snapshot|--snapshot=*) ;; *) SNAP_ARGS+=("$a") ;; esac
+  done
+  ( cd "$SNAP_BASE/tree" && TEAM_SNAPSHOT_SHA="$SNAP_FULL" bash "$SNAP_BASE/tree/skills/teamsmith/tests/smoke.sh" "${SNAP_ARGS[@]}" ) &
+  SNAP_CHILD=$!
+  SNAP_RC=0
+  while :; do
+    wait "$SNAP_CHILD"; SNAP_RC=$?
+    # 被信号打断（>128）且孩子还活着 → 继续等它；trap 已经收过尾时 SNAP_BASE 已空，下面 break。
+    [ "$SNAP_RC" -gt 128 ] && kill -0 "$SNAP_CHILD" 2>/dev/null && [ -n "${SNAP_BASE:-}" ] && continue
+    break
+  done
+  SNAP_CHILD=""
+  printf '快照运行结束：committed=%s rc=%s\n' "$SNAP_FULL" "$SNAP_RC"
+  exit "$SNAP_RC"
+fi
 
 # ── P223 · 保留现场的决定必须在拿机器锁之前落进环境 ────────────────────────────────────────────
 # 事故（2026-10-04，P214 的两次 CI 红）：CI 的 `gate-failure-scene` 工件里只有一份 285 字节的
@@ -208,10 +287,11 @@ FAST=$FAST_REQ
 LIVE_RAN=0     # 真进程段落实际执行了几次（FAST 模式下必须保持 0）
 SKIP_SEGS=""   # 所有显式跳过的段落标记（skipped() 用）
 FAST_SKIP_SEGS=""  # 只装 FAST 跳过的真进程段落（收尾行报的就是它们）
-SKIP_N=0       # 跳过总数 = FAST_SKIP_N + COND_SKIP_N + PREREQ_SKIP_N（账本自查钉住恒等式）
+SKIP_N=0       # 跳过总数 = FAST_SKIP_N + COND_SKIP_N + PREREQ_SKIP_N + META_SKIP_N（账本自查钉住恒等式）
 FAST_SKIP_N=0
 COND_SKIP_N=0
 PREREQ_SKIP_N=0
+META_SKIP_N=0  # 二阶段段按频率跳过（P410）：默认不跑、逐段打印为什么 + 最近一次绿记录
 PREREQ_SKIP_SEGS=""  # 检出前提跳过的条目名（收尾行分开报；不进 FAST 段落列表）
 
 # ── P98 · 选段（change: gate-runtime-budget · verification#A changed-path list selects…）──
@@ -386,7 +466,7 @@ smoke_ledger_selfcheck() { # 段落增量之和 vs 结果行总数：不一致�
   [ "$SMOKE_SEC_SUM_F" -eq "$FAIL" ] || same=0
   # P148：SKIP 也入对账（段计数与总数自洽 = 每条跳过都经了出口、都被记进了段落增量）
   [ "$SMOKE_SEC_SUM_S" -eq "$SKIP_N" ] || same=0
-  [ "$SKIP_N" -eq "$((FAST_SKIP_N + COND_SKIP_N + PREREQ_SKIP_N))" ] || same=0
+  [ "$SKIP_N" -eq "$((FAST_SKIP_N + COND_SKIP_N + PREREQ_SKIP_N + META_SKIP_N))" ] || same=0
   # 冒号要留在颜色序列**里面**：assert_has 搜的是连续字节 `账本自查：`（P98 实测）。
   printf '\033[2m账本自查：\033[0m %s 段收口 · 增量 ✓%d ✗%d SKIP%d ｜ 结果行 ✓%d ✗%d —— %s\n' \
     "$SMOKE_SEC_CLOSES" "$SMOKE_SEC_SUM_P" "$SMOKE_SEC_SUM_F" "$SMOKE_SEC_SUM_S" "$PASS" "$FAIL" \
@@ -810,6 +890,129 @@ fast_skip() { # <段落标记> <原因>：FAST 模式跳过真进程段落时唯
 }
 skipped() { case "|$SKIP_SEGS|" in *"|$1|"*) return 0 ;; *) return 1 ;; esac; }   # 首尾补 | ，最后一段也能匹配
 
+# ── P410 · 两阶段：一阶（验产品行为）每次跑，二阶（验测试/夹具/文档承诺本身）低频跑 ─────────────────────
+# 用户 2026-11-04 的裁定：每次门禁只跑一阶，把「验测试有没有牙齿」的那类段搬到低频元套件。位置错配的
+# 成本是可见的：2026-10-30 那次全量 184.9 分钟里，§61b 一段就占 5724 s、§36 964 s、§51 1037 s、
+# §38 718 s（账本 /var/tmp 里那轮的 sections.tsv），而这几段测的是选择器、夹具的牙齿与文档承诺，
+# 它们改动的频率远低于产品代码。
+#
+# **清单的唯一来源是 tests/section-paths.tsv 的表头 `# meta-suite:`**（与选段器同源：`--meta` 就是
+# 它的只读出口；`--check ⑩` 守着「一阶 ∪ 二阶 = 全部段」）。不在这里再写一份名单 —— 两份名单一定会漂。
+#   TEAM_META=1  → 跑二阶段（tests/meta-suite.sh 的入口）
+#   未设/0      → 二阶段逐段打印一行 `SKIP（二阶 · 默认不跑）<段号> —— <为什么>；最近一次绿记录：…`
+#                  正文不执行（不是「少了几条断言」，是整段没跑，并且说清了为什么、上次什么时候绿过）
+# 调用方用 `if smoke_meta_begin <key>; then <正文>; fi` 包住段体：返回值就是「跑不跑」这一件事。
+# 读不到清单时按「全部是一阶」跑（安全方向 = 多跑），但**必须出声**：静默多跑和静默少跑一样危险。
+META_MODE=0
+case "${TEAM_META:-0}" in
+  0|""|no|NO|false|FALSE|off|OFF) META_MODE=0 ;;
+  1|y|Y|yes|YES|true|TRUE|on|ON) META_MODE=1 ;;
+  *) printf 'TEAM_META=%s 不认识（用 1=跑二阶段（元套件）/ 0=只跑一阶段）\n' "${TEAM_META:-}" >&2; exit 2 ;;
+esac
+META_KEYS=""        # 二阶段段 key，两端带空格（`case " $META_KEYS " in *" $k "*`）
+META_ALL_KEYS=""    # 表里全部段 key（并集断言的另一半：全量运行里每一行都该开段）
+META_KEY_N=0        # 清单里几段
+META_TOTAL_N=0      # 表里几行（并集断言的另一半；读不到就是 0 = 那条断言不出结论）
+META_SKIP_SEGS=""   # 本轮按频率跳过的段 key（两端带空格）
+META_SKIP_LOG=""    # 跳过行的落盘副本（$TMP 下；§14d 拿它数「输出里到底有几行」）
+META_RAN_SEGS=""    # 本轮在 TEAM_META=1 下真跑的二阶段段 key（两端带空格）
+META_RAN_N=0
+META_NOREASON_N=0   # 跳过行没有理由的段数（声明缺陷；一阶运行里必须为 0）
+SMOKE_OPENED=""     # 本轮开过段的全部 key（段头自己记；二阶账据此找「开了段却没经 smoke_meta_begin」）
+declare -A META_REASON_OF=()
+META_GREEN_RECORD=""   # 「最近一次绿记录：<时间>（<路径>）」—— 一次运行读一次，六行跳过行共用
+# 记录目录按**项目**而不是按工作树/席位：同一个仓库的席位与它们的主检出共享一份记录（`.pi/team/`
+# 就是那处共享运行面），否则 PM 在自己的复验工作树里读不到席位造的那条绿 —— 而「发版前有 ≤7 天绿记录」
+# 正是要在那里被断言。
+meta_project_root() { # → 仓库的公共根（工作树也从 git-common-dir 回到同一个主检出）
+  local root gc
+  root="$(cd -P "$SKILL_DIR/../.." 2>/dev/null && pwd || printf '')"
+  [ -n "$root" ] || { printf '?'; return 0; }
+  gc="$(git -C "$root" rev-parse --git-common-dir 2>/dev/null || true)"
+  case "$gc" in
+    '') printf '%s' "$root"; return 0 ;;
+    /*) ( cd -P "$gc/.." 2>/dev/null && pwd ) || printf '%s' "$root" ;;
+    *)  ( cd -P "$root/$gc/.." 2>/dev/null && pwd ) || printf '%s' "$root" ;;
+  esac
+}
+meta_record_dir() { printf '%s\n' "${TEAM_META_RECORD_DIR:-$(meta_project_root)/.pi/team/state/meta-suite}"; }
+meta_last_green() { # → 「<ISO 时间>（距现在 N 天）（<history 路径>）」；没有绿记录就说出怎么造一条
+  local d f proj line at verdict rp rec tot secs found="" age
+  d="$(meta_record_dir)"; f="$d/history.tsv"; proj="$(meta_project_root)"
+  if [ ! -r "$f" ]; then
+    printf '无（还没跑过元套件：bash skills/teamsmith/tests/meta-suite.sh，记录写在 %s）' "$f"
+    return 0
+  fi
+  # 只认**本项目**的 GREEN 行：别的项目的一次绿不能给这一次的跳过行背书。
+  while IFS=$'\t' read -r at verdict rp rec tot secs; do
+    [ "$verdict" = "GREEN" ] || continue
+    [ "${rp%/}" = "${proj%/}" ] || continue
+    found="$at"
+  done < "$f"
+  if [ -n "$found" ]; then
+    age="$(meta_record_age_days "$found")"
+    printf '%s（距现在 %s 天）（%s）' "$found" "$age" "$f"
+  else printf '无（%s 里没有本项目的 GREEN 记录）' "$f"; fi
+}
+meta_record_age_days() { # <ISO 时间> → 天数（读不出来就打印 ?，由断言那边判红）
+  local t now
+  t="$(date -u -d "$1" +%s 2>/dev/null || true)"
+  case "$t" in ''|*[!0-9]*) printf '?'; return 0 ;; esac
+  now="$(date -u +%s)"
+  printf '%s' "$(( (now - t) / 86400 ))"
+}
+meta_plan_load() {
+  local out rc k why n
+  if [ ! -f "$SKILL_DIR/tests/section-select.sh" ]; then
+    printf '注意：没有 %s —— 读不到二阶段清单，本轮按「全部是一阶」跑（多跑不会少跑）\n' \
+      "$SKILL_DIR/tests/section-select.sh"
+    return 0
+  fi
+  out="$(bash "$SKILL_DIR/tests/section-select.sh" --meta 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf '注意：读不到二阶段清单（section-select.sh --meta rc=%s）：%s\n  本轮按「全部是一阶」跑（安全方向 = 多跑）；门禁结构有问题，§36 的自检会红\n' \
+      "$rc" "$(printf '%s' "$out" | head -3 | tr '\n' ' ')"
+    return 0
+  fi
+  while IFS=$'\t' read -r k why; do
+    [ -n "$k" ] || continue
+    META_KEYS="$META_KEYS$k "; META_KEY_N=$((META_KEY_N + 1)); META_REASON_OF[$k]="$why"
+  done <<<"$out"
+  if out="$(bash "$SKILL_DIR/tests/section-select.sh" --list 2>/dev/null)"; then
+    META_ALL_KEYS="$(printf '%s\n' "$out" | awk -F'\t' 'NF { printf "%s ", $1 }')"
+    META_ALL_KEYS="${META_ALL_KEYS% }"
+    n="$(printf '%s\n' "$out" | awk 'END { print NR }')"
+    case "$n" in ''|*[!0-9]*) ;; *) META_TOTAL_N="$n" ;; esac
+  fi
+  META_GREEN_RECORD="$(meta_last_green)"
+  return 0
+}
+meta_plan_load
+smoke_meta_begin() { # <段 key> → 0 = 跑本段正文；1 = 已按频率跳过（跳过行已打印）
+  local k="$1" why
+  # $TMP 由 §0 建（本函数只在段体里被调用），所以落盘路径在这里钉一次而不是在文件顶部。
+  [ -n "$META_SKIP_LOG" ] || META_SKIP_LOG="${TMP:-/tmp}/meta-skip-lines.log"
+  if [ "$META_MODE" = "1" ]; then
+    META_RAN_N=$((META_RAN_N + 1)); META_RAN_SEGS="$META_RAN_SEGS$k "
+    return 0
+  fi
+  case " $META_KEYS " in *" $k "*) ;; *) return 0 ;; esac   # 不在一阶清单里就不是二阶：照跑
+  why="${META_REASON_OF[$k]:-}"
+  section_guard_check
+  SKIP_N=$((SKIP_N + 1)); META_SKIP_N=$((META_SKIP_N + 1))
+  SKIP_SEGS="${SKIP_SEGS}|$k"; META_SKIP_SEGS="$META_SKIP_SEGS$k "
+  [ -n "$why" ] || META_NOREASON_N=$((META_NOREASON_N + 1))
+  # 一行说全三件事：哪一段、为什么它是二阶、上一次什么时候绿过（在哪张记录里）。
+  # 用 `tee -a` 同时写 stdout 与 $META_SKIP_LOG：两者是同一份字节，所以 §14d 对文件的那几条断言
+  # 就是「输出里真的有这一行」的断言（不是另一份账）。这一行被删掉 → 文件为空 → 那里立刻红。
+  printf '  \033[33mSKIP（二阶 · 默认不跑）\033[0m %s —— %s；最近一次绿记录：%s\n' \
+    "$k" "${why:-（表里没写理由 —— 这是清单的声明缺陷）}" "$META_GREEN_RECORD" | tee -a "$META_SKIP_LOG"
+  printf '     （TEAM_META=1 或 bash %s 才跑这一段；见 section-paths.tsv 的 meta-suite 头）\n' \
+    "$SKILL_DIR/tests/meta-suite.sh"
+  return 1
+}
+
 cond_skip() { # <段落标记> [<原因>]：条件不满足时的跳过出口（V7-F6：skip 是约定不是 FAIL，必须打印）
   section_guard_check
   SKIP_N=$((SKIP_N + 1)); COND_SKIP_N=$((COND_SKIP_N + 1))
@@ -860,6 +1063,7 @@ section() {
   SMOKE_SEC_OPEN_KEY="${1%% · *}"; SMOKE_SEC_OPEN_ID="$1"
   SMOKE_SEC_P0=$PASS; SMOKE_SEC_F0=$FAIL; SMOKE_SEC_S0=$SKIP_N
   SMOKE_LAST_SECTION="$1"
+  SMOKE_OPENED="$SMOKE_OPENED${SMOKE_OPENED:+ }${1%% · *}"   # P410：二阶账要知道这一轮开过哪些段
   section_guard_begin "$1"       # P70：开这一段（打印唯一的开跑行：== #N id == ISO）
 }
 ok()  { section_guard_check; printf '  \033[32m✓\033[0m %s\n' "$1"; PASS=$((PASS + 1)); }
@@ -1816,6 +2020,7 @@ fi
 # ---------------------------------------------------------------- 0e. P70 段落自述（change: gate-section-accounting）
 # 每段自述/硬预算/现场的守门断言（纯逻辑 + 模块自检，不碰 tmux、不碰真项目）。
 section "0e · 段落自述：看门狗 / 循环清单（P70 · P316）"
+if smoke_meta_begin "0e"; then   # P410 二阶：默认不跑；TEAM_META=1 / meta-suite.sh 才跑
 # ① 看门狗在岗、但不在作业表里（M33 哨兵同形：12b-i 的裸 wait 不能被它卡住）
 P70_WD_PID="$(awk -F'\t' 'NR==1{print $1}' "$SG_WATCHDOG_PIDFILE" 2>/dev/null || true)"
 assert_eq "P70 看门狗：活着但不在作业表里（双重 fork）" \
@@ -1884,6 +2089,20 @@ bash "$P70_GG/gate-guard.sh" >"$TMP/p70-gg-flip.log" 2>&1; P70_RC=$?
 assert_eq "P70 gate-guard 翻转①：smoke.sh 塞回墙钟比较 → 红" "$P70_RC" "1"
 assert_has "$TMP/p70-gg-flip.log" "墙钟阈值比较" "P70 gate-guard 翻转①：点名原因"
 cp "$SKILL_DIR/tests/smoke.sh" "$P70_GG/smoke.sh"
+# 翻转③（P410）：把测量夹具写成**非字面**形态 —— 双引号里的执行路径、以及未加引号的赋值 —— 必须红。
+# P404 的 os_need 期望词是单引号字面量（合法），这两条证明「单引号之外就红」不是橡皮章。
+# 追加的文本用 $P70_PF 拼出来（smoke.sh 自己的正文里不许出现那个文件名的字面量，否则这条守卫会咬自己）。
+printf '\nbash "$SKILL_DIR/tests/%s"\n' "$P70_PF" >> "$P70_GG/smoke.sh"
+bash "$P70_GG/gate-guard.sh" >"$TMP/p70-gg-flip3.log" 2>&1; P70_RC=$?
+assert_eq "P410 gate-guard 翻转③：双引号里的测量夹具路径 → 红" "$P70_RC" "1"
+assert_has "$TMP/p70-gg-flip3.log" "不是文档期望文本" "P410 gate-guard 翻转③：点名原因（单引号之外）"
+cp "$SKILL_DIR/tests/smoke.sh" "$P70_GG/smoke.sh"
+printf '\nP70_PROBE=tests/%s\n' "$P70_PF" >> "$P70_GG/smoke.sh"
+bash "$P70_GG/gate-guard.sh" >"$TMP/p70-gg-flip4.log" 2>&1; P70_RC=$?
+assert_eq "P410 gate-guard 翻转④：未加引号的赋值形态 → 红" "$P70_RC" "1"
+cp "$SKILL_DIR/tests/smoke.sh" "$P70_GG/smoke.sh"
+bash "$P70_GG/gate-guard.sh" >/dev/null 2>&1; P70_RC=$?
+assert_eq "P410 gate-guard 还原：绿" "$P70_RC" "0"
 # 翻转②（行为面）：参考打印器长出一个判定型退出码 → 红（「太慢」不许再变成失败）。
 # 呈现契约（「· 参考」标记）不在这里翻：V61 指出那是措辞、不是行为证据，已从守卫里删掉。
 printf '\nif [ "${SOMETHING:-0}" = 1 ]; then exit 2; fi\n' >> "$P70_GG/$P70_PF"
@@ -1920,6 +2139,7 @@ assert_has "$TMP/p70-knob-on.log" "other-cap=1800 source=default" "P70 旋钮（
 # 嵌套 smoke 用 FAST + 自己的 TMPDIR（不排队、不碰真项目）；stuck knob 在 0c 段注入一个挂住的子进程，
 # 挂住上限覆盖成 3s —— 看门狗必须点名 #3、写现场、套件 exit 2（安全点路径）。P316：上限只表达「挂住」，
 # 不表达「慢」；段用时只记录。
+fi   # P410：二阶段的段体结束（smoke_meta_begin 为假时整段都没跑）
 section "0f · 挂住停跑：点名 + 现场（P70 · P316）"
 if [ "${P70_NESTED:-0}" = "1" ]; then
   printf '  (嵌套运行：跳过 P70 自述夹具，避免递归)\n'
@@ -19155,6 +19375,7 @@ fi
 #   ④ 选段运行自述 + 「选段只对跑了的段负责」：注入一条必红断言到未选中的段不影响退出码，选中它非 0。
 # 全套自检（14c 的跳过清单）在选段模式下会显式跳过，见那里的说明。
 section "36 · 选段与分段账本自检（P98 · gate-runtime-budget）"
+if smoke_meta_begin "36"; then   # P410 二阶：默认不跑；TEAM_META=1 / meta-suite.sh 才跑
 SEL36="$SKILL_DIR/tests/section-select.sh"
 P98_NEST_TMP="$TMP/p98-nest-tmp"; rm -rf "$P98_NEST_TMP"; mkdir -p "$P98_NEST_TMP"
 # 嵌套跑门禁：私有 TMPDIR / 清掉继承身份 / FAST / 不排队（不起真进程，本段全程纯逻辑）
@@ -19839,6 +20060,7 @@ fi
 #   · `team digest` ≤ 50 次 git（任务书判据；旧实现实测 1620）；
 #   · 夹具非空转：同一夹具上 cache-off（= 旧的逐文件问法）> 50 次 —— 这扇门确实能抓住旧形状。
 # 全部在自己的临时仓库里跑（先证明身份），快慢模式都跑。
+fi   # P410：二阶段的段体结束（smoke_meta_begin 为假时整段都没跑）
 section "37 · 读路径性能：根一次解析 + 单进程扫描（M50）"
 
 unset TEAM_SCAN_CACHE 2>/dev/null || true   # 调用者若带着对照开关，本节自己显式管
@@ -20014,15 +20236,19 @@ else
 fi
 
 section "38 · 设置选项（M55：choices 读 / 一致性走查 / 选择器夹具）"
-# 38-a headless：tests/panel-choices.sh —— choices 逐 kind（R1）/ 模型词表是本项目数据（R2）/
-# **读给出的值 = 校验器接受的值** 的走查闸门 + F-A/F-D 翻转。不依赖 tmux，FAST 模式照跑（~2.5 分钟，
-# 其中走查是 86 次 `team config set … --dry-run`：它就是这条闸门的全部价值，不能省）。
+# 38-a headless（一阶）：tests/panel-choices.sh 的**产品腿** —— choices 逐 kind（R1：读给出的域就是 schema
+# 的行，不是第二张选项表）/ 模型词表是本项目数据（R2）/ 读与写两侧的等价（read-equality / catalogue）。
+# 不依赖 tmux，FAST 照跑。
+# P410 拆段：同一个夹具的「一致性走查（86 次 `team config set … --dry-run`）及其 F-A/F-D 翻转」验的是
+# **我们的夹具/校验器会不会互相咬住**（走查红 = 夹具的覆盖面或牙齿有问题），按判据是二阶 → 搬到 §38m。
+# 量出来的账（2026-11-05 本机实测）：产品腿 7 s ／ 走查+翻转 87 s；§38 整段 718 s 里另外 ~627 s 是
+# 真 pty 的产品腿（38-b/38-f/38-h/38-i），它们一条都不许搬走。
 if [ -f "$SKILL_DIR/tests/panel-choices.sh" ]; then
-  if bash "$SKILL_DIR/tests/panel-choices.sh" >"$TMP/panel-choices.log" 2>&1; then
-    ok "38-a panel-choices.sh 全绿（$(grep -a '== 结果 ==' "$TMP/panel-choices.log" | tail -1 | sed 's/\x1b\[[0-9;]*m//g' | sed 's/.*== 结果 == //' | tr -s ' ')；含一致性走查与 F-A/F-D 翻转）"
+  if bash "$SKILL_DIR/tests/panel-choices.sh" read known read-equality catalogue >"$TMP/panel-choices.log" 2>&1; then
+    ok "38-a panel-choices.sh 产品腿全绿（$(grep -a '== 结果 ==' "$TMP/panel-choices.log" | tail -1 | sed 's/\x1b\[[0-9;]*m//g' | sed 's/.*== 结果 == //' | tr -s ' ')；choices 读 / 模型词表 / 读写等价）"
     tail -2 "$TMP/panel-choices.log" | sed 's/^/      /'
   else
-    bad "38-a panel-choices.sh 有失败"
+    bad "38-a panel-choices.sh 产品腿有失败"
     grep -a '✗' "$TMP/panel-choices.log" | head -10 | sed 's/^/      /'
     tail -3 "$TMP/panel-choices.log" | sed 's/^/      /'
   fi
@@ -20063,29 +20289,15 @@ if [ -f "$SKILL_DIR/tests/panel-p21.sh" ]; then
 else
   bad "38-b 缺 tests/panel-p21.sh"
 fi
-# 38-c lib 自检：tests/lib/pty-wait.sh --self-test —— 用假 pane 注入 M55 第一次复验的中间帧
-# （标题先到、条目隔一拍才到），证明「只看标题」的旧逻辑会放行（假红入口）而「条目标记 +
-# 稳定帧」的新逻辑不放行；清理守卫在「选择器早已关闭」的现场一个键都不发；故意超时的等待
-# 自带现场（哪条等待/等了多久/缺什么/pane 末行/再 capture/孤立还是级联）。不依赖 tmux 或真
-# bundle，FAST 照跑；--break=<stage> 是夹具自检专用的翻转开关（复验报告里给红面）。
-if [ -f "$SKILL_DIR/tests/lib/pty-wait.sh" ]; then
-  if bash "$SKILL_DIR/tests/lib/pty-wait.sh" --self-test >"$TMP/pty-wait-selftest.log" 2>&1; then
-    ok "38-c pty-wait 自检全绿（$(grep -a '== 结果 ==' "$TMP/pty-wait-selftest.log" | tail -1 | sed 's/\x1b\[[0-9;]*m//g' | sed 's/.*== 结果 == //' | tr -s ' ')；中间帧注入 + 清理守卫 + 失败现场）"
-    tail -2 "$TMP/pty-wait-selftest.log" | sed 's/^/      /'
-  else
-    bad "38-c pty-wait 自检有失败"
-    grep -a '✗' "$TMP/pty-wait-selftest.log" | head -10 | sed 's/^/      /'
-    tail -3 "$TMP/pty-wait-selftest.log" | sed 's/^/      /'
-  fi
-else
-  bad "38-c 缺 tests/lib/pty-wait.sh"
-fi
+# 38-c 已搬到 §38m（P410）：它是等待库**自己**的自检（假 pane 注入中间帧、清理守卫、故意超时的
+# 现场），判据上属二阶 —— 验的是夹具的判据会不会咬人，不是产品行为。38-b/f/h/i 这些真 pty 腿仍然
+# 每次跑（它们才是产品行为），所以 §38 一侧只剩一条指向这里的注释。
 
 # 38-d 静默回归钉（M65/D11，FAST 照跑）：交互路径不许再出现「打开前先读一次」的 awaited API，
 # 且唯一带读取窗口判据的行为夹具还在。38-b（真 pty）只在完整门禁跑；这两条便宜钉保证有人把
 # 「开行前先读一次」加回来、或把读取窗口断言删掉时 FAST 也会红。今天 38-d 的红侧是段内这几条 grep
-# 与 panel-choices.sh 的 F-A/F-D（38-a 每轮实跑）；原本点名的 W-A（断掉无读取 → choices 变红）随
-# panel-flip-m54.sh 在 P354 退役，这一面今天没有活翻转（见 docs/team/reports/M55-dev3.md）。
+# 与 panel-choices.sh 的 F-A/F-D（P410 起在 §38m 的元套件里每轮实跑）；原本点名的 W-A（断掉无读取 →
+# choices 变红）随 panel-flip-m54.sh 在 P354 退役，这一面今天没有活翻转（见 docs/team/reports/M55-dev3.md）。
 if [ -f "$SKILL_DIR/scripts/panel/src/App.tsx" ]; then
   if grep -qE '(^|[^A-Za-z])refreshSettings\(' "$SKILL_DIR/scripts/panel/src/App.tsx"; then
     bad "38-d 交互路径又出现 awaited 读取（App.tsx 调了 refreshSettings）"
@@ -20255,6 +20467,47 @@ else
   p38_verdict "38-i" "$TMP/p349-panel-b3.log" "$p349rc" "panel-b3.sh 控制台表面（12 场景）"
 fi
 
+# ---------------------------------------------------------------- 38m. 设置选项的二阶腿
+# 判据（P410）：这一段红说明「我们的夹具/走查/等待库自己错了」，不是「产品对用户做错了事」——
+#   * 一致性走查：86 条 options 作业 + 空值判定，拿 choices 读出来的每个值去 `team config set … --dry-run`，
+#     证明**读给出的值 = 校验器接受的值**；走查红 = 夹具的覆盖面与 schema 不同步（产品面本身由 §38 的
+#     choices 读一组钉住）。
+#   * F-A / F-D：把已知会漂的两处（模型词表少 pm、建议值落在最小之外）改坏，走查必须红并点名 —— 它证明
+#     「走查会咬人」，是夹具的牙齿。
+#   * pty-wait --self-test：等待库用假 pane 注入中间帧，证明「只看标题」的旧逻辑会放行而「条目标记 + 稳定帧」
+#     不放行；清理守卫、故意超时的现场都在里面。
+# 实测（2026-11-05，本机）：走查+两条翻转 87 s、pty-wait 自检 4 s；§38 的产品腿占 718 s 里的其余部分。
+section "38m · 设置选项的二阶腿：一致性走查 / 走查的翻转 / 等待库自检（P410）"
+if smoke_meta_begin "38m"; then   # P410 二阶：默认不跑；TEAM_META=1 / meta-suite.sh 才跑
+if [ -f "$SKILL_DIR/tests/panel-choices.sh" ]; then
+  if bash "$SKILL_DIR/tests/panel-choices.sh" walk flip-drop-pm flip-suggest >"$TMP/panel-choices-walk.log" 2>&1; then
+    ok "38m-a 一致性走查 + F-A/F-D 翻转全绿（$(grep -a '== 结果 ==' "$TMP/panel-choices-walk.log" | tail -1 | sed 's/\x1b\[[0-9;]*m//g' | sed 's/.*== 结果 == //' | tr -s ' ')）"
+    tail -2 "$TMP/panel-choices-walk.log" | sed 's/^/      /'
+  else
+    bad "38m-a 一致性走查 + 翻转有失败（读给出的值不再等于校验器接受的值，或翻转不再变红）"
+    grep -a '✗' "$TMP/panel-choices-walk.log" | head -10 | sed 's/^/      /'
+    tail -3 "$TMP/panel-choices-walk.log" | sed 's/^/      /'
+  fi
+else
+  bad "38m-a 缺 tests/panel-choices.sh"
+fi
+# lib 自检：假 pane 注入 M55 第一次复验的中间帧（标题先到、条目隔一拍才到），清理守卫在「选择器早已关闭」
+# 的现场一个键都不发；故意超时的等待自带现场（哪条等待/等了多久/缺什么/pane 末行/再 capture/孤立还是级联）。
+# 不依赖 tmux 或真 bundle；--break=<stage> 是夹具自检专用的翻转开关。
+if [ -f "$SKILL_DIR/tests/lib/pty-wait.sh" ]; then
+  if bash "$SKILL_DIR/tests/lib/pty-wait.sh" --self-test >"$TMP/pty-wait-selftest.log" 2>&1; then
+    ok "38m-b pty-wait 自检全绿（$(grep -a '== 结果 ==' "$TMP/pty-wait-selftest.log" | tail -1 | sed 's/\x1b\[[0-9;]*m//g' | sed 's/.*== 结果 == //' | tr -s ' ')；中间帧注入 + 清理守卫 + 失败现场）"
+    tail -2 "$TMP/pty-wait-selftest.log" | sed 's/^/      /'
+  else
+    bad "38m-b pty-wait 自检有失败"
+    grep -a '✗' "$TMP/pty-wait-selftest.log" | head -10 | sed 's/^/      /'
+    tail -3 "$TMP/pty-wait-selftest.log" | sed 's/^/      /'
+  fi
+else
+  bad "38m-b 缺 tests/lib/pty-wait.sh"
+fi
+fi   # P410：二阶段的段体结束（smoke_meta_begin 为假时整段都没跑）
+
 section "39 · npm CLI 与项目 skill 安装（P40：包装器 / 冲突表 / doctor 行）"
 # headless 夹具（tests/install-shape.sh）——不依赖 tmux/真进程，FAST 照跑：它自己起临时仓库、
 # 自己剥 TEAM_*/TMUX 身份，含五组翻转红侧（每组的绿侧用同一份判据在真实树上跑）。
@@ -20272,6 +20525,7 @@ else
 fi
 
 section "40 · 临时根纪律（P53：TMPDIR / owned 家族 / 泄漏断言 / lint）"
+if smoke_meta_begin "40"; then   # P410 二阶：默认不跑；TEAM_META=1 / meta-suite.sh 才跑
 # ① lint：临时根必须是 ${TMPDIR:-/tmp}/teamsmith-<kind>.XXXXXX（助手是唯一创建者）。
 #    `TEAM_TMP_HYGIENE_FLIP=lint` 是门禁自己的红侧：把迁移后的 config-cli 夹具改回写死 /tmp
 #    的旧模板 → 这一段必须变红、并点名 file:line（证明门禁真的挡得住回归）。
@@ -20700,6 +20954,7 @@ fi
 #   复用：dispatch/--fresh/resume 都先抓现场（state/dispatch-<agent>-pane-dead.txt）再替换；
 #   四态：roster/status/digest/doctor/机器面（agents 块 pane/pane_exit；state 词表不变）；
 #   噪音判据：close --keep-window 的遗体不算异常、不计 stopped；teardown 后恢复「无窗口」。
+fi   # P410：二阶段的段体结束（smoke_meta_begin 为假时整段都没跑）
 section "41 · pane 留存：死 pane 是座位状况，不是活座位（P55 / agent-pane-survivability）"
 
 # P218：本段的前提（项目骨架 .pi/team/config.sh，由 §2 的 init 写）在映射表里由 needs:2 声明（唯一声明处）。
@@ -22615,18 +22870,20 @@ assert_eq "P95 ⑥ 红侧：记录下来在暂存区里（checkout 只动了索�
 #   ② 名册夹具的便宜一半（`config-cli.sh list validate roster`）：七个形状的退出码/字节不变性/
 #      审计/一条值规则。两件都自带私有临时根，不碰 $REPO。
 section "51 · 用法诚实性：help 的每条承诺与名册的每条路线都有夹具兑现（P99）"
+# P410 拆段：routes.sh 的**产品面**留在这里（walk A：help 印出来的每条命令/每个 flag 都要被真解析器接住；
+# 控制臂：吞掉未知参数的解析器要被点名；promises：schema 注释点名的承诺必须在真夹具里兑现；refusals），
+# 它红 = 用户照着 help 敲会失败 = 产品对用户做错了事。routes.sh 的十次变异翻转（`flips`：证明这套走查
+# 自己会咬人）搬到 §51m。量出来的账（2026-11-05 本机）：产品面 99 s ／ 翻转 __ROUTES_FLIPS__ s。
 if [ -f "$SKILL_DIR/tests/routes.sh" ]; then
   P99_ROUTES_RC=0
-  ( cd "$TMP" && bash "$SKILL_DIR/tests/routes.sh" ) >"$TMP/routes.log" 2>&1 || P99_ROUTES_RC=$?
+  ( cd "$TMP" && bash "$SKILL_DIR/tests/routes.sh" walk control promises refusals ) >"$TMP/routes.log" 2>&1 || P99_ROUTES_RC=$?
   if [ "$P99_ROUTES_RC" -eq 0 ]; then
-    ok "51 routes.sh 全绿（$(grep -ac '✓' "$TMP/routes.log" || true) 条断言，$(grep -ac 'SKIP' "$TMP/routes.log" || true) 条可见跳过）"
-    { grep -aE '== (walk|control|promises|refusals|flips) ==' "$TMP/routes.log" || true; } | sed 's/^/      /'
+    ok "51 routes.sh 产品面全绿（$(grep -ac '✓' "$TMP/routes.log" || true) 条断言，$(grep -ac 'SKIP' "$TMP/routes.log" || true) 条可见跳过）"
+    { grep -aE '== (walk|control|promises|refusals) ==' "$TMP/routes.log" || true; } | sed 's/^/      /'
   else
     bad "51 routes.sh 有失败（rc=$P99_ROUTES_RC）——用法行/注释承诺/拒绝路线与真实解析器不一致"
     grep -a '✗' "$TMP/routes.log" | head -10 | sed 's/^/      /'
   fi
-  # 翻转段的红侧尾巴（完整门禁才有；FAST 里是 SKIP）——留给现场
-  { grep -aE '翻转[①②③④⑤⑥⑦⑧⑨⑩]' "$TMP/routes.log" || true; } | head -12 | sed 's/^/      /'
 else
   bad "51 缺 tests/routes.sh（P99 的用法诚实性走查）"
 fi
@@ -22662,6 +22919,30 @@ if [ -f "$SKILL_DIR/tests/config-cli.sh" ]; then
 else
   bad "51 缺 tests/config-cli.sh"
 fi
+
+# ---------------------------------------------------------------- 51m. 用法诚实性的二阶腿
+# routes.sh 的 `flips`：十次变异（场缺失 / 兄弟 flag / 吞参数 / 不可归属的 help 行 / 假 schema 路由 /
+# 无探针的注释 / 兑现不了的承诺 / 嵌套 run 不收尾 / 无人认领的路由 / 变异的修法），每一次都必须让走查
+# **按名变红**、并证明变异真的落地（目标文本 1→0 / 新文本 0→1 + 副本字节不同），再加一条必须保持绿的
+# 控制臂。它证明的是「§51 那段走查会咬人」，不是产品行为本身 —— 所以按判据是二阶。
+section "51m · 用法诚实性：走查的牙齿（十次变异翻转）（P410）"
+if smoke_meta_begin "51m"; then   # P410 二阶：默认不跑；TEAM_META=1 / meta-suite.sh 才跑
+if [ -f "$SKILL_DIR/tests/routes.sh" ]; then
+  P99_FLIPS_RC=0
+  ( cd "$TMP" && bash "$SKILL_DIR/tests/routes.sh" flips ) >"$TMP/routes-flips.log" 2>&1 || P99_FLIPS_RC=$?
+  if [ "$P99_FLIPS_RC" -eq 0 ]; then
+    ok "51m routes.sh 翻转全部按名变红并还原（$(grep -ac '✓' "$TMP/routes-flips.log" || true) 条断言，$(grep -ac 'SKIP' "$TMP/routes-flips.log" || true) 条可见跳过）"
+    { grep -aE '== (flips|walk) ==' "$TMP/routes-flips.log" || true; } | sed 's/^/      /'
+  else
+    bad "51m routes.sh 翻转有失败（rc=$P99_FLIPS_RC）——某条变异没落地，或走查没按名变红"
+    grep -a '✗' "$TMP/routes-flips.log" | head -10 | sed 's/^/      /'
+  fi
+  # 翻转段的红侧尾巴 —— 留给现场
+  { grep -aE '翻转[①②③④⑤⑥⑦⑧⑨⑩]' "$TMP/routes-flips.log" || true; } | head -12 | sed 's/^/      /'
+else
+  bad "51m 缺 tests/routes.sh（P99 的用法诚实性走查）"
+fi
+fi   # P410：二阶段的段体结束（smoke_meta_begin 为假时整段都没跑）
 
 # ═════════════════════════════════════════════════════════════════════
 # 51b · 孤儿席位进程普查（P276 · change: orphan-visibility）
@@ -24049,6 +24330,7 @@ fi
 # 「§61 那段前门真的会咬人」（夹具的牙齿），不是产品行为本身；每条臂都要跑一遍分组，整体比分组的
 # 一次全量还长，所以只在完整门禁里跑；FAST 里是**可见 SKIP**（快模式的成本不失控）。
 section "61b · 任务类别模型路由：翻转变异自检（P228 · task-model-routing）"
+if smoke_meta_begin "61b"; then   # P410 二阶：默认不跑；TEAM_META=1 / meta-suite.sh 才跑
 P238_SUITE="${P238_SUITE:-$SKILL_DIR/tests/task-model-routing.sh}"
 if [ ! -f "$P238_SUITE" ]; then
   bad "61b 缺 tests/task-model-routing.sh（翻转变异自检的前提）"
@@ -24102,6 +24384,7 @@ else
     fi
   fi
 fi
+fi   # smoke_meta_begin 61b
 
 # ---------------------------------------------------------------- 14d. P70 本套自述对账
 # 本段之前每一段都必须：一条开跑行（#N 严格递增、带预算与 ISO 时间）、一条结束行（P98 的统一收口行：
@@ -24341,6 +24624,150 @@ assert_eq "P70 对账：#N 从 1 起严格递增无缺口" \
   "$P70_S_STARTS"
 assert_not_file "$SG_MARKER" "P70 对账：本套没有触发过挂住停跑"
 [ -d "$SG_SCENE" ] && bad "P70 对账：干净跑留下了现场" || ok "P70 对账：没有现场目录（干净跑不该建）"
+
+# ── P410 · 两阶段账（一阶每次跑 / 二阶低频跑）：搬家之后没有一段能静默消失 ────────────────────────
+# 静态那一半是 `section-select.sh --check ⑩`（一阶 ∪ 二阶 = 全部段；§36 跑它）。这里钉**运行时**那一半，
+# 三条各自能红：
+#   ① 清单里每一段的跳过行都带着理由（「为什么它是二阶」来自表头；理由空了只红这一条）；
+#   ② 二阶段的段必须经 smoke_meta_begin：开了段却既没跑也没跳过 = 有人把那道 `if` 拆了，它会在每次
+#      门禁里照跑 —— 这正是「搬家没搬干净」的形状；
+#   ③ 全量运行里表里每一行都开过段；唯一的结构性例外是 §14c（它只坐在 FAST 守卫里，完整门禁连段头都
+#      不执行，导具见那里的注释）—— 这条**点名**它，别的段悄悄不开段就红。
+P410_UNCATED=""; P410_META_OPEN=0
+for P410_K in $META_KEYS; do
+  case " $SMOKE_OPENED " in *" $P410_K "*) ;; *) continue ;; esac
+  P410_META_OPEN=$((P410_META_OPEN + 1))
+  case " $META_SKIP_SEGS $META_RAN_SEGS " in *" $P410_K "*) ;; *) P410_UNCATED="$P410_UNCATED $P410_K" ;; esac
+done
+P410_UNCATED="${P410_UNCATED# }"
+if [ "$SELECT_MODE" = "1" ]; then
+  assert_eq "P410 二阶账：本轮开段的二阶段段（$P410_META_OPEN 段）各自经 smoke_meta_begin（跑/跳过都记账）" "$P410_UNCATED" ""
+else
+  assert_eq "P410 二阶账：清单里 $META_KEY_N 段在完整运行里都开了段" "$P410_META_OPEN" "$META_KEY_N"
+  assert_eq "P410 二阶账：清单里 $META_KEY_N 段各自经 smoke_meta_begin（跑/跳过都记账）" "$P410_UNCATED" ""
+fi
+assert_eq "P410 二阶账：没有一段的跳过行缺理由" "$META_NOREASON_N" "0"
+# 跳过行必须真的出现在输出里（不是只记在变量里）：行数 == 本轮按频率跳过的段数。跳过行是用
+# `tee -a` 写的 —— stdout 与这份副本是同一份字节，所以数文件就是数输出。整行被删掉、或它在某个段里
+# 被拆走，这一条就红 —— 「不许静默消失」管的就是这一半。
+P410_SKIP_FILE="$TMP/meta-skip-lines.log"
+P410_SKIP_LINES=0
+[ -f "$P410_SKIP_FILE" ] && P410_SKIP_LINES="$(grep -ac 'SKIP（二阶 · 默认不跑）' "$P410_SKIP_FILE" || true)"
+assert_eq "P410 二阶账：每段按频率跳过都打了一行显式理由（输出里的行数 = 跳过段数）" \
+  "${P410_SKIP_LINES:-0}" "$META_SKIP_N"
+P410_MISSING=""
+for P410_K in $META_ALL_KEYS; do
+  case " $SMOKE_OPENED " in *" $P410_K "*) ;; *) P410_MISSING="$P410_MISSING $P410_K" ;; esac
+done
+P410_MISSING="${P410_MISSING# }"
+if [ "$SELECT_MODE" = "1" ]; then
+  printf '  \033[2m（选段运行：跳过「全量运行每一行都开段」这条并集断言；未开段的键见收尾的未跑清单）\033[0m\n'
+else
+  if [ "$FAST_REQ" = "1" ]; then
+    assert_eq "P410 并集：FAST 运行里表里每一行都开过段（$META_TOTAL_N 行）" "$P410_MISSING" ""
+  else
+    # 两个具名的结构性例外（都不是「搬家没搬干净」）：
+    #   14c —— 只坐在 FAST 守卫里，完整门禁连段头都不执行；
+    #   15  —— 收尾段「完成」，没有段体（只打印一行说明），按定义不开段。
+    assert_eq "P410 并集：全量运行里只有 §14c（FAST-only）与 §15（收尾段）没开段" "$P410_MISSING" "14c 15"
+  fi
+  if [ "$META_MODE" = "1" ]; then
+    assert_eq "P410 二阶账：TEAM_META=1 下二阶段段全部真跑" "$META_RAN_N" "$META_KEY_N"
+  else
+    assert_eq "P410 二阶账：二阶段段全部按频率跳过（TEAM_META=0，逐段打印了理由与绿记录）" "$META_SKIP_N" "$META_KEY_N"
+  fi
+fi
+unset P410_K
+# ── P410 · 元套件绿记录的**年龄与内容**（PM 追加判据，2026-11-04）────────────────────────────────
+# 跳过行只打印「最近一次绿记录」是一行文字：夜里那条要是连续失败一周，没有人会看见。所以这里把它变成
+# 一条会红的断言 —— 成本是一次文件读（一个 history 行 + 一份日志的收口行计数），所以它留在**一阶**，
+# 不搬进二阶（搬进去就成了「验测试有没有牙齿」的套娃）。
+#   ① 本项目的 GREEN 记录存在，且不超过 7 天（发布纪律的数字，不设环境变量开关 —— 那会变成静默旁路）；
+#   ② 内容读得出来：6 列、verdict=GREEN、总耗时与段数都是正整数，且段数 == 它指向的那份日志里的收口行数
+#      （截断 / 篡改 / 手写一行 = 红；「文件存在即通过」正是这里要避免的写法）。
+# 前提：这个检出要有团队运行面（`$PROJECT/.pi/team`）。裸克隆（CI 的一次性容器）里按构造没有 —— 那里按
+# 既有的缺前提语义可见跳过并点名（跳过不是通过；CI 上的记录由 nightly `meta` 作业产出并作为工件留存）。
+P410_MAX_AGE_D=7
+P410_PROJ="$(meta_project_root)"
+P410_RECDIR="$(meta_record_dir)"
+P410_HIST="$P410_RECDIR/history.tsv"
+if [ ! -d "$P410_PROJ/.pi/team" ]; then
+  prereq_skip "P410 元套件绿记录（年龄 / 内容）" "检出里没有团队运行面（$P410_PROJ/.pi/team）——裸克隆/CI 一次性容器按构造没有本地记录"
+else
+  P410_LAST=""
+  if [ -r "$P410_HIST" ]; then
+    while IFS=$'\t' read -r P410_AT P410_VD P410_RP P410_REC P410_TOT P410_SEC _P410_JUDGE_UNUSED; do
+      [ "$P410_VD" = "GREEN" ] || continue
+      [ "${P410_RP%/}" = "${P410_PROJ%/}" ] || continue
+      P410_LAST="$P410_AT"
+    done < "$P410_HIST"
+  fi
+  if [ -z "$P410_LAST" ]; then
+    bad "P410 元套件记录：没有本项目的 GREEN 记录（$P410_HIST）—— 跑一次 bash skills/teamsmith/tests/meta-suite.sh"
+  else
+    P410_AGE="$(meta_record_age_days "$P410_LAST")"
+    case "$P410_AGE" in
+      ''|*[!0-9]*) bad "P410 元套件记录：时间戳读不出来（$P410_LAST）—— 记录畸形" ;;
+      *) if [ "$P410_AGE" -le "$P410_MAX_AGE_D" ]; then
+           ok "P410 元套件记录：最近一条 GREEN 是 $P410_LAST（距现在 $P410_AGE 天 ≤ $P410_MAX_AGE_D 天）"
+         else
+           bad "P410 元套件记录：最近一条 GREEN 是 $P410_LAST，距今 $P410_AGE 天 > $P410_MAX_AGE_D 天 —— 重跑元套件（bash skills/teamsmith/tests/meta-suite.sh）"
+         fi ;;
+    esac
+    # 内容：最后一条 GREEN 行必须 6 列、总耗时/段数是正整数、段数与日志里的收口行数一致。
+    P410_ROW="$(awk -F'\t' -v want="$P410_LAST" '$1 == want && $2 == "GREEN" { print; exit }' "$P410_HIST" 2>/dev/null)"
+    P410_NF="$(printf '%s' "$P410_ROW" | awk -F'\t' '{ print NF }')"
+    P410_TOT="$(printf '%s' "$P410_ROW" | cut -f5)"
+    P410_SEC="$(printf '%s' "$P410_ROW" | cut -f6)"
+    P410_REC="$(printf '%s' "$P410_ROW" | cut -f4)"
+    # 判据 sha 从**那一行**取（不靠 while 循环的变量残留：循环到 EOF 时变量可能已被清空，
+    # 实测过 —— 循环体里赋值正常，循环之后读到的是空）。
+    if [ "$P410_NF" = "7" ]; then
+      ok "P410 元套件记录：那一行是 7 列（时间 / 判定 / 项目 / 日志 / 总耗时 / 段数 / 判据 sha）"
+    else
+      bad "P410 元套件记录：那一行是 $P410_NF 列（要 7 列）—— 记录畸形：$P410_ROW"
+    fi
+    # 判据身份（P410 · PM 2026-11-04）：记录必须说得出「哪一版 meta-suite.sh 算的它」。没有这一列，
+    # 「日志绿、记录红」只能靠人工复核；有了它，先看 sha 就知道是不是旧判据的旧账（记出处，不判等号：
+    # 换了判据不该让历史记录变成畸形）。
+    P410_JUDGE="$(printf '%s' "$P410_ROW" | cut -f7)"
+    case "$P410_JUDGE" in
+      ''|*[!0-9a-f+]*) bad "P410 元套件记录：判据 sha 读不出来（[${P410_JUDGE}]）—— 记录缺少出处" ;;
+      *) P410_NOW_JUDGE="$(git -C "$P410_PROJ" log -1 --format=%h -- skills/teamsmith/tests/meta-suite.sh 2>/dev/null || true)"
+         if [ "$P410_JUDGE" = "$P410_NOW_JUDGE" ]; then
+           ok "P410 元套件记录：判据 sha $P410_JUDGE（与当前一致）"
+         else
+           printf '  \033[2m（P410 元套件记录：判据 sha %s ≠ 当前 %s —— 这条记录是旧判据算的，日志本身仍按上面的行数核对）\033[0m\n' \
+             "$P410_JUDGE" "${P410_NOW_JUDGE:-?}"
+           ok "P410 元套件记录：判据 sha $P410_JUDGE 读得出来（旧判据：日志另按收口行数核对）"
+         fi ;;
+    esac
+    case "$P410_TOT" in
+      ''|*[!0-9]*|0) bad "P410 元套件记录：总耗时读不出来或为 0（[${P410_TOT}]）—— 记录畸形" ;;
+      *) ok "P410 元套件记录：总耗时 $P410_TOT s 读得出来" ;;
+    esac
+    case "$P410_SEC" in
+      ''|*[!0-9]*|0) bad "P410 元套件记录：段数读不出来或为 0（[${P410_SEC}]）—— 记录畸形" ;;
+      *) if [ -r "$P410_REC" ]; then
+           # 日志带颜色码（段头 `\e[2m#5\e[0m`）：先剥 ANSI 再数收口行，否则永远是 0 条。
+           P410_LINES="$(sed 's/\x1b\[[0-9;]*m//g' "$P410_REC" 2>/dev/null | grep -acE '^#?[0-9]+ [^ ]+ · .*· 参考 用时 [0-9]+s · ✓[0-9]+ ✗[0-9]+ SKIP[0-9]+ ' || true)"
+           if [ "${P410_LINES:-0}" = "$P410_SEC" ]; then
+             ok "P410 元套件记录：段数 $P410_SEC 与日志里的收口行数一致（$P410_REC）"
+           else
+             bad "P410 元套件记录：记录说 $P410_SEC 段，日志里只有 ${P410_LINES:-0} 条收口行（$P410_REC）—— 记录与日志不一致"
+           fi
+         else
+           bad "P410 元套件记录：那一行指向的日志读不到（$P410_REC）—— 记录畸形"
+         fi ;;
+    esac
+  fi
+fi
+
+# 两阶段的分流在每轮都报一行（不是只在 FAST 里）：读者不必打开清单就知道这一次跳过了什么、去哪看绿记录。
+if [ "$META_KEY_N" -gt 0 ]; then
+  printf '\033[33m二阶段（验测试/夹具/文档承诺本身）：跳过 %d 段、真跑 %d 段（清单 %d 段）\033[0m —— 低频入口 bash skills/teamsmith/tests/meta-suite.sh，记录写入 %s\n' \
+    "$META_SKIP_N" "$META_RAN_N" "$META_KEY_N" "$(meta_record_dir)"
+fi
 # P316：进度行只记录（它带 ticks/已运行秒数），不再用「段用时 < 间隔」去判它是否成了判决。
 
 section "15 · 完成"

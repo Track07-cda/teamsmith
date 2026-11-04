@@ -14,7 +14,7 @@
 #      例外只有一条（P239）：`docs/team/**` 归下面那行 ledger-scan（账本文本的改动要选中账本禁令段）。
 # prologue: 0 0b 0c 0d
 #   —— 前导段：建 $TMP/$REPO/$FAKE 与静态检查；任何选段都先跑它们。
-# gate-self-check: 0e 0f 0g 0h 0i 36 61b
+# gate-self-check: 0e 0f 0g 0h 0i 36 38m 40 51m 61b
 #   —— 门禁自检段（P326）：主体是**门禁自己的机制**，不是交付物的行为 ——
 #      0e/0f/0g 段落自述、进度与现场，0h tmux 隔离前导，0i 运行指纹，36 选段器/表/副本/探针/覆盖账，
 #      以及夹具元变异 61b：它证的是 §61 那段前门的断言会不会咬人（主体是夹具的牙齿；表里记 4946 s，
@@ -28,7 +28,34 @@
 #      命中它的路径算「有归属」（不再落到 NONE）。删掉这行或它的模式 → 账本路径回到豁免类（NONE），
 #      --check ⑦ 会对「缺头 / 指向未知段 / 没有模式 / 模式没盖住账本样例」逐条判红。
 #
+# 一阶段清单：`first-order: <key…>`（可写多行，累加；P410）
+#   —— 一阶段：**每次门禁都跑**的段（验产品行为）。这份清单是显式的：一段进表就必须在这里或
+#      二阶段清单里出现、且只出现一次 —— `--check ⑩` 证明「一阶段 ∪ 二阶段 = 全部段」。
+#      为什么不像 gate-self-check 那样「没点名就算在基线里」：那样从二阶段清单里删掉一段，它会**悄悄**
+#      回到每次门禁里（票面看上去什么都没少），而这两种都要被审查一次。缺口判红，不静默补。
+# 二阶段清单：`meta-suite: <key> <为什么它是二阶>`（一行一段；P410）
+#   —— 二阶段：默认**不跑**（`TEAM_META=1` / `bash tests/meta-suite.sh` 才跑），跳过时逐段打印
+#      「为什么」+ 最近一次绿记录的时间与路径。判据一句话：段失败意味着「我们的测试/夹具/断言/文档
+#      承诺错了」→ 二阶；意味着「产品对用户做错了事」→ 一阶。每行必须写理由，且这段必须已在
+#      gate-self-check 里点名（产品基线段不许进二阶：那等于把产品行为搬出每次的门禁）。
+#      这是清单的**唯一来源**：smoke.sh 的逐段跳过行与 tests/meta-suite.sh 的段清单都读这里
+#      （`section-select.sh --meta` 是它的只读出口）。
+
 # 兜底：一条路径被任何行的 patterns 覆盖 → RUN；不在豁免类、又没有行覆盖 → FULL（跑全套，多跑总是安全）。
+
+# first-order: 0 0b 0c 0d 0f 0g 0h 0i 1 1b 1c 2 3 4 4b 4c 5 3b 6 6b 6c 6d 6e 6f 6g 6h
+# first-order: 6i 6j 6k 7 7b 8 9 10 10b 10c 11 11b 11b2 11b3 11b4 11c 11d 11e 11e2 11f 11g 11h 11i 11j 14b 15b
+# first-order: 15c 12 13 13b 13c 12b 12b-h0 12b-h0b 12b-h0d 12b-h0c 12b-pi 12b-pi2 12b-pi3 14 14c 54 14d 17 18 18b 18c 19 20 21 22 23
+# first-order: 24 25 26 27 28 29 30 31 31c 32 33 12e 12f 12g 12h 12i 12j 12k 34 34b 34c 34d 35 37 38 39
+# first-order: 41 42 43 44 45 46 47 48 49 50 51 51b 51c 52 53 57 58 15 55 56 59 60 61 62 63 64
+# first-order: 65 66 67
+
+# meta-suite: 61b 模型路由的翻转变异自检（31 条变异各跑一遍分组）：红 = 夹具的牙齿没了，不是产品坏了
+# meta-suite: 51m routes.sh 的十次变异翻转：证明 §51 那段走查会不会咬人（§51 的产品面留在一阶）
+# meta-suite: 36 选段器 / 映射表 / 剪贴副本 / 覆盖探针的自检：验的是选择器与预算账本本身
+# meta-suite: 38m §38 的一致性走查与其 F-A/F-D 翻转 + 等待库自检：验的是夹具的覆盖面、牙齿与判据
+# meta-suite: 40 临时根纪律 lint / 泄漏断言 / owned 家族：验的是夹具自己的临时目录卫生
+# meta-suite: 0e 段落自述、看门狗与循环清单的自检：验的是本套的段落机制
 0	0 · 临时仓库	README.md	-	段内点名 1 条真实路径 token
 0b	0b · skill 可被 pi 解析器加载	skills/teamsmith/tests/skill-load.mjs	-	段内点名 1 条真实路径 token
 0c	0c · 静态检查（函数结尾的 set -e 陷阱）	skills/teamsmith/tests/smoke.sh skills/teamsmith/scripts/team	-	段内点名 5 条真实路径 token
@@ -98,7 +125,7 @@
 14	14 · teardown	skills/teamsmith/scripts/lib/cmd-agents.sh skills/teamsmith/scripts/team	-	段内调用 team teardown
 14c	14c · 快模式自检（跳过必须是显式的、且没有偷偷跑真进程）	skills/teamsmith/tests/smoke.sh	-	FAST 分层自检（判据就在本文件里）
 54	54 · 派单摩擦：一次拒绝列全 + 覆盖审计 + 席位预提示（P140）	skills/teamsmith/scripts/lib/cmd-agents.sh skills/teamsmith/scripts/lib/common.sh skills/teamsmith/scripts/team	-	段内点名 2 条真实路径 token（$SKILL_DIR/scripts/lib/common.sh、$SKILL_DIR/scripts/team）；自造 scratch 项目 + 会签启动证据的录制 shim 驱动 team init/board/dispatch（R4/R5/R6 的七种形状）
-14d	14d · P70 本套自述对账（段落账目 + 无误判）	skills/teamsmith/tests/smoke.sh skills/teamsmith/tests/lib/section-guard.sh	-	P70 报文里的行；P98 F2 补齐——对账读的是本套 sections.log/sections.tsv，收口行是 P70×P98 的统一行（用时/ticks + 增量）
+14d	14d · P70 本套自述对账（段落账目 + 无误判）	skills/teamsmith/tests/smoke.sh skills/teamsmith/tests/meta-suite.sh skills/teamsmith/tests/lib/section-guard.sh	-	P70 报文里的行；P98 F2 补齐——对账读的是本套 sections.log/sections.tsv，收口行是 P70×P98 的统一行（用时/ticks + 增量）
 17	17 · 迁移指南与 doctor 指引（M7.1）	skills/teamsmith/references/migration.md skills/teamsmith/SKILL.md skills/teamsmith-init/references/bootstrap.md skills/teamsmith/references/config.md skills/teamsmith/references skills/teamsmith/references/* SCOPE.md skills/teamsmith/scripts/lib/cmd-project.sh skills/teamsmith/scripts/lib/cmd-update.sh skills/teamsmith/scripts/team	15b,2	段内点名 10 条真实路径 token；段内调用 team doctor/init/mark-loaded；17 复用 15b 造的假 settings/openspec/spec 树（套件注释与门禁实测都钉住）
 18	18 · 英文正文不变量与安装器唯一入口（M7.3）	skills skills/teamsmith/references skills/teamsmith/references/* SCOPE.md skills/teamsmith skills/teamsmith-init/references skills/teamsmith-init/references/* skills/teamsmith/references/protocol.md skills/teamsmith-init/references/bootstrap.md install.sh skills/teamsmith-init skills/teamsmith/tests/lib/checkout-shape.sh	-	段内点名 33 条真实路径 token；产品面检出里 SCOPE.md 一条按前提 SKIP（P148）；P238 坑 3：删掉 `skills/*`/`skills/teamsmith/*`/`skills/teamsmith-init/*`（M73 的树清单只到 `find skills -mindepth 1 -maxdepth 3`，深文件不在它的判定面；新增一级目录会走兜底 FULL）
 18b	18b · 拆分不变量（P16）：description 路由 / init 无代码 / 指纹范围 / 零改动	skills/teamsmith/SKILL.md skills/teamsmith-init/SKILL.md skills/teamsmith/scripts skills/teamsmith/scripts/* skills/teamsmith/extension skills/teamsmith/extension/* skills/teamsmith/templates skills/teamsmith/templates/* skills/teamsmith/extension/team-notify.ts skills/teamsmith/templates/config.sh.tmpl skills/teamsmith/templates/AGENTS.section.md.tmpl skills/teamsmith/templates/pm-prompt.md.tmpl README.md skills/teamsmith/scripts/lib/cmd-agents.sh skills/teamsmith/scripts/lib/cmd-project.sh skills/teamsmith/scripts/lib/cmd-docs.sh skills/teamsmith/scripts/team	-	段内点名 17 条真实路径 token；段内调用 team add-agent/dispatch/init/task
@@ -134,6 +161,7 @@
 36	36 · 选段与分段账本自检（P98 · gate-runtime-budget）	skills/teamsmith/tests/smoke.sh skills/teamsmith/tests/section-select.sh skills/teamsmith/tests/section-paths.tsv skills/teamsmith/scripts/lib/outbox.sh skills/teamsmith/tests/checkout-shape-probe.sh skills/teamsmith/tests/coverage-inventory.sh skills/teamsmith/tests/lib/checkout-shape.sh skills/teamsmith/tests/workflow-entry.sh .github/workflows/gates.yml	-	段内点名真实路径 token（选择器/表/smoke.sh/outbox.sh 样例/P148 探针与覆盖清单器）；驱动 section-select.sh --check（六个腐烂方向 + P148 前提跳过转发）与嵌套 smoke（--select/NONE/账本）；P148 探针含形状边界、部分树红、旧断言压成跳过的覆盖比对。嵌套固定用 --select（用 --paths 会因自己命中 36 行而自递归）；P326 返修：patterns 追加 workflow-entry.sh 与 .github/workflows/gates.yml（CI 入口由 36⑨ 承接，不再落到未声明的 FULL；`--paths .github/workflows/gates.yml` 由 FULL 变 RUN）
 37	37 · 读路径性能：根一次解析 + 单进程扫描（M50）	README.md skills/teamsmith/scripts/lib/cmd-docs.sh skills/teamsmith/scripts/lib/cmd-status.sh skills/teamsmith/scripts/lib/cmd-project.sh skills/teamsmith/scripts/team	-	段内点名 1 条真实路径 token；段内调用 team board/digest/init/paths/status
 38	38 · 设置选项（M55：choices 读 / 一致性走查 / 选择器夹具）	skills/teamsmith/tests/panel-choices.sh skills/teamsmith/tests/panel-p21.sh skills/teamsmith/tests/panel-b2.sh skills/teamsmith/tests/panel-b3.sh skills/teamsmith/tests/lib/pty-wait.sh skills/teamsmith/scripts/panel/src/App.tsx skills/teamsmith/scripts/panel/src skills/teamsmith/scripts/panel/src/* skills/teamsmith/scripts/lib/cmd-config.sh skills/teamsmith/tests/panel-strings.mjs skills/teamsmith	28	段内点名 25 条真实路径 token；P238 坑 3：删掉 `skills/teamsmith/*` 跨深通配（本段真读的是上面这些文件）；P38E 腿还读 28 段的 `$P28_TESTS/panel-strings.mjs`，已登记；P327：38-h 腿跑写信面夹具 `tests/panel-b2.sh`（不新增段、不新增检查器），该夹具就是这条腿的判定面；P349：38-i 腿跑控制台表面夹具 `tests/panel-b3.sh`（同样不新增段；`--paths` 点到它时确实是这条腿在跑）
+38m	38m · 设置选项的二阶腿：一致性走查 / 走查的翻转 / 等待库自检（P410）	skills/teamsmith/tests/panel-choices.sh skills/teamsmith/tests/lib/pty-wait.sh	-	P410（order2-split）拆出 §38 的二阶腿：panel-choices.sh 的 walk / F-A / F-D（读给出的值 = 校验器接受的值，以及走查的牙齿）与 pty-wait.sh --self-test（等待库自己的判据）；产品腿（choices 读 / 模型词表 / 读写等价 / 真 pty）仍在 §38
 39	39 · npm CLI 与项目 skill 安装（P40：包装器 / 冲突表 / doctor 行）	skills/teamsmith/tests/install-shape.sh skills/teamsmith/scripts/lib/cmd-init.sh skills/teamsmith/scripts/lib/cmd-project.sh skills/teamsmith/scripts/lib/cmd-bootstrap.sh	-	段内点名 2 条真实路径 token；P270：安装/doctor 的实现路径（cmd-init.sh 的扩展安装、cmd-project.sh 的 /team 行、cmd-bootstrap.sh 的 --print 计划行）由本段的 install-shape.sh 逐格钉住 → 三条产品路径补进本行 patterns（P243 的同一口径：产品路径归实际测它的那一段）
 40	40 · 临时根纪律（P53：TMPDIR / owned 家族 / 泄漏断言 / lint）	skills/teamsmith/tests skills/teamsmith/tests/* skills/teamsmith/tests/config-cli.sh skills/teamsmith/tests/tmp-hygiene.sh skills/teamsmith/scripts/team skills/teamsmith/scripts/lib skills/teamsmith/scripts/lib/common.sh skills/teamsmith/scripts/lib/cmd-status.sh skills/teamsmith/references skills/teamsmith/references/*	-	段内点名 4 条真实路径 token；P238 坑 3 复核：保留 `skills/teamsmith/tests/*` —— 段内跑 `tests/tmp-hygiene.sh --lint`，它 `find <dir> -type f -name '*.sh'` 扫整棵 tests 树，新增测试文件是该段的判定面；P314：段内还跑 `team doctor`（`scripts/team`，只读面夹具；红侧的变异副本从 `scripts/lib/common.sh` 生成）与 `tmp-hygiene.sh --docs-check`（读 `references/**` 的四个文件），两处都在这一行声明；P314 返工轮 1：`source=config` 腿的红侧把整棵 `scripts/lib` 复制进变异树（目录 token），只在副本里改 `cmd-status.sh`（被挡住的那一行就住在这个文件里）
 41	41 · pane 留存：死 pane 是座位状况，不是活座位（P55 / agent-pane-survivability）	skills/teamsmith/scripts/team	2	段内点名 29 条真实路径 token
@@ -147,6 +175,7 @@
 49	49 · P94 现场行数为 0：按配置不打印画面（P88 的 F1）	skills/teamsmith/scripts/lib/cmd-status.sh skills/teamsmith/scripts/team skills/teamsmith/scripts/lib skills/teamsmith/references skills/teamsmith/templates skills/teamsmith/SKILL.md	2	段内点名 8 条真实路径 token（cmd-status.sh/team + 复制成突变树用的 scripts/lib、references、templates、SKILL.md）；自造 $REPO 状态文件跑 team status 的 TEAM_AGENT_SCENE_LINES｜needs:2（空段守卫实测：单独跑 49 时 $REPO 还没 init，team status rc=1、✓9 ✗13；--select 2,49 后 ✓22 ✗0 与全量一致）
 50	50 · P95 合并基准 = 该任务的 squash 提交（解冲突不再假红）	skills/teamsmith/scripts/lib/common.sh skills/teamsmith/scripts/team	-	段内点名 3 条真实路径 token；自造仓库驱动 team init/review --post-merge
 51	51 · 用法诚实性：help 的每条承诺与名册的每条路线都有夹具兑现（P99）	skills/teamsmith/tests/routes.sh skills/teamsmith/tests/config-cli.sh skills/teamsmith/scripts/lib/cmd-help.sh skills/teamsmith/scripts/strings/* skills/teamsmith/tests/help-surface.sh skills/teamsmith/scripts/lib/cmd-config.sh	-	P260（cli-help，D170 收窄）：帮助面的**逻辑**面——命令清单与渲染器的结构、三级路由、未知 token exit 2、无项目可用、TEAM_LANG 的机制、effect/auth/undo 的探针与不变量；措辞、排版、页面深度、语言表齐全度由设计与评审把关，不在本段（也不在任何门禁段）
+51m	51m · 用法诚实性：走查的牙齿（十次变异翻转）（P410）	skills/teamsmith/tests/routes.sh	-	P410（order2-split）拆出 §51 的二阶腿：routes.sh 的 flips（十次变异各自必须按名变红、并证明变异真的落地）＋必须保持绿的控制臂；产品面（walk A / 控制臂 / promises / refusals）仍在 §51
 51b	51b · 孤儿席位进程普查（P276 · change: orphan-visibility）	skills/teamsmith/tests/seat-visibility.sh skills/teamsmith/scripts/lib/cmd-reap.sh skills/teamsmith/scripts/lib/common.sh skills/teamsmith/scripts/lib/cmd-status.sh skills/teamsmith/scripts/lib/cmd-watch.sh	-	P276（orphan-visibility，D180）：段内点名 tests/seat-visibility.sh（夹具本体）；普查实现落在 common.sh（team_orphan_*）、cmd-status.sh（ps/status 读数与 digest 提示）、cmd-watch.sh（up 的一行）、cmd-reap.sh（按 pid 的清理与复验）——共用同一份判据，改其中一处都要重跑这段
 51c	51c · 席位长回合的打断（P292 · change: seat-interrupt-entry）	skills/teamsmith/tests/seat-interrupt.sh skills/teamsmith/scripts/lib/cmd-interrupt.sh skills/teamsmith/scripts/team skills/teamsmith/scripts/lib/common.sh skills/teamsmith/scripts/strings/*	-	P292（seat-interrupt-entry）：段内点名 tests/seat-interrupt.sh（夹具本体：桩 tmux + 真进程 + 逐条红侧）；入口落在 cmd-interrupt.sh（证明链 / 复验 / 信号 / 审计 / 理由投递），身份与普查判据复用 common.sh（team_orphan_*），命令面在 scripts/team 与 strings/*（命令表的参数面 + 中英双语词条）——共用同一份判据，改其中一处都要重跑这段
 52	52 · 席位死因：闭集分类 + 当前一次死亡 + 恰好一次通报（P113）	skills/teamsmith/tests/death-cause.sh skills/teamsmith/scripts/lib/cmd-death.sh skills/teamsmith/scripts/lib/common.sh skills/teamsmith/scripts/lib/cmd-status.sh skills/teamsmith/scripts/lib/cmd-watch.sh skills/teamsmith/scripts/panel/src/types.ts skills/teamsmith/scripts/panel/src/layout.ts skills/teamsmith/scripts/panel/panel.js	-	段内点名 1 条真实路径 token（$SKILL_DIR/tests/death-cause.sh）；夹具本体 tests/death-cause.sh 自己 source 这些 lib / 面板源码（--pure / --flip / --live 三档）

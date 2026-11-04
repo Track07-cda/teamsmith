@@ -71,6 +71,16 @@ on:
     paths-ignore:
       - 'docs/**'
   workflow_dispatch:
+  # P410 · 二阶段（元套件）的夜间定时。它**只喂下面那个 `meta` 作业**：push 触发的门禁段集不变
+  # （每次只跑一阶），二阶段（验测试/夹具/断言/文档承诺本身有没有牙齿的那几段）改成一夜一次。
+  # 为什么夜里：§61b（31 条变异）单段实测 5724 s、§36 964 s、§51m/38m 各数百秒 —— 这是 0.4.0
+  # 发布前 opp 的 61b 超时障碍的结构性解法，而不是把超时预算调大。
+  # 成本（本文件抬头 D54 的口径）：一次元套件约 2 小时；一夜一条 cron ≈ 60 小时/月。公开仓 Actions
+  # 免费；**私有仓记在账号额度上** —— 要暂停夜间跑就删掉这一段，push 门禁完全不受影响（元套件仍可
+  # 手动跑：`bash skills/teamsmith/tests/meta-suite.sh`，或本作业的 Run workflow）。
+  schedule:
+    # 03:47 UTC（北京时间 11:47）：避开整点的 GitHub 排队高峰；每天一次。
+    - cron: '47 3 * * *'
 
 permissions:
   contents: read
@@ -329,6 +339,62 @@ jobs:
             -v "$PWD:/work:ro" -w /work \
             teamsmith-gates:ci \
             bash -c 'bash skills/teamsmith/tests/perf.sh --in-container --tree /work'
+
+  # P410 · the second-order meta suite (nightly). **Not part of the push gate**: it verifies our own
+  # tests/fixtures/assertions still have teeth (§61b's 31 mutations, §36's selector/copy self-checks,
+  # §40's temp-root lint, §0e's section machinery, §38m's choices walk + flips, §51m's route flips),
+  # and that class changes far less often than the product does. The split is asserted, not promised:
+  # `section-select.sh --check ⑩` proves 「first-order ∪ meta-suite = every section」 and smoke §14d
+  # re-proves the runtime half (every meta leg either ran or printed a skip line naming its reason and
+  # its last green record).
+  #
+  # It runs the suite's own entry (`tests/meta-suite.sh`), which drives `smoke.sh --select <meta keys>`
+  # with `TEAM_META=1` and appends a record: `<time> <GREEN|RED> <checkout> <log path> <total s>` in
+  # `history.tsv` plus the full log. The record is uploaded as an artifact so the 0.4.0 release
+  # checklist ("a meta-suite green record no older than 7 days") has something to point at.
+  #
+  # Sharding is deliberately NOT used here: the meta legs must run in one process so the selector's
+  # needs-closure and §14d's accounting stay whole, and there is no 60-minute ceiling to design around
+  # (this job's budget is 150 min; measured ~2 h).
+  meta:
+    name: meta suite (second-order legs, nightly)
+    needs: [resolve-pi]
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Build the gate image
+        env:
+          PI_VERSION: ${{ needs.resolve-pi.outputs.version }}
+        run: bash ci/build-image.sh
+      - name: Second-order meta suite
+        env:
+          RECORDS: ${{ runner.temp }}/meta-suite-records
+        run: |
+          mkdir -p "$RECORDS"
+          docker run --rm --pid=host \
+            --user "$(id -u):$(id -g)" -e HOME=/tmp -e TMPDIR=/var/tmp/teamsmith-meta \
+            -e TEAM_META_RECORD_DIR=/artifacts \
+            -v "$PWD:/work:ro" -v "$RECORDS:/artifacts" -w /work \
+            teamsmith-gates:ci \
+            bash -c 'set -u; mkdir -p "$TMPDIR"; bash skills/teamsmith/tests/meta-suite.sh --out "$TEAM_META_RECORD_DIR"' \
+            && rc=0 || rc=$?
+          # 记录必须留下（绿或红都要）：这就是「不超过 7 天的绿记录」引用的那份东西。
+          ls -la "$RECORDS" || true
+          exit "$rc"
+      - name: Upload the meta-suite record
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: meta-suite-record
+          path: ${{ runner.temp }}/meta-suite-records
+          include-hidden-files: true
+          retention-days: 30
+          if-no-files-found: warn
 
   # P346 · the coverage job — the load-bearing assertion of shard parallelism.
   #

@@ -5,6 +5,7 @@
 #   section-select.sh --floor [--paths <路径>…]  产品地板 ∪ 路径选集（一次回答「基线 + 这次改动」）
 #   section-select.sh --slice <k>/<N>           按片切（与 --floor/--paths/不带决策正交）：own 与借来的分列
 #   section-select.sh --select <key>[,<key>…]   显式选段（+ 前导 + needs 闭包），可重复
+#   section-select.sh --meta                    二阶段清单（key<TAB>为什么它是二阶），一张表一个来源
 #   section-select.sh --check                   自检映射表与门禁源码（表腐烂 / 段读了没声明的路径 → 红）
 #   section-select.sh --list                    列出映射表（key<TAB>id<TAB>patterns<TAB>needs<TAB>basis）
 #   section-select.sh --root <dir>              分析另一棵树（夹具用；默认本脚本所在的仓库）
@@ -96,6 +97,7 @@ while [ $# -gt 0 ]; do
       IFS=',' read -r -a _k <<<"$1"
       SEL_KEYS+=("${_k[@]}"); shift ;;
     --check)   [ -z "$MODE" ] || die "--check 不与 --paths/--select 同用"; MODE="check"; shift ;;
+    --meta)    [ -z "$MODE" ] || die "--meta 不与其它模式同用"; MODE="meta"; shift ;;
     --list)    [ -z "$MODE" ] || die "--list 不与 --paths/--select 同用"; MODE="list"; shift ;;
     --root)    shift; [ $# -gt 0 ] || die "--root 需要目录"; ROOT="$1"; shift ;;
     --root=*)  ROOT="${1#*=}"; shift ;;
@@ -155,14 +157,21 @@ P_LEDGER_LNS=()    # 上面那行在表里的行号（P231：>1 行 = 重复声�
 P_SELF_DECLARED=0  # 表头 `# gate-self-check: <key…>` 在不在（P326）：行在 = 1
 P_SELF_KEYS=""     # 上面那行点名的段 key（空格分隔）；空串 = 行在但没点名任何段
 P_SELF_LNS=()      # 上面那行在表里的行号
+# P410 · 两阶段（`# first-order:` / `# meta-suite:`）：一次门禁只跑一阶（验产品行为），
+# 「验测试/夹具/文档承诺本身」的段搬到低频的元套件。两份清单都是**显式**的：并集必须正好是表里每一行
+# （少一段 = 它从两次运行里一起消失；多一段/重叠 = 声明不可信）。二阶段每行还自带「为什么」。
+P_FIRST_KEYS=""    # `# first-order:` 累积的段 key（空格分隔；可以写多行）
+P_FIRST_LNS=()     # 上面各行的行号
+P_META_KEYS=""     # `# meta-suite:` 累积的段 key（空格分隔，顺序即声明序）
+P_META_RK=(); P_META_REASON=(); P_META_LNS=()   # 逐条：key / 为什么是二阶 / 行号
 LSC_CARRIER="skills/teamsmith/tests/ledger-ban.sh"   # 承载账本禁令的段：patterns 列里必须有它（P231）
 T_N=0
 T_KEY=(); T_ID=(); T_PAT=(); T_NEEDS=(); T_BASIS=()
 
 load_table() {
   [ -r "$TSV" ] || die "读不到映射表 $TSV"
-  local line nf ln=0
-  T_N=0
+  local line nf ln=0 _fo _mk _mkey _mwhy
+  T_N=0; P_FIRST_KEYS=""; P_FIRST_LNS=(); P_META_KEYS=""; P_META_RK=(); P_META_REASON=(); P_META_LNS=()
   while IFS= read -r line || [ -n "$line" ]; do
     ln=$((ln + 1))
     case "$line" in
@@ -174,6 +183,15 @@ load_table() {
         continue ;;
       "# gate-self-check:"*) P_SELF_KEYS="${line#\# gate-self-check:}"; P_SELF_KEYS="${P_SELF_KEYS# }"; P_SELF_KEYS="${P_SELF_KEYS% }"
         P_SELF_DECLARED=1; P_SELF_LNS+=("$ln")
+        continue ;;
+      "# first-order:"*) _fo="${line#\# first-order:}"; _fo="${_fo# }"; _fo="${_fo% }"
+        P_FIRST_KEYS="${P_FIRST_KEYS}${P_FIRST_KEYS:+ }${_fo}"; P_FIRST_LNS+=("$ln")
+        continue ;;
+      "# meta-suite:"*) _mk="${line#\# meta-suite:}"; _mk="${_mk# }"
+        _mkey="${_mk%% *}"; _mwhy="${_mk#"$_mkey"}"; _mwhy="${_mwhy# }"
+        [ -n "$_mkey" ] || die "映射表有空的 meta-suite 行（$TSV:$ln）—— 一列 key + 一列理由"
+        P_META_KEYS="${P_META_KEYS}${P_META_KEYS:+ }${_mkey}"
+        P_META_RK+=("$_mkey"); P_META_REASON+=("$_mwhy"); P_META_LNS+=("$ln")
         continue ;;
       "#"*|"") continue ;;
     esac
@@ -732,6 +750,16 @@ do_list() {
   done
 }
 
+# ── --meta ────────────────────────────────────────────────────────────────────────────
+# 二阶段清单（P410）：`key<TAB>为什么它是二阶`，一行一段。**唯一来源**是表头 `# meta-suite:` —— 门禁的
+# 逐段跳过行（smoke.sh）与元套件的段清单（tests/meta-suite.sh）都读这里，不各自再写一份。
+do_meta() {
+  local i
+  for ((i = 0; i < ${#P_META_RK[@]}; i++)); do
+    printf '%s\t%s\n' "${P_META_RK[i]}" "${P_META_REASON[i]}"
+  done
+}
+
 # ── --check ─────────────────────────────────────────────────────────────────────────────
 # 两个方向都查：
 #   ① 段 ↔ 行一一对应（段没行 / 行没段 / 重复 key）
@@ -748,6 +776,9 @@ do_list() {
 #      走到这里时它们已经成立 —— 下面「指向未知段」那一支只是防御，不是第一道门。
 #   ⑧ 地板声明（P326）：表头 `# gate-self-check:` 行里每个 key 命中恰好一行、不重复、不点名前导段。
 #      行不在 = 每个段都在地板里（安全方向，不判红）；行在但为空 = 空声明，判红。
+#   ⑨ 分片（P346）：分片是地板的精确划分，片号只依赖 key。
+#   ⑩ 两阶段（P410）：`# first-order:` ∪ `# meta-suite:` = 表里每一行；二阶段每段有理由且是
+#      gate-self-check 段（产品基线进不了二阶），重叠与缺口都红。
 # 段正文的 normalizer（与 P97 探针同一口径）：$SKILL_DIR→skills/teamsmith、
 #   $SKILL_INIT_DIR→skills/teamsmith-init、$SRC_ROOT/$OS_ROOT/$V94_ROOT→仓库根；
 #   裸前缀 skills/ panel/ extension/ openspec/ ci/；根文件 SCOPE.md/README.md/AGENTS.md/CHANGELOG.md。
@@ -1066,6 +1097,58 @@ do_check() {
     fi
   fi
 
+  # ⑩ 两阶段（P410 · verification#the gate runs first-order sections …）：一阶段（验产品行为）∪ 二阶段
+  #    （验测试/夹具/文档承诺本身）= 表里每一行；重叠与缺口都红。这是「没有段会静默消失」的静态牙：
+  #    * 从 `# meta-suite:` 删掉一段 —— 它既不在二阶段、也没被 `# first-order:` 收下 → 缺口，红；
+  #    * 把一段产品段（例如 7 notify/inbox/digest）写进二阶段 —— 它不在 gate-self-check 里（P326 的
+  #      口径：没被点名的段就是产品基线）→ 它本该在一阶/FAST 里跑到，红；
+  #    * 二阶段行没写理由 —— 跳过行说不出为什么，红。
+  #    行不在：meta-suite 缺头 = 没有段按二阶跳（安全方向，不判红）；first-order 缺头 = 项（钟）就不存在
+  #    （没有任何东西能证明并集），红。
+  local m_bad=0 m_n=0 m_first_n=0 mo_k mo_seen="" _mo_in_first _mo_in_meta
+  local -a FARR=()
+  if [ -z "$P_FIRST_KEYS" ]; then
+    cbad "映射表缺 first-order 头（一阶段清单，$TSV）—— 没有它就无法证明「一阶段 ∪ 二阶段 = 全部段」"
+    m_bad=$((m_bad + 1))
+  fi
+  IFS=' ' read -r -a FARR <<<"$P_FIRST_KEYS"
+  for mo_k in "${FARR[@]}"; do
+    [ -n "$mo_k" ] || continue
+    m_first_n=$((m_first_n + 1))
+    case " $mo_seen " in *" $mo_k "*) cbad "first-order 重复点名：$mo_k"; m_bad=$((m_bad + 1)); continue ;; esac
+    mo_seen="$mo_seen${mo_seen:+ }$mo_k"
+    [ -n "$(row_idx "$mo_k" || true)" ] || { cbad "first-order 点名了不存在的段：$mo_k（拼错/陈旧的 key）"; m_bad=$((m_bad + 1)); }
+  done
+  mo_seen=""
+  for ((i = 0; i < ${#P_META_RK[@]}; i++)); do
+    mo_k="${P_META_RK[i]}"
+    m_n=$((m_n + 1))
+    case " $mo_seen " in *" $mo_k "*) cbad "meta-suite 重复点名：$mo_k"; m_bad=$((m_bad + 1)); continue ;; esac
+    mo_seen="$mo_seen${mo_seen:+ }$mo_k"
+    [ -n "${P_META_REASON[i]}" ] || { cbad "二阶段段 $mo_k 没写理由（跳过行必须能说出「为什么它是二阶」，$TSV:${P_META_LNS[i]}）"; m_bad=$((m_bad + 1)); }
+    case " $P_PROLOGUE " in *" $mo_k "*) cbad "二阶段点名了前导段：$mo_k（前导段永远跑，不是可搬的段）"; m_bad=$((m_bad + 1)); continue ;; esac
+    if [ -z "$(row_idx "$mo_k" || true)" ]; then
+      cbad "meta-suite 点名了不存在的段：$mo_k（拼错/陈旧的 key 会让一段在低频运行里也消失）"; m_bad=$((m_bad + 1)); continue
+    fi
+    case " $P_SELF_KEYS " in
+      *" $mo_k "*) ;;
+      *) cbad "二阶段段 $mo_k 是产品基线（gate-self-check 没点名它）—— 这段在 FAST/一阶里本该跑到；二阶只收「验测试/夹具/文档承诺本身」的段"; m_bad=$((m_bad + 1)) ;;
+    esac
+  done
+  # 并集/重叠：表里每一行必须恰好属于一份清单
+  for ((i = 0; i < T_N; i++)); do
+    mo_k="${T_KEY[i]}"
+    _mo_in_first=0; _mo_in_meta=0
+    case " $P_FIRST_KEYS " in *" $mo_k "*) _mo_in_first=1 ;; esac
+    case " $P_META_KEYS " in *" $mo_k "*) _mo_in_meta=1 ;; esac
+    if [ "$_mo_in_first" = 1 ] && [ "$_mo_in_meta" = 1 ]; then
+      cbad "段 $mo_k 同时在 first-order 与 meta-suite 清单里（重叠：跑它的频率不唯一）"; m_bad=$((m_bad + 1))
+    elif [ "$_mo_in_first" = 0 ] && [ "$_mo_in_meta" = 0 ]; then
+      cbad "段 $mo_k 既不在 first-order 也不在 meta-suite：它会从两次运行里一起消失（少一段不是少跑，是不跑）"; m_bad=$((m_bad + 1))
+    fi
+  done
+  [ "$m_bad" -eq 0 ] && cok "两阶段是全部段的精确划分（一阶 $m_first_n + 二阶 $m_n = 表 $T_N 行；二阶每段有理由、都是 gate-self-check 段）"
+
   printf '== 选段自检 ==  ok %d  bad %d  SKIP %d\n' "$CHECK_OK" "$CHECK_BAD" "$CHECK_SKIP"
   [ "$CHECK_BAD" -eq 0 ] || return 1
   return 0
@@ -1079,5 +1162,6 @@ case "$MODE" in
   select)         load_table; load_suite; do_select ;;
   list)           load_table; do_list ;;
   check)          load_table; load_suite; do_check ;;
+  meta)           load_table; do_meta ;;
   verify-copies)  load_table; load_suite; do_verify_copies ;;
 esac
