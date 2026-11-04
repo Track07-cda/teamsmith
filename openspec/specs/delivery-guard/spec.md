@@ -10,10 +10,13 @@ must stay visible, bounded and recoverable: `references/philosophy.md` (principl
 ## Requirements
 ### Requirement: An automated send never types into a non-empty input box
 
-Every sender that would type into a TUI input box (`team say`'s pane delivery, `team notify`'s pane delivery, the
-watchdog wake line, the notify extension's knock, the meeting knock) SHALL locate the target pane's input box from the captured pane
-and, when the box holds text, MUST send no key at all — neither the payload nor an `Enter`; it MUST hold the message
-in `state/outbox/` instead. The check MUST be cursor-anchored (the box is not pinned to the pane bottom, so the
+The protected automated senders (`team notify`'s pane delivery, the watchdog wake line, the notify extension's
+knock, the meeting knock, ordinary `team draft send` and ordinary queued pane delivery) SHALL locate the target
+pane's input box from the captured pane and, when the box holds text, MUST send no key at all — neither the payload nor an `Enter`; it MUST hold the message
+in `state/outbox/` instead. Default `team say` with no usable watcher and explicit `draft send --now` /
+`outbox flush --now` are direct-attempt exceptions, not protected sends; their scope and audit are specified in
+*Which senders defer is explicit, and `--now` is the audited override*. A watched say sends no keys regardless of
+editor content. The check MUST be cursor-anchored (the box is not pinned to the pane bottom, so the
 top/bottom borders are found from the cursor row), and the border pairing MUST reject rule-looking rows that
 cannot be borders: a top border is either a full-rule row whose width equals the bottom border's or a
 spinner-shaped row (a `── ` prefix with a long trailing rule run — the E3-observed working-Pi shape; Pi 0.85.1
@@ -102,20 +105,20 @@ For a supported Pi layout, the candidate domain SHALL be a closed editor rectang
 #### Scenario: A real draft in the same layout is still protected
 
 - **GIVEN** `docs/team/reports/P143-verify/logs/tmux-p143-draft-dirty/draft-before.frame`, actual editor `P143-HUMAN-DRAFT`, cursor row 29 and the same footer layout
-- **WHEN** the production extraction and `team say dev "draft guard probe"` inspect that pane
+- **WHEN** the production extraction and ordinary `team draft send <file>` with payload `draft guard probe` inspect that PM pane
 - **THEN** text is `P143-HUMAN-DRAFT`, the verdict is `BUSY`, the send is queued, no key is sent, and the editor/frame are unchanged
 
 #### Scenario: A rule-shaped draft cannot borrow the closed-layout exception
 
 - **GIVEN** a real Pi draft containing a 120-character rule, a spinner-shaped line or a footer-shaped line with the cursor before, on or after that text, a status-row clone with the cursor on the clone, and the pre-change equal-width synthetic draft frames
-- **WHEN** each capture is read and a different payload is sent
+- **WHEN** each capture is read and an ordinary draft send attempts a different payload
 - **THEN** every draft reads `BUSY` or a visibly untrusted geometry, never `EMPTY`; no key is sent; the real wrapping and Unicode terminal-cell measurements are retained
 - **AND** enabling a nearest-top or nearest-bottom selection without the closed-layout admission makes the equal-width draft guard test fail
 
 #### Scenario: An ambiguous Pi suffix is held, not guessed empty
 
 - **GIVEN** a Pi frame with a footer mismatch, a clipped editor, scroll-indicator borders, two eligible rectangles or an incomplete redraw
-- **WHEN** a send cannot establish the supported rectangle with a trustworthy conservative read
+- **WHEN** a protected send cannot establish the supported rectangle with a trustworthy conservative read
 - **THEN** it sends no key, retains a durable payload with reason `geometry-untrusted`, exits non-zero and gives the entry and recovery command rather than claiming a human draft
 
 #### Scenario: An empty box with a package hint row is free
@@ -128,7 +131,7 @@ For a supported Pi layout, the candidate domain SHALL be a closed editor rectang
 #### Scenario: A multi-line draft keeps the box busy and survives the send
 
 - **GIVEN** a fixture pane whose box holds three lines and whose cursor sits on the blank row after them
-- **WHEN** `team say dev "check the failing test"` runs
+- **WHEN** ordinary `team draft send <file>` with payload `check the failing test` runs
 - **THEN** the pane still shows those three lines and nothing else, no `Enter` was sent, and `state/outbox/` holds
   exactly one entry whose payload is that message
 
@@ -165,14 +168,14 @@ For a supported Pi layout, the candidate domain SHALL be a closed editor rectang
 #### Scenario: An unknown pane shape delivers as today
 
 - **GIVEN** a busy fixture pane that draws no input-box border under the cursor
-- **WHEN** `team say dev "check the failing test"` runs
+- **WHEN** ordinary `team draft send <file>` with payload `check the failing test` runs
 - **THEN** the message is typed as today, the output warns once that the input-box shape is unknown, and
   `state/outbox/` holds no entry
 
 #### Scenario: A draft appearing before the Enter holds the message
 
 - **GIVEN** a fixture pane that reports an empty box at the check and a non-empty box at the pre-`Enter` re-check
-- **WHEN** a send runs
+- **WHEN** a protected send runs
 - **THEN** no `Enter` is sent, the fixture's draft is unchanged, and the message is one entry in `state/outbox/`
 
 #### Scenario: A one-line draft on the border-adjacent row keeps the box busy
@@ -282,9 +285,16 @@ stays a metronome, `watchdog`).
 
 ### Requirement: Delivery is confirmed by the pane, and a queued message is reported as queued
 
-`team say` and `team notify` SHALL report a message deferred behind a trusted non-empty box as queued (exit code 0, the literal token `queued`, never
+Protected senders and ordinary queued pane delivery SHALL report a message deferred behind a trusted non-empty box as queued (exit code 0, the literal token `queued`, never
 `已确认送达`). An untrusted-geometry or queue-stalled outcome from *Queue impediments are factual, bounded and recoverable* SHALL instead exit non-zero and name the durable held entry and reason. Both deferral outcomes MUST return before the pane-verification loop, because an untyped message provokes no pane change.
-Delivery is confirmed by reading the pane back after the `Enter` (V9-B5): the delivery SHALL count as confirmed
+A default say direct attempt SHALL instead report that it attempted immediate sending without confirmation of
+model receipt, whether the editor was clean or dirty. It MUST NOT claim confirmed delivery from a snapshot
+change, an exit code or a `forced.log` line, and MUST NOT mention a say `--now` option. A watched say SHALL report
+the durable inbox/spool handoff and zero keys, not that the model has already received or acted on it. A real
+watch-path queued/held outcome SHALL retain its factual outcome rather than automatically alleging a draft.
+The direct-attempt path retains its best-effort tmux behavior; failure there MUST NOT be presented as a confirmed
+receipt or as an automatically queued retry. No new global recovery guarantee is introduced.
+For guarded pane delivery, delivery is confirmed by reading the pane back after the `Enter` (V9-B5): the delivery SHALL count as confirmed
 only when the payload has left the box **and** a new submission proof appeared in the conversation area above the
 box — the count of the payload's signature there (its first non-blank line, whitespace-stripped, up to 48 bytes,
 compared byte-wise) exceeds the count taken before typing, or a `[paste #N +K lines]` bubble whose `+K` equals the
@@ -310,21 +320,21 @@ the agent, so no automatic path — `team outbox flush --now` included — SHALL
 
 #### Scenario: The real second correction reaches the settled fallback once
 
-- **GIVEN** the P143 container recipe with real Pi, no dev inbox watcher, a completed first correction and an idle empty editor
-- **WHEN** `P138_SECOND=1 bash docs/team/reports/P143-verify/pkg/run-case.sh tmux-delivery-truth-dirty HEAD 0 host` and its second-message judge run
-- **THEN** exactly one second-message reception and backend submission are observed, a later settle occurs, and the judge prints `PASS second say delivered`; the first actual submission is not falsely retained as `draft-raced`, and neither message is duplicated by flush
+- **GIVEN** the shipped real-Pi container recipe at a frozen revision, pinned verdict runtime 0.99.2, no dev inbox watcher, a completed first correction and an idle empty editor
+- **WHEN** its second default say runs and the matching single-run second-message judge reads the request, event and frame evidence
+- **THEN** exactly one second-message reception and backend submission are observed, a later settle occurs and the judge prints `PASS second say delivered`; neither direct attempt creates a pending queue entry or is duplicated by flush, while the CLI still describes an attempt rather than confirmed model receipt
 
 #### Scenario: A queued message says queued, not delivered
 
 - **GIVEN** a dirty box
-- **WHEN** `team say dev "check the failing test"` runs
+- **WHEN** ordinary `team draft send <file>` to PM with payload `check the failing test` runs
 - **THEN** it exits 0, the output contains `queued` and does not contain `已确认送达`, and `state/outbox/` holds
-  exactly one entry for `dev`
+  exactly one entry for `pm`
 
 #### Scenario: A clean box still confirms delivery
 
 - **GIVEN** an empty box in a fixture pane that renders the message when it arrives
-- **WHEN** `team say dev "check the failing test"` runs
+- **WHEN** ordinary `team draft send <file>` to PM with payload `check the failing test` runs
 - **THEN** the output reports the confirmed delivery and `state/outbox/` stays empty
 
 #### Scenario: An unconfirmed delivery is held, not duplicated
@@ -347,7 +357,7 @@ the agent, so no automatic path — `team outbox flush --now` included — SHALL
 #### Scenario: A static-footer pane degrades to unconfirmed and holds
 
 - **GIVEN** a fixture pane that submits normally but never echoes the submission (static footer)
-- **WHEN** `team say dev "static footer probe"` runs
+- **WHEN** ordinary `team draft send <file>` to PM with payload `static footer probe` runs
 - **THEN** exactly one submission happened, the output does not claim a confirmed delivery, the entry is under
   `outbox/held/` (terminal — a later flush pastes nothing), and the inbox holds the durable copy
 
@@ -478,9 +488,26 @@ today's rule (multi-line goes to a file and the message points at it).
 
 ### Requirement: Which senders defer is explicit, and `--now` is the audited override
 
-`team say` SHALL defer for every target whose box is busy (worker targets included, not only the PM); `team say
---now` and `team outbox flush --now` SHALL type immediately even into a non-empty box and SHALL append one line
-naming the sender, the target and the entry to `state/outbox/forced.log`. A `team dispatch` prompt SHALL NOT be
+`team say` SHALL prefer a valid live inbox-watch route, for clean and dirty boxes alike. After selecting that
+route, inbox/spool persistence failure or route loss during the handoff MUST NOT trigger a blind direct fallback
+in that attempt; the pending payload and factual failure outcome SHALL remain recoverable through the existing
+Outbox. With no usable watcher, say SHALL attempt the existing forced direct send by default, including into a
+draft, only after the existing recipient, team-session, offline, dead-pane and empty-shell checks permit it.
+An invalid, stale, dead or foreign-project watcher registration is not evidence of delivery and MUST NOT by itself
+authorize typing: the ordinary no-watch target checks still apply. The normal no-watch direct attempt creates no
+active Outbox entry and does not require a later flush. Selecting watch MUST send zero keys and create no forced
+record. If persistence of the initial watch queue entry itself fails, the command SHALL exit non-zero and
+report that failure without claiming a nonexistent queued entry, inbox fallback or confirmed delivery; it MUST
+NOT type as a fallback.
+Each actual default say direct attempt SHALL append exactly one line to the existing
+`state/outbox/forced.log`, preserving its timestamp and `kind`, `from`, `target`, `entry` field order and spelling
+(`kind=say`, `from=pm`, `entry=none`). The record is an audit of bypassing the draft guard, not evidence that Pi
+accepted the message. `team say --now` SHALL be rejected as an unknown flag, without an alias or delivery side
+effects. `--any` and `--no-verify` keep their existing semantics; the latter only suppresses the direct attempt's
+snapshot/wait/extra-Enter behavior, not recipient, route or target checks.
+Protected senders continue to defer behind drafts. `team draft send --now` and `team outbox flush --now` retain
+their existing explicit override behavior and audit; an ordinary later drain of a queued `kind=say` entry MUST NOT
+inherit say's new direct default. A `team dispatch` prompt SHALL NOT be
 deferred by the guard (it travels as the agent CLI's argument, not through the input box), a meeting knock SHALL
 defer on a busy peer box and its entry SHALL target the registered peer `session:window` (the knock is the one
 sender whose target is outside the team session, and the meeting registration is what authorizes it), and with
@@ -489,12 +516,54 @@ When `TMUX` is unset (a non-tmux shell, CI) the knock path is likewise not attem
 but the command MUST say so with one warning line instead of staying silent (V7-F6); the inbox record is written in
 all cases.
 
+#### Scenario: Default say attempts the old forced action on the same dirty box
+
+- **GIVEN** independent real-Pi runs with identical genuine non-empty draft bytes and no watcher: baseline default say, baseline say with `--now`, and candidate default say
+- **WHEN** each sends the same single-line correction without clearing the draft or flushing the queue
+- **THEN** baseline default queues with no model request; baseline `--now` and candidate default submit the draft followed by the correction in the same actual model request, each adding exactly one existing-format forced line and no active queue entry
+- **AND** before/after frames and backend request bytes demonstrate that equivalence; candidate output describes an immediate attempt, not confirmed receipt
+
+#### Scenario: A clean no-watch box also uses the default direct attempt
+
+- **GIVEN** a running permitted target, an empty editor and no usable watcher
+- **WHEN** default say runs
+- **THEN** it attempts the old direct action without a flush, adds one forced line and no active queue entry, and reports an attempt rather than confirmed receipt
+
+#### Scenario: Say's retired flag has no side effects in either position
+
+- **GIVEN** fingerprints of target key events, inbox, spool, forced log and active/held Outbox in an isolated project
+- **WHEN** `team say --now dev "correction"` and `team say dev "correction" --now` run separately
+- **THEN** each exits 2 through the unknown-flag path naming `--now`, and every fingerprint remains unchanged
+
+#### Scenario: Watched say never takes the force shortcut
+
+- **GIVEN** a valid live watcher, once with an empty editor and once with a genuine draft
+- **WHEN** default say runs
+- **THEN** the normal successful handoff writes one durable inbox message and one spool wake, sends zero keys, leaves the draft unchanged and adds no forced line; eventual model receipt is evidenced separately and occurs once
+
+#### Scenario: A selected watch handoff fails without typing
+
+- **GIVEN** a watcher accepted for this say attempt, with inbox or spool persistence failing, or its route disappearing before handoff
+- **WHEN** default say attempts the handoff
+- **THEN** no key or forced line is produced, the payload remains in the existing queue/held recovery path, and output distinguishes pending or failed handoff from watched success and model receipt
+
+#### Scenario: Initial watch queue persistence failure is an error, not delivery
+
+- **GIVEN** a selected valid watch route whose initial queue entry cannot be persisted
+- **WHEN** default say attempts the handoff
+- **THEN** it exits non-zero naming the persistence failure, sends zero keys, adds no forced line and claims neither a queued entry nor offline inbox success
+
 #### Scenario: --now types into a dirty box and is logged
 
-- **GIVEN** a dirty box
-- **WHEN** `team say dev "check the failing test" --now` runs
-- **THEN** the pane holds the draft followed by the message (today's behaviour), and `state/outbox/forced.log` gained
-  one line naming `say` and the target
+- **GIVEN** dirty boxes without watchers, protected notify/automatic completion/meeting/Pulse/draft sends, and nonterminal versus terminal queued entries
+- **WHEN** those protected sends, an ordinary flush and explicit `draft send --now` / `outbox flush --now` are exercised separately
+- **THEN** protected sends and ordinary drains do not type into the drafts; `outbox flush --now` types into the dirty box and logs one line naming its sender, target and entry, and `draft send --now` keeps its prior audit and action; terminal `draft-raced` or `unconfirmed` entries are never repasted
+
+#### Scenario: Direct-send transport trouble is not a receipt or an automatic queue promise
+
+- **GIVEN** a permitted no-watch say target and a recorded tmux payload/Enter failure during the old best-effort direct action
+- **WHEN** default say returns
+- **THEN** its immediate-attempt wording never claims model receipt, confirmed pane delivery or automatic queueing; the forced record alone does not prove a successful submission
 
 #### Scenario: The inbox-only switch creates no queue entry
 
@@ -548,7 +617,7 @@ unlucky draft cannot open the box and let a send paste over it.
 #### Scenario: The end-to-end delivery holds in a banner frame
 
 - **GIVEN** a pane whose TUI draws the banner above the box, once empty and once holding a draft
-- **WHEN** `team notify`/`team say` delivers into the empty one and into the drafted one
+- **WHEN** a protected `team notify` or ordinary `team draft send` delivers into the empty one and into the drafted one
 - **THEN** the empty box receives the payload and exactly one submit happens; the drafted box receives no key, the
   draft is unchanged, and the send is reported as queued
 
@@ -721,7 +790,7 @@ one that cannot glue.
 
 ### Requirement: Queue impediments are factual, bounded and recoverable
 
-A draft-clearing explanation SHALL be emitted only for a trustworthy non-empty box read. A `geometry-untrusted` outcome SHALL send no key, durably hold the payload, exit non-zero and name the entry, target, reason and recovery command. It MUST NOT state that the human has a draft or promise that clearing the box will automatically deliver it.
+For protected senders and queued deliveries (not default say's direct-attempt exception), a draft-clearing explanation SHALL be emitted only for a trustworthy non-empty box read. A `geometry-untrusted` outcome SHALL send no key, durably hold the payload, exit non-zero and name the entry, target, reason and recovery command. It MUST NOT state that the human has a draft or promise that clearing the box will automatically deliver it.
 
 For an entry that has not touched the input box, three consecutive eligible drain evaluations that read a trusted empty box but leave the entry queued without progress SHALL move it to durable `held/` with reason `queue-stalled` by the third evaluation. An eligible evaluation is one that owns the entry's claim, has a live target and is not blocked by an earlier entry or another delivery in progress; queueing during work, real drafts, lock contention and offline targets MUST NOT be counted as this empty-box defect. The diagnostic SHALL record the entry id, target, first/last observation time, consecutive count, read verdict and geometry/trust reason, and its durable full-text path. Enqueue, bounded retry, tick and flush SHALL use the same observation rule. A later busy/working read resets the consecutive-empty count; the payload and original immutable entry header MUST NOT be rewritten to track attempts.
 
@@ -730,7 +799,7 @@ The obstructing command SHALL print `held`, the reason and the recovery command 
 #### Scenario: Untrusted geometry is not a draft-clearing promise
 
 - **GIVEN** a replay of the real P143 frame with an invalidated supported-layout/footer premise and no trustworthy conservative box read
-- **WHEN** `team say dev "geometry diagnostic"` runs
+- **WHEN** ordinary `team draft send <file>` with payload `geometry diagnostic` runs
 - **THEN** it exits non-zero, prints `held` and `geometry-untrusted`, names an existing durable payload and recovery command, sends no key, and prints neither a draft assertion nor an automatic-after-clearing promise
 
 #### Scenario: Three empty-box evaluations expose a stalled entry
