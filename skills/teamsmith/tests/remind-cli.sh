@@ -453,6 +453,12 @@ case "${REAL_MAIN:-}" in
   "") note "本检出没有主工作树，F 只证明没有写到 /nonexistent" ;;
   *)  note "F 的证明对象：$REAL_MAIN/.pi/team（非白名单路径逐字节；白名单形状按名字放行）" ;;
 esac
+# F 的登记自检（P411，与 state-authority §11 同一份 lib）：元套件的运行记录目录被放行（那次假红的
+# 形状：从 worktree 跑元套件，记录落在主检出），而 state/ 下未登记的子目录仍被点名。任一边松了就红。
+F_SLACK=""
+main_team_volatile "./state/meta-suite/2026-11-04T06-46-57Z.log" || F_SLACK="$F_SLACK meta-suite-未放行"
+main_team_volatile "./state/one-off-writer/x.log" && F_SLACK="$F_SLACK 未登记子目录-被放行"
+assert_eq "F 白名单登记：元套件记录放行、state/ 下未登记的子目录仍被点名（判据没有一处松）" "$F_SLACK" ""
 
 # ---------------------------------------------------------------- red sides
 # Each arm: copy the product's own two modules, break exactly one rule, prove the mutation landed,

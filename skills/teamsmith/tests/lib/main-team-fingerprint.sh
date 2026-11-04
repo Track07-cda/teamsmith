@@ -40,6 +40,12 @@ main_team_volatile() { # <relative path, starting with ./ >
         */*)
           dir="${rest%%/*}"
           case "$dir" in
+            # meta-suite: tests/meta-suite.sh writes one run record per run into
+            # <project root>/.pi/team/state/meta-suite/ -- and the project root is the main checkout
+            # (taken from git-common-dir), so a run started from a worktree still lands there. The
+            # content is a run record, not product state: the same class as bg/*.log. Volatile
+            # because every run adds a new file (P411).
+            meta-suite) return 0 ;;
             bg|inbox-watch|outbox|spool|draft|key-replies) return 0 ;;
             release-*|product-field-trial) return 0 ;;
           esac

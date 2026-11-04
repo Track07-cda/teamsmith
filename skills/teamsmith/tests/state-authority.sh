@@ -597,6 +597,20 @@ printf 'stray\n' >"$f3/.pi/team/note.txt"
 main_team_snapshot "$f3/.pi/team" >"$ROOT/f3-4.txt"
 out="$(main_team_violations "$ROOT/f3-3.txt" "$ROOT/f3-4.txt")"
 assert_eq_local "state/ 之外的新文件同样被点名" "$out" "./note.txt"
+# 合法写入者登记（P411）：元套件的运行记录目录是已登记的写入者（tests/meta-suite.sh 每跑一次
+# 新增一个记录文件），而 state/ 下**未登记**的子目录仍必须被点名 —— 两面具名，登记不许把这一层
+# 整片放开（那等于把 P171 的事故形状重新藏起来）。
+mkdir -p "$f3/.pi/team/state/meta-suite"
+main_team_snapshot "$f3/.pi/team" >"$ROOT/f3-5.txt"
+printf 'run record\n' >"$f3/.pi/team/state/meta-suite/2026-11-04T06-46-57Z.log"
+main_team_snapshot "$f3/.pi/team" >"$ROOT/f3-6.txt"
+out="$(main_team_violations "$ROOT/f3-5.txt" "$ROOT/f3-6.txt")"
+assert_eq_local "元套件新增运行记录不算违规（state/meta-suite/ 是已登记的合法写入者）" "$out" ""
+mkdir -p "$f3/.pi/team/state/one-off-writer"
+printf 'stray\n' >"$f3/.pi/team/state/one-off-writer/x.log"
+main_team_snapshot "$f3/.pi/team" >"$ROOT/f3-7.txt"
+out="$(main_team_violations "$ROOT/f3-6.txt" "$ROOT/f3-7.txt")"
+assert_eq_local "state/ 下未登记子目录里的 x.log 必须被点名（登记没把整层子目录放开）" "$out" "./state/one-off-writer/x.log"
 # 10d. F3 的红侧：把「整段跳过 state/」这个旧形状放回来，杂散文件那条必须不再被报（=会红）
 if arm_selected manifest; then
   FLIPS_RUN="${FLIPS_RUN:+$FLIPS_RUN,}manifest"
