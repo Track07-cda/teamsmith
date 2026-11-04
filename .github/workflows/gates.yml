@@ -2,7 +2,13 @@ name: gates
 
 # The two commands the PM runs on every task branch before merging:
 #
-#   openspec validate --all --strict && bash skills/teamsmith/tests/smoke.sh
+#   openspec validate --all && bash skills/teamsmith/tests/smoke.sh
+#
+# `--all` without `--strict` is the current contract, not an oversight: OpenSpec 1.16 fails
+# `--strict` on any warning, and 237 requirements of this repository exceed its 500-character
+# length guidance (P407). The step below runs the same command `TEAM_GATES` runs, so CI and the PM
+# judge with the same rules; `--strict` returns when the burn-down list
+# (`docs/team/tasks/P408-spec-burn-down.md`) is empty.
 #
 # They run inside the pinned gate image (ci/Containerfile) rather than on the runner directly.
 # Why (M47): the suite asserts real behaviour of real tools (tmux bracketed paste, a login shell
@@ -134,7 +140,7 @@ jobs:
           fetch-depth: 0
 
       # Self-contained: no registry credentials, no floating image tag. ci/Containerfile pins
-      # tmux 3.7b, node 24.19.0, bun 1.3.14 and openspec 1.8.0, and installs **pi at the version
+      # tmux 3.7b, node 24.19.0, bun 1.3.14 and openspec 1.16.0, and installs **pi at the version
       # resolved once for this run** (P380, the `resolve-pi` job above); `ci/build-image.sh` passes
       # that version as an exact `--build-arg` and reads `pi --version` back out of the built image.
       #
@@ -222,13 +228,13 @@ jobs:
               --user "$(id -u):$(id -g)" -e HOME=/tmp -e TMPDIR="$TEAM_CI_TMP_ROOT" -e SHARD_SLICE="$SHARD_SLICE" -e PI_EXPECT_VERSION="$PI_EXPECT_VERSION" \
               -v "$PWD:/work:ro" -v "$EXCHANGE:/artifacts" -w /work \
               teamsmith-gates:ci \
-              bash -c 'set -u; pi_out="$(pi --version)"; pi_rc=$?; if [ "$pi_rc" -ne 0 ]; then printf "::error::pi --version exited %s before the gate ran (the runtime did not report its version; not compared)\n" "$pi_rc" >&2; exit "$pi_rc"; fi; bash ci/check-pi-version.sh "$PI_EXPECT_VERSION" "$pi_out" || exit $?; shopt -s nullglob; mkdir -p "$TMPDIR"; openspec validate --all --strict || exit $?; bash skills/teamsmith/tests/smoke.sh --floor --keep </dev/null --slice "$SHARD_SLICE" --paths "$@"; rc=$?; n=0; for f in "$TMPDIR"/*.keys; do cp "$f" "/artifacts/shard-${SHARD_SLICE%%/*}.keys"; n=$((n + 1)); done; [ "$n" -gt 0 ] || printf "::warning::shard %s wrote no key list (%s/*.keys)\n" "$SHARD_SLICE" "$TMPDIR" >&2; exit "$rc"' _ "${PATHS[@]}"
+              bash -c 'set -u; pi_out="$(pi --version)"; pi_rc=$?; if [ "$pi_rc" -ne 0 ]; then printf "::error::pi --version exited %s before the gate ran (the runtime did not report its version; not compared)\n" "$pi_rc" >&2; exit "$pi_rc"; fi; bash ci/check-pi-version.sh "$PI_EXPECT_VERSION" "$pi_out" || exit $?; shopt -s nullglob; mkdir -p "$TMPDIR"; openspec validate --all || exit $?; bash skills/teamsmith/tests/smoke.sh --floor --keep </dev/null --slice "$SHARD_SLICE" --paths "$@"; rc=$?; n=0; for f in "$TMPDIR"/*.keys; do cp "$f" "/artifacts/shard-${SHARD_SLICE%%/*}.keys"; n=$((n + 1)); done; [ "$n" -gt 0 ] || printf "::warning::shard %s wrote no key list (%s/*.keys)\n" "$SHARD_SLICE" "$TMPDIR" >&2; exit "$rc"' _ "${PATHS[@]}"
           else
             docker run --name "$CNAME" --pid=host \
               --user "$(id -u):$(id -g)" -e HOME=/tmp -e TMPDIR="$TEAM_CI_TMP_ROOT" -e SHARD_SLICE="$SHARD_SLICE" -e PI_EXPECT_VERSION="$PI_EXPECT_VERSION" \
               -v "$PWD:/work:ro" -v "$EXCHANGE:/artifacts" -w /work \
               teamsmith-gates:ci \
-              bash -c 'set -u; pi_out="$(pi --version)"; pi_rc=$?; if [ "$pi_rc" -ne 0 ]; then printf "::error::pi --version exited %s before the gate ran (the runtime did not report its version; not compared)\n" "$pi_rc" >&2; exit "$pi_rc"; fi; bash ci/check-pi-version.sh "$PI_EXPECT_VERSION" "$pi_out" || exit $?; shopt -s nullglob; mkdir -p "$TMPDIR"; openspec validate --all --strict || exit $?; bash skills/teamsmith/tests/smoke.sh --keep --slice "$SHARD_SLICE" </dev/null; rc=$?; n=0; for f in "$TMPDIR"/*.keys; do cp "$f" "/artifacts/shard-${SHARD_SLICE%%/*}.keys"; n=$((n + 1)); done; [ "$n" -gt 0 ] || printf "::warning::shard %s wrote no key list (%s/*.keys)\n" "$SHARD_SLICE" "$TMPDIR" >&2; exit "$rc"' _
+              bash -c 'set -u; pi_out="$(pi --version)"; pi_rc=$?; if [ "$pi_rc" -ne 0 ]; then printf "::error::pi --version exited %s before the gate ran (the runtime did not report its version; not compared)\n" "$pi_rc" >&2; exit "$pi_rc"; fi; bash ci/check-pi-version.sh "$PI_EXPECT_VERSION" "$pi_out" || exit $?; shopt -s nullglob; mkdir -p "$TMPDIR"; openspec validate --all || exit $?; bash skills/teamsmith/tests/smoke.sh --keep --slice "$SHARD_SLICE" </dev/null; rc=$?; n=0; for f in "$TMPDIR"/*.keys; do cp "$f" "/artifacts/shard-${SHARD_SLICE%%/*}.keys"; n=$((n + 1)); done; [ "$n" -gt 0 ] || printf "::warning::shard %s wrote no key list (%s/*.keys)\n" "$SHARD_SLICE" "$TMPDIR" >&2; exit "$rc"' _
           fi
           GATE_RC=$?
           exit "$GATE_RC"

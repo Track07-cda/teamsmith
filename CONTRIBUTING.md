@@ -22,10 +22,17 @@ against.
 Everything the project promises is checked by the suite that ships with it:
 
 ```bash
-openspec validate --all --strict          # the contract library
+openspec validate --all                   # the contract library (see the strictness note below)
 bash skills/teamsmith/tests/smoke.sh      # the full suite (long; it drives real tmux windows)
 TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh   # the fast subset
 ```
+
+`openspec validate --all --strict` is the target, and it is what a new project should adopt: a
+change that leaves a warning behind is not finished. This repository runs the command above
+without `--strict` for now, because OpenSpec 1.16 judges a requirement whose text exceeds 500
+characters as a warning and `--strict` fails on warnings, and 237 of our requirements are that
+long. The burn-down list is `docs/team/tasks/P408-spec-burn-down.md`; `--strict` goes back into
+the command above when that list is empty.
 
 The suite is deliberately strict and it is the same suite CI runs. A change that reddens it is
 not ready, and a test that cannot judge says so rather than passing.

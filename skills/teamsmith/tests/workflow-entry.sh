@@ -200,8 +200,11 @@ for badbase in "" "0000000000000000000000000000000000000000" "no-such-sha-$$"; d
   CMD2="$(argv_field "$TMP/argv-bad.bin" "$(( $(argv_index_of "$TMP/argv-bad.bin" teamsmith-gates:ci 2>/dev/null || printf 0) + 3 ))")"
   # 「退回全套」要**正向确认**：命令里必须真的以完整入口跑起来（`bash skills/teamsmith/tests/smoke.sh --keep`
   # + 前面的 openspec 校验），不能只看「缺了 --floor」—— 命令为空时那个条件也成立。
+  # 期望串只钉「两段都在、openspec 校验在前」：`--strict` 不再是本仓的门禁口径（P407：OpenSpec 1.16
+  # 把超过 500 字符的需求判成 warning，`--strict` 下 20/20 全红，本仓暂跑非 strict，烧完再开），所以这里
+  # 不再钉它；但两段都必须在前面的命令里，退化成只查其中一段就等于没确认「完整入口」。
   case "$CMD2" in
-    *'openspec validate --all --strict'*'bash skills/teamsmith/tests/smoke.sh --keep '*) _runs_full=1 ;;
+    *'openspec validate --all'*'bash skills/teamsmith/tests/smoke.sh --keep '*) _runs_full=1 ;;
     *) _runs_full=0 ;;
   esac
   if [ "$RC2" -eq 0 ] && grep -qF '::warning::changed-path base is unresolvable' "$TMP/bad.out" \
