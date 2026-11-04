@@ -45,6 +45,13 @@ FLIPS_RUN=""
 . "$HERE/lib/tmp-root.sh"
 
 NODE_HELPER="$SKILL/scripts/state-authority.mjs"
+# state-authority.mjs 现在 import 同目录的 remind-store.mjs（P409）：凡是把它复制到别处的夹具
+# （变异副本、被杀助手）都要把伴生模块放到同一目录，否则那条臂会死在 ERR_MODULE_NOT_FOUND 上
+# —— 那是夹具坏了，不是判定。
+authority_helper_copy() { # <目标文件> —— 复制助手本体并保证它的 import 解析得到
+  cp "$SKILL/scripts/state-authority.mjs" "$1" || return 1
+  cp "$SKILL/scripts/remind-store.mjs" "$(dirname "$1")/remind-store.mjs" || return 1
+}
 RUNNER="$(team_js_runner)"
 if [ -z "$RUNNER" ]; then
   printf 'state-authority: 前提缺失 —— 没有 JS 运行时（node/bun/tsx）；这是可见跳过，不是通过\n' >&2
@@ -124,81 +131,15 @@ assert_eq_local() { [ "$2" = "$3" ] && ok "$1" || bad "$1（期望 [$3]，实际
 state_root_of() { runchild "$1" -- "$PREP; team_authority_state_root"; }
 
 # ---------------------------------------------------------------- 真实项目的隔离清单（事故形状的证明）
-# 活团队在跑：巡检、派单、派发日志确实在动。所以判据不是「state/ 整段跳过」，而是**命名的易变白名单**：
-# 只有白名单里的形状允许新增/变化；其余任何路径出现、消失或内容变化都算违规 —— 包括 state/ 下任何一个
-# 杂散文件。P171 把整份 state/ 划为运行时；这里的收窄是 V128-F3 要求的：白名单按形状命名，不是按目录。
-# 权威自己的写面：**永不**属于易变白名单。这条判据独立于白名单，所以「往白名单加个名字」遮不住事故形状。
-authority_surface() { # <相对路径（以 ./ 开头）>
-  case "$1" in
-    ./reminder-locator*|./state/reminders|./state/reminders/*|./state/standby|./state/standby.*) return 0 ;;
-  esac
-  return 1
-}
-# 活团队的运行时写入者，按形状命名。两段式：state 根下的**一层**文件名按后缀/前缀放行；子目录只放行已知的
-# 那几个（bash 的 case `*` 会连 `/` 一起匹配，所以子目录必须显式分支，不能靠 `./state/*.log` 这种写法）。
-state_volatile() { # <相对路径（以 ./ 开头）>
-  local p="$1" rest dir base
-  authority_surface "$p" && return 1
-  case "$p" in
-    ./state/*)
-      rest="${p#./state/}"
-      case "$rest" in
-        */*)
-          dir="${rest%%/*}"
-          case "$dir" in
-            bg|inbox-watch|outbox|spool|draft|key-replies) return 0 ;;
-            release-*|product-field-trial) return 0 ;;
-          esac
-          return 1 ;;
-      esac
-      base="$rest"
-      case "$base" in
-        *.log|*.log.[0-9]*|*.last|*.nudge|*.tick|*.pid*) return 0 ;;
-        *.spawn|*.exit|*-tail.txt|*.tmp|*.attempts.*|*.pending|*.inbox|*.lock|*.conf) return 0 ;;
-        *.env|*.env.bak-*) return 0 ;;
-        inbox-*|pm-*|pm.*|dispatch-*|draft-*|held) return 0 ;;
-        notify*|nudge*|watchdog*|capacity*|digest-*|deaths.*|bg.log|panel*) return 0 ;;
-        changes.json|refs|pane|_watch.*|reload-requested|interrupt.*|update-check.*|config.*) return 0 ;;
-        summary-*|prompt-*|pm-loaded.*|pm-launch*) return 0 ;;
-      esac
-      return 1 ;;
-  esac
-  return 1
-}
-manifest_snapshot() { # <dir> → "path<TAB>hash"，按路径排序（不存在的目录 = 空清单）
-  [ -d "$1" ] || return 0
-  ( cd "$1" && find . -type f -print0 | sort -z | xargs -0 -r sha256sum 2>/dev/null ) |
-    awk '{ h = $1; $1 = ""; sub(/^ /, ""); print $0 "\t" h }' | sort -t "$(printf '\t')" -k1,1
-}
-# MANIFEST_BREAK=skip-state 是**自检红侧**：把「整段跳过 state/」这个旧缺陷形状放回来（与 tmp-root.sh 的
-# TMP_ROOT_BREAK 同一手法），用于证明这条判据真的会红。产品不读它，只有 --flip=manifest 会设。
-manifest_violations() { # <before> <after> → 每个非白名单变化一行（路径）
-  local before="$1" after="$2" path b a
-  join -t "$(printf '\t')" -a1 -a2 -e MISSING -o '0,1.2,2.2' "$before" "$after" |
-    while IFS="$(printf '\t')" read -r path b a; do
-      [ "$b" = "$a" ] && continue
-      if [ "${MANIFEST_BREAK:-}" = "skip-state" ]; then
-        case "$path" in ./state/*) continue ;; esac
-      fi
-      state_volatile "$path" && continue
-      printf '%s\n' "$path"
-    done
-}
-manifest_volatile_count() { # <before> <after> → 白名单内发生变化的路径数（证明判据真的看见了现场在动）
-  local before="$1" after="$2" path b a n=0
-  while IFS="$(printf '\t')" read -r path b a; do
-    [ "$b" = "$a" ] && continue
-    state_volatile "$path" && n=$((n + 1))
-  done < <(join -t "$(printf '\t')" -a1 -a2 -e MISSING -o '0,1.2,2.2' "$before" "$after")
-  printf '%s\n' "$n"
-}
-# 证明对象是**本项目的主检出**（不是本工作树）：夹具从工作树跑，权威却绝不能落到主检出上。
-REAL_MAIN="$(cd "$SKILL/.." && pwd)"
-REAL_MAIN="$(git -C "$SKILL" rev-parse --path-format=absolute --git-common-dir 2>/dev/null | xargs -r dirname)"
-[ -n "${REAL_MAIN:-}" ] && [ -d "$REAL_MAIN" ] || REAL_MAIN=""
+# 判据本体（命名易变白名单 / 事故形状 / 判据可证伪）现在只有一份：tests/lib/main-team-fingerprint.sh，
+# 与 P409 的 remind-cli.sh 共用。这里只保留它的自检与 --flip=manifest 的红侧。
+# shellcheck source=lib/main-team-fingerprint.sh
+. "$HERE/lib/main-team-fingerprint.sh"
+
+REAL_MAIN="$(main_team_project_root "$SKILL")"
 REAL_BEFORE="$ROOT/real-before.txt"
 REAL_AFTER="$ROOT/real-after.txt"
-manifest_snapshot "${REAL_MAIN:-/nonexistent}/.pi/team" >"$REAL_BEFORE"
+main_team_snapshot "${REAL_MAIN:-/nonexistent}/.pi/team" >"$REAL_BEFORE"
 
 # ---------------------------------------------------------------- 夹具仓库
 A="$(make_repo A)" || { bad "夹具建不出仓库 A"; result; exit 1; }
@@ -397,7 +338,7 @@ fi
 # 实测：助手被 SIGKILL 时 flock 以 128+9=137 退出、耗时 ~1ms；而真等满锁是 -E 75、满 5s。
 # 这里让助手以 137 退出（对调用方与 SIGKILL 同形：flock 原样转发状态），判据是措辞与「没有写状态」。
 DYING="$ROOT/flip/dying-helper.mjs"
-cp "$NODE_HELPER" "$DYING"
+authority_helper_copy "$DYING"
 python3 - "$DYING" <<'PYEOF'
 import sys
 path = sys.argv[1]
@@ -508,7 +449,7 @@ assert_eq_local "新快照的 Standby 槽位是 generation 0（迁移留给 1.3�
 
 # ---------------------------------------------------------------- 10. 红侧：同一个判据，改坏实现必须红
 flip_copy() { # <名字> <sed 表达式> —— 变异必须真的改到（否则红侧就是橡皮章）
-  cp "$SKILL/scripts/state-authority.mjs" "$ROOT/flip/$1.mjs"
+  authority_helper_copy "$ROOT/flip/$1.mjs"
   sed -i "$2" "$ROOT/flip/$1.mjs" || return 1
   ! cmp -s "$SKILL/scripts/state-authority.mjs" "$ROOT/flip/$1.mjs"
 }
@@ -605,9 +546,9 @@ else
 fi
 
 # ---------------------------------------------------------------- 11. 事故形状的证明：主项目 .pi/team 没被碰过
-manifest_snapshot "${REAL_MAIN:-/nonexistent}/.pi/team" >"$REAL_AFTER"
-violations="$(manifest_violations "$REAL_BEFORE" "$REAL_AFTER")"
-volatile_n="$(manifest_volatile_count "$REAL_BEFORE" "$REAL_AFTER")"
+main_team_snapshot "${REAL_MAIN:-/nonexistent}/.pi/team" >"$REAL_AFTER"
+violations="$(main_team_violations "$REAL_BEFORE" "$REAL_AFTER")"
+volatile_n="$(main_team_volatile_changes "$REAL_BEFORE" "$REAL_AFTER")"
 pinned_n="$(awk -F"\t" '$1 !~ /^\.\/state\//' "$REAL_BEFORE" | wc -l | tr -d ' ')"
 if [ -z "$violations" ]; then
   ok "主项目 .pi/team：非白名单路径零变化（钉住 $pinned_n 个文件；同期白名单内 $volatile_n 个运行时文件在动，按名字放行）"
@@ -631,7 +572,7 @@ note "证明对象：${REAL_MAIN:-（本检出没有主工作树）}/.pi/team（
 leaked_names=""
 for probe in ./reminder-locator.json ./reminder-locator.lock ./state/reminders ./state/reminders/state.json \
              ./state/reminders/authority.lock ./state/standby ./state/standby.lock; do
-  state_volatile "$probe" && leaked_names="$leaked_names $probe"
+  main_team_volatile "$probe" && leaked_names="$leaked_names $probe"
 done
 assert_eq_local "白名单没有覆盖权威写面（加名字遮不住事故形状）" "$leaked_names" ""
 
@@ -641,31 +582,31 @@ mkdir -p "$f3/.pi/team/state/bg" "$f3/.pi/team/state/inbox-watch"
 printf 'session=fixture\n' >"$f3/.pi/team/config.sh"
 printf 'a\n' >"$f3/.pi/team/state/watchdog.log"
 printf 'holds\n' >"$f3/.pi/team/state/inbox-watch/dev.reg"
-manifest_snapshot "$f3/.pi/team" >"$ROOT/f3-1.txt"
+main_team_snapshot "$f3/.pi/team" >"$ROOT/f3-1.txt"
 printf 'b\n' >>"$f3/.pi/team/state/watchdog.log"
 printf 'tick\n' >"$f3/.pi/team/state/bg/job.log"
 printf 'holds2\n' >"$f3/.pi/team/state/inbox-watch/dev.reg"
-manifest_snapshot "$f3/.pi/team" >"$ROOT/f3-2.txt"
-out="$(manifest_violations "$ROOT/f3-1.txt" "$ROOT/f3-2.txt")"
+main_team_snapshot "$f3/.pi/team" >"$ROOT/f3-2.txt"
+out="$(main_team_violations "$ROOT/f3-1.txt" "$ROOT/f3-2.txt")"
 assert_eq_local "只动白名单形状的运行时文件：不算违规（判据不是「一切都不许变」）" "$out" ""
 printf 'stray\n' >"$f3/.pi/team/state/stray-evidence.txt"
-manifest_snapshot "$f3/.pi/team" >"$ROOT/f3-3.txt"
-out="$(manifest_violations "$ROOT/f3-2.txt" "$ROOT/f3-3.txt")"
+main_team_snapshot "$f3/.pi/team" >"$ROOT/f3-3.txt"
+out="$(main_team_violations "$ROOT/f3-2.txt" "$ROOT/f3-3.txt")"
 assert_eq_local "state/ 下的杂散文件必须被点名（事故形状）" "$out" "./state/stray-evidence.txt"
 printf 'stray\n' >"$f3/.pi/team/note.txt"
-manifest_snapshot "$f3/.pi/team" >"$ROOT/f3-4.txt"
-out="$(manifest_violations "$ROOT/f3-3.txt" "$ROOT/f3-4.txt")"
+main_team_snapshot "$f3/.pi/team" >"$ROOT/f3-4.txt"
+out="$(main_team_violations "$ROOT/f3-3.txt" "$ROOT/f3-4.txt")"
 assert_eq_local "state/ 之外的新文件同样被点名" "$out" "./note.txt"
 # 10d. F3 的红侧：把「整段跳过 state/」这个旧形状放回来，杂散文件那条必须不再被报（=会红）
 if arm_selected manifest; then
   FLIPS_RUN="${FLIPS_RUN:+$FLIPS_RUN,}manifest"
-  out="$(MANIFEST_BREAK=skip-state manifest_violations "$ROOT/f3-2.txt" "$ROOT/f3-3.txt")"
+  out="$(MAIN_TEAM_BREAK=skip-state main_team_violations "$ROOT/f3-2.txt" "$ROOT/f3-3.txt")"
   if [ -z "$out" ]; then
     ok "flip（跳过 state/ 的旧形状）：state/ 下的杂散文件不再被报 —— 上一条具名断言会红"
   else
     bad "flip（跳过 state/ 的旧形状）没落地：仍然报了 [$out]"
   fi
-  out="$(MANIFEST_BREAK=skip-state manifest_violations "$ROOT/f3-3.txt" "$ROOT/f3-4.txt")"
+  out="$(MAIN_TEAM_BREAK=skip-state main_team_violations "$ROOT/f3-3.txt" "$ROOT/f3-4.txt")"
   assert_eq_local "flip（跳过 state/ 的旧形状）：state/ 之外的杂散文件仍然被报（没收窄判据）" "$out" "./note.txt"
 else
   note "跳过红侧臂 manifest（本次 --flip=${FLIP}）"

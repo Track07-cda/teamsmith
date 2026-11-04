@@ -24234,6 +24234,34 @@ else
   fi
 fi
 
+# ---------------------------------------------------------------- 67. 提醒 CLI（P409 · agent-self-reminder 2.1/2.3）
+# 夹具本体是 tests/remind-cli.sh：每个仓库先 git init、显式给 --root 与 TEAM_STATE_DIR、隔离 HOME/TMPDIR，
+# 覆盖 CLI 面（add/list/show/cancel）/ 输入拒绝 / key 幂等与释放 / 派生视图（手工改快照后计数跟着变）/
+# 有界终结历史与已签发高水位 / 主项目隔离；五条翻转臂在 scratch 副本上把实现逐条改坏，要求具名断言变红。
+# 纯逻辑：不建 tmux、不起 pi，FAST 与全量都跑。
+section "67 · 提醒 CLI：add/list/show/cancel 与派生视图（P409 · agent-self-reminder 2.1/2.3）"
+P409_FIX="$SKILL_DIR/tests/remind-cli.sh"
+if [ ! -f "$P409_FIX" ]; then
+  bad "P409 缺 tests/remind-cli.sh（提醒 CLI 夹具）"
+else
+  bash "$P409_FIX" >"$TMP/p409-remind.log" 2>&1; P409_RC=$?
+  if [ "$P409_RC" -eq 0 ]; then
+    P409_SUM="$(smoke_inner_summary "$TMP/p409-remind.log" remind-cli)" || P409_SUM=""
+    if [ -n "$P409_SUM" ]; then
+      ok "P409 提醒 CLI 夹具全绿（$P409_SUM：CLI / 拒绝 / key / 派生视图 / 修剪与高水位 / 隔离 / 五条翻转臂）"
+    else
+      bad "P409 提醒 CLI 夹具绿了但读不到它自己的结果行（夹具契约破了）"
+    fi
+    assert_has "$TMP/p409-remind.log" "主项目 .pi/team：非白名单路径零变化" "P409 隔离证明：主项目的非白名单路径零变化"
+    assert_has "$TMP/p409-remind.log" "flip（把视图存下来）" "P409 红侧真的跑了（视图派生那条：存一份视图必须红）"
+  elif [ "$P409_RC" -eq 3 ]; then
+    cond_skip "P409 提醒 CLI 夹具" "$(grep -a '前提缺失' "$TMP/p409-remind.log" | tail -1 | sed 's/^remind-cli：//')"
+  else
+    bad "P409 提醒 CLI 夹具红（rc=$P409_RC）"
+    grep -a '✗' "$TMP/p409-remind.log" | head -10 | sed 's/^/      /'
+  fi
+fi
+
 section "14d · P70 本套自述对账（段落账目 + 无误判）"
 P70_S_STARTS="$(grep -c '^== #[0-9][0-9]* ' "$SG_LOG" 2>/dev/null || true)"
 P70_S_SHAPED="$(grep -cE '^== #[0-9]+ .+ == [0-9]{4}-[0-9]{2}-[0-9]{2}T[^ ]+$' "$SG_LOG" 2>/dev/null || true)"

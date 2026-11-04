@@ -24,6 +24,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { REMIND_OPS, applyReminder, renderRemind, validateReminders } from './remind-store.mjs';
 
 const SELF = fileURLToPath(import.meta.url);
 const SNAPSHOT_VERSION = 1;
@@ -238,6 +239,9 @@ function validate(snapshot, main, state) {
   if (!snapshot.batches.every(record => record && typeof record === 'object' && typeof record.id === 'string')) {
     fail(`invalid state snapshot ${where}: a batch record has no id`);
   }
+  // The reminder records carry the delivery truth, so their shape is validated with the same care as the
+  // envelope: a record whose id, phase or high-water contradicts the snapshot is refused, never "repaired".
+  validateReminders(snapshot, fail);
 }
 
 function summary(snapshot, created) {
@@ -255,7 +259,8 @@ function summary(snapshot, created) {
   };
 }
 
-function apply(snapshot, request) {
+function apply(snapshot, request, nowMs) {
+  if (REMIND_OPS.has(request.op)) return applyReminder(snapshot, request, nowMs);
   switch (request.op) {
     case 'init':
       return summary(snapshot, true);
@@ -294,11 +299,14 @@ function transaction(main, state, request) {
     validate(snapshot, main, state);
   }
   const before = JSON.stringify(snapshot);
-  const result = apply(snapshot, request);
-  result.created = !hasSnapshot;
+  const result = apply(snapshot, request, Date.now());
+  // A reminder result reports its own `created` (an idempotent key hit is created:false); every other
+  // operation keeps the authority-level meaning: was this the first snapshot?
+  if (!REMIND_OPS.has(request.op)) result.created = !hasSnapshot;
   const changed = JSON.stringify(snapshot) !== before;
-  // A first `init` does not mutate the object, but the fresh snapshot must still be published.
-  if (changed || !hasSnapshot) writeAtomic(file, snapshot);
+  // A first `init` does not mutate the object, but the fresh snapshot must still be published. A read
+  // (list/show, a refused cancel) never publishes one: reading an empty authority stays a read.
+  if (changed || (!hasSnapshot && request.op === 'init')) writeAtomic(file, snapshot);
   return result;
 }
 
@@ -358,9 +366,15 @@ export async function resolve(context) {
 
 function parseCli(argv) {
   const [main, state, op, ...rest] = argv;
-  if (!main || !state || !op) fail('usage: state-authority.mjs --cli <project-root> <state-root> <resolve|init|read|allocate <kind>> [--print <field>]');
+  if (!main || !state || !op) {
+    fail('usage: state-authority.mjs --cli <project-root> <state-root> ' +
+      '<resolve|init|read|allocate <kind>|remind-add|remind-list|remind-show|remind-cancel> ' +
+      '[--print <field>] [--json]');
+  }
   let print = null;
+  let json = false;
   const args = [];
+  const flags = {};
   while (rest.length) {
     const token = rest.shift();
     if (token === '--print') {
@@ -368,15 +382,62 @@ function parseCli(argv) {
       if (!print) fail('--print needs a field name');
       continue;
     }
+    // Reminder flags are parsed here and handed to the transaction as data; the helper never reads them
+    // from the environment or from a shell-quoted string.
+    if (REMIND_OPS.has(op) && token.startsWith('--')) {
+      const name = token.slice(2);
+      if (name === 'json') { json = true; continue; }
+      if ((REMIND_BOOL_FLAGS[op] ?? new Set()).has(name)) { flags[name] = true; continue; }
+      const value = rest.shift();
+      if (value === undefined) fail(`${token} needs a value`);
+      flags[name] = value;
+      continue;
+    }
     args.push(token);
   }
-  const requestData = { op };
+  const requestData = REMIND_OPS.has(op) ? parseRemindFlags(op, flags) : { op };
   if (op === 'allocate') {
     requestData.kind = args.shift();
     if (!requestData.kind) fail('allocate needs a sequence kind (reminder|batch|queue)');
   }
   if (args.length) fail(`unexpected arguments: ${args.join(' ')}`);
-  return { context: { mainRoot: main, stateRoot: state }, requestData, print };
+  return { context: { mainRoot: main, stateRoot: state }, requestData, print, json };
+}
+
+// Boolean reminder flags (everything else takes a value).
+const REMIND_BOOL_FLAGS = { 'remind-list': new Set(['all']) };
+
+// Exactly the flags each reminder operation accepts: an unknown flag is refused here rather than silently
+// ignored, so a typo cannot look like a successful create.
+const REMIND_FLAGS = {
+  'remind-add': new Set(['at', 'after', 'key', 'task', 'source']),
+  'remind-list': new Set(['all']),
+  'remind-show': new Set(['id']),
+  'remind-cancel': new Set(['id']),
+};
+
+function parseRemindFlags(op, flags) {
+  const allowed = REMIND_FLAGS[op];
+  const request = { op };
+  for (const name of Object.keys(flags)) {
+    if (!allowed.has(name)) fail(`${op} does not accept --${name}`);
+    request[name] = flags[name];
+  }
+  if ((op === 'remind-show' || op === 'remind-cancel') && !request.id) fail(`${op} needs --id <reminder-id>`);
+  return request;
+}
+
+// The message is read from stdin so its bytes never travel through argv: no shell quoting, no length
+// limit, no re-encoding. Invalid UTF-8 is refused before a lock is taken.
+async function readMessageFromStdin() {
+  const chunks = [];
+  for await (const chunk of process.stdin) chunks.push(chunk);
+  const buffer = Buffer.concat(chunks);
+  let text;
+  try { text = new TextDecoder('utf-8', { fatal: true }).decode(buffer); }
+  catch { return { error: 'message is not valid UTF-8; write the text as UTF-8 and try again' }; }
+  if (text.indexOf('\u0000') !== -1) return { error: 'message contains a NUL byte' };
+  return { message: text };
 }
 
 async function main(argv) {
@@ -398,7 +459,24 @@ async function main(argv) {
     return;
   }
   if (mode === '--cli') {
-    const { context, requestData, print } = parseCli(rest);
+    const { context, requestData, print, json } = parseCli(rest);
+    if (REMIND_OPS.has(requestData.op)) {
+      if (requestData.op === 'remind-add') {
+        const message = await readMessageFromStdin();
+        if (message.error) {
+          process.stdout.write(renderRemind(requestData.op, { ok: false, refusal: 'bad-message', reason: message.error }));
+          process.exitCode = 1;
+          return;
+        }
+        requestData.message = message.message;
+      }
+      const result = await request(context, requestData);
+      const text = json ? JSON.stringify(result, null, 2) + '\n' : renderRemind(requestData.op, result);
+      process.stdout.write(text.endsWith('\n') ? text : text + '\n');
+      // A refusal is not a crash: the reason was printed, and the exit status says nothing was written.
+      if (!result.ok) process.exitCode = 1;
+      return;
+    }
     const result = requestData.op === 'resolve' ? await resolve(context) : await request(context, requestData);
     if (print !== null) {
       if (!Object.hasOwn(result, print)) fail(`unknown output field: ${print}`);
@@ -409,7 +487,8 @@ async function main(argv) {
     }
     return;
   }
-  fail('usage: state-authority.mjs --cli <project-root> <state-root> <resolve|init|read|allocate <kind>>');
+  fail('usage: state-authority.mjs --cli <project-root> <state-root> ' +
+    '<resolve|init|read|allocate <kind>|remind-add|remind-list|remind-show|remind-cancel> [--print <field>] [--json]');
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === SELF) {

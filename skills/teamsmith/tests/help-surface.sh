@@ -515,6 +515,7 @@ probe_recipe() {
     monitor)      printf 'proj|monitor --print --no-activity --once\n' ;;
     watch)        printf 'proj|watch --once\n' ;;
     standby)      printf 'proj|standby on --reason "probe"\n' ;;
+    remind)       printf 'proj|remind add --after 20m --message probe\n' ;;
     meeting)      printf 'proj|meeting open probe --with other:other --topic topic --yes\n' ;;
     up)           printf 'proj|up --fresh-pm\n' ;;
     resume)       printf 'live|resume --agent dev\n' ;;
