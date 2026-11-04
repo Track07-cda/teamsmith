@@ -2122,3 +2122,11 @@ P383 内容已合（a71b3499），但门禁红在**夹具假红**：`key-replies
 
 同时记住一条：`team board set done` 需要 `docs/team/reviews/<ID>.md` 且第三行是 `判定: **PASS**`；V-类的交付报告常叫 `<ID>-verify.md`，PM 收口时要复制成 `<ID>.md`，否则 `team close` 会拦。
 
+### D226 · OpenSpec 统一到 1.16.0，门禁暂时非 strict（2026-11-04）
+
+用户选 B。三条事实先摆出来：① 本机 CLI 已是 1.16.0，`.pi/prompts`、`.pi/skills` 的相位面也已是 1.16 生成；② `ci/Containerfile` 仍钉 `OPENSPEC_VERSION=1.8.0`，于是 CI 与本地版本错配——PM 按 1.16 的指令（任务勾选要给 `sourcePath`/`line`、写前先 `openspec list --json` 读 `root`、禁止静默收窄规格）去读 1.8 的输出；③ 1.16 把"需求文本 >500 字符"升为 warning 并在 `--strict` 下判失败，本仓命中 **240 条**（20 份规格，最重 `panel` 41、`verification` 28、`dispatch` 21、`notify-and-inbox` 20、`memory-and-deps` 17、`watchdog` 14、`init-skill` 14）。
+
+决定：CI 钉到 1.16.0（P407），门禁改 `openspec validate --all`（非 strict），`TEAM_GATES` 已同步改（`.pi/team/config.sh`，配置审计可查）。`--strict` 是**目标态不是永久放弃**：240 条作为清单分批烧掉，烧完再把 strict 打开。产品模板（`templates/AVENTS` 类文件、`SKILL.md`、`references/*`）仍写 strict——那是对**别的项目**的默认，本仓是唯一例外，且例外原因与出口条件写在 `CONTRIBUTING.md`。
+
+烧法先试点（P408）：只做 `writing-discipline`(5)、`extension-slash`(6)、`help-surface`(6) 三份小规格，走 `openspec/changes/spec-clarity-burn-down/` 的 MODIFIED Requirements，不改行为语义、不走 skip_specs 空壳、不直接编辑 `openspec/specs/**`；验收是三份各自 `--strict` 归零、全局计数严格下降、`spec-refs` 仍 `undeclared 0`。试点跑通再按同一做法推剩余 17 份，节奏与是否值得继续由用户在试点结果上决定。
+
