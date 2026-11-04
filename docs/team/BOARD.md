@@ -652,6 +652,9 @@
 | V126 | 声明面断言独立复验 | dev | - | - | done |
 | V127 | 指令瘦身整体独立复验 | dev | - | - | done |
 | P405 | §2 init 段自带 cwd | dev | - | - | done |
+| P406 | 自我提醒 1.1-1.2 共享权威 | dev | - | - | wip |
+| P407 | CI 钉 OpenSpec 1.16 + 非 strict 门禁 | dev | - | - | done |
+| P408 | 长需求拆分试点（3 份小规格） | dev | - | - | todo |
 
 ## 当前里程碑
 
