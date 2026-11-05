@@ -408,3 +408,15 @@ $ bash skills/teamsmith/tests/meta-suite.sh --judge …/2026-11-04T16-50-35Z.log
 2. **记录行加判据身份**（`meta-suite.sh` 所在提交的短 sha）。这样"日志绿、记录红"这种情况一眼可辨，不必每次人工复核。这是给既有记录加出处，不是新增守卫。
 
 跑完把报告补全（本次 GREEN 记录的路径、判据 sha、以及那条旧记录的说明），我再做合并前的独立核对。
+
+## 2026-11-05 · PM · P417 退回：两处都把它项目/别人的进程当成自己的
+
+在 main 上跑 `smoke.sh --select 11f --keep`：✓79 ✗3（README 那条是我发版漏改，已由我修）。两条属于本单：
+
+1. **「没有 PM 在跑」这句从不出现。** 夹具先删 `state/pm.pid` 再跑 `version --check`，实际输出是
+   `✓ 一致：磁盘 skill 0.4.5 在这台 PM 启动之后没有改动` —— 也就是说它认定「有一台 PM 在跑」。沙盒里没有本项目的 PM，它拿到的是外层 PM 的进程证据。`team_pm_age_pid` 取 `team_pm_recorded_pid`/pane 的 pid 后只做 `kill -0`，没有验证「这个进程属于本项目的 root」。要按 P415/P418 的做法：pid 存活之外还要求它的 `cwd` 是本项目 root（或启动凭证属于本项目），取不到就当没有 PM。
+   - 现场：`/var/tmp/teamsmith-smoke-pm_skills-deb708fe.bAtfst/vcheck.log`
+2. **`team reload` 把标记写到了本项目之外。** 沙盒里 `$T/repo/.pi/team/state/` 是空的（`total 0`），但命令回显 `✓ 已请求重载`；也就是说 `mkdir -p "$TEAM_STATE_DIR"` 落到了外层 PM 的 state 目录。同一个毛病：状态目录来自继承的环境而不是当前项目。要么按 cwd/`--root` 解析，要么在 `TEAM_STATE_DIR` 不属于本项目时拒绝并说明。
+   - 现场：`/var/tmp/teamsmith-smoke-pm_skills-deb708fe.bAtfst/reload-req.log`
+
+修完自己用 `bash skills/teamsmith/tests/smoke.sh --select 11f </dev/null` 跑绿，再交。README 那条不用你管。
