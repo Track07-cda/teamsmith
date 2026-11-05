@@ -2130,3 +2130,11 @@ P383 内容已合（a71b3499），但门禁红在**夹具假红**：`key-replies
 
 烧法先试点（P408）：只做 `writing-discipline`(5)、`extension-slash`(6)、`help-surface`(6) 三份小规格，走 `openspec/changes/spec-clarity-burn-down/` 的 MODIFIED Requirements，不改行为语义、不走 skip_specs 空壳、不直接编辑 `openspec/specs/**`；验收是三份各自 `--strict` 归零、全局计数严格下降、`spec-refs` 仍 `undeclared 0`。试点跑通再按同一做法推剩余 17 份，节奏与是否值得继续由用户在试点结果上决定。
 
+### D228 · CLI 的用户可见文案用英文（2026-11-05）
+
+用户要求：`team` 命令行面向用户的输出一律英文。面板（关键回复页等 TUI）保持中英双语现状，界面文案的中文措辞另行修正（P416 已按此拆分）。
+
+分期理由（实测规模）：`scripts/lib/*.sh` 与 `scripts/team` 里带中文的用户可见输出行约 1543 处，测试里带中文的行 22160 条（其中相当一部分是断言旧文案）。一次性全量翻译会产生一个数千行的纯文案 diff，把真实改动埋掉，也与「不做架构级翻动」的既有约束冲突。
+
+规则：**新写的 CLI 输出用英文**；旧的按「改到哪条命令就翻译哪条」推进，不在同一次提交里混合语言新写。优先迁移用户每天读的面：doctor、up/resume、dispatch/say/notify 的回执、version、config list、task/board 状态、review 判定。面板文案不在本规则内。
+
