@@ -1343,6 +1343,15 @@ function replyRowLabel(e: ReplyEntry): string {
   return e.available ? `#${e.no} ${e.title}` : ''
 }
 
+/** Reader's local clock, `MM-DD HH:MM`: when a reply was published, in the list itself. */
+function replyTimeLabel(at: string | undefined): string {
+  if (!at) return ''
+  const when = new Date(at)
+  if (Number.isNaN(when.getTime())) return ''
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  return `${pad(when.getMonth() + 1)}-${pad(when.getDate())} ${pad(when.getHours())}:${pad(when.getMinutes())}`
+}
+
 /** The nav row of page 5: Older / Newer / `r` (the same actions `←`/`→` and `r` fire). */
 function replyNavLine(ctx: Ctx, innerW: number): PlacedLine {
   const { s } = ctx
@@ -1419,6 +1428,7 @@ function replyListBlock(ctx: Ctx): Block | null {
           seg(head, 'accent'),
           seg(replyRowLabel(e), active ? 'selected' : 'text'),
           seg(` · ${e.from}`, 'dim'),
+          ...(replyTimeLabel(e.at) ? [seg(` · ${replyTimeLabel(e.at)}`, 'dim')] : []),
         )
       : ln(
           seg(head, 'accent'),

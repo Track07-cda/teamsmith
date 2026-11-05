@@ -54,11 +54,10 @@ const CMD_ELLIPSIS = '…'
  *   ③ **原地等是有界例外**：预算（约 2 分钟）+ 结果卡住下一步 + 没有别的任务可推进，三条**同时**成立。
  * 任何面都不得再出现「回合结束前必须收割」的措辞，也不得把叫醒写成惩罚/损失。
  */
-const INLINE_WAIT_BUDGET = '~2 minutes'
 const SUSPEND_DEFAULT =
   'End your turn after starting; the completion wake-up (several completions merge into one message) is the normal harvest point.'
-const INLINE_WAIT_EXCEPTION =
-  `Wait inline only in the bounded exception: all three must hold -- the job should finish within the inline-wait budget (${INLINE_WAIT_BUDGET}), its result blocks your immediate next step, and no other task work can advance meanwhile.`
+const NO_INLINE_WAIT =
+  'Prefer ending the turn over waiting inside it: `sleep`, `team wait` and a blocking harvest keep the user from typing. Guidance, not a restriction.'
 
 /**
  * 定位**本会话自己的根**：team-bg 的产物（作业日志、账本、合并窗口）都是会话本地的，
@@ -274,12 +273,12 @@ export default function (pi: ExtensionAPI) {
     description:
       'Start a long command (a gate, a build) as a detached background job and return immediately with a job id. ' +
       `Output goes to state/bg/<id>.log (bounded). ${SUSPEND_DEFAULT} Then run team_bg_wait <id> there to harvest it. ` +
-      INLINE_WAIT_EXCEPTION,
+      NO_INLINE_WAIT,
     promptSnippet:
       'team_bg_run: start a long command in the background and end your turn ' +
       '(returns a job id immediately; the completion wake-up is the normal harvest point)',
     promptGuidelines: [
-      `Use team_bg_run for long gates or builds. ${SUSPEND_DEFAULT} ${INLINE_WAIT_EXCEPTION}`,
+      `Use team_bg_run for long gates or builds. ${SUSPEND_DEFAULT} ${NO_INLINE_WAIT}`,
     ],
     parameters: {
       type: 'object',
@@ -331,7 +330,7 @@ export default function (pi: ExtensionAPI) {
         trimTimer = setInterval(() => { for (const j of jobs.values()) if (!j.done) trimLog(j.log) }, TRIM_EVERY_MS)
       }
       return {
-        content: [{ type: 'text', text: `job ${id} started (pid ${job.pid}); log: ${log}\n  cmd: ${displayCmd(command)}\n${SUSPEND_DEFAULT} Harvest job ${id} with team_bg_wait when that wake-up arrives (the result comes back inline). ${INLINE_WAIT_EXCEPTION}` }],
+        content: [{ type: 'text', text: `job ${id} started (pid ${job.pid}); log: ${log}\n  cmd: ${displayCmd(command)}\n${SUSPEND_DEFAULT} Harvest job ${id} with team_bg_wait when that wake-up arrives (the result comes back inline). ${NO_INLINE_WAIT}` }],
         details: { id, pid: job.pid, log, cwd, cmd: command },
       }
     },
@@ -342,9 +341,9 @@ export default function (pi: ExtensionAPI) {
     label: 'Team background job wait',
     description:
       'Wait for a job started by team_bg_run, harvest it and return its exit code plus the log tail inline. ' +
-      `${SUSPEND_DEFAULT} ${INLINE_WAIT_EXCEPTION}`,
+      `${SUSPEND_DEFAULT} ${NO_INLINE_WAIT}`,
     promptSnippet:
-      'team_bg_wait: harvest a team_bg_run job (waits if it is still running; the completion wake-up is the normal harvest point)',
+      'team_bg_wait: harvest a finished team_bg_run job (after its completion wake-up; never as a poll)',
     parameters: {
       type: 'object',
       properties: {
