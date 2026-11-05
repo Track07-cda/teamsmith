@@ -3456,7 +3456,7 @@ env TEAM_AGENT_CMD="$P237_TPL_BG" TEAM_AGENT_BIN=bash $TEAM dispatch dev T1.1 "$
   || bad "A template without the lane placeholder：带 {bg_ext} 的模板派单 --print 失败（见 $TMP/p237-lane.log）"
 assert_has "$TMP/p237-lane.log" "team_bg_run" "A template without the lane placeholder：带 {bg_ext} → 车道段出现"
 # 2026-11-05：内联等待被取消（PM 不在自己会话里等，用户输入不能被挡住）。车道段现在明说不要等。
-assert_has "$TMP/p237-lane.log" "Prefer ending the turn over waiting" "车道段引导「先结束回合而不是内联等」"
+assert_has "$TMP/p237-lane.log" "Do not wait inside the turn" "车道段明说不要在回合内等"
 assert_not "$TMP/p237-lane.log" "inline-wait budget" "车道段不再留旧的内联等待预算"
 
 # ---------------------------------------------------------------- 6b. 容量守卫矩阵（D2：zram 不当额度）
@@ -8695,7 +8695,7 @@ assert_has "$TMP/print.log" "end your turn" "The built-in Pi prompt carries the 
 assert_has "$TMP/print.log" "$P237_LANE" "The built-in Pi prompt carries the three states：完成叫醒是正常收割点"
 # 2026-11-05：内联等待取消，三份装运面统一改成「不要在回合内等」。
 assert_not "$TMP/print.log" "$P237_BUDGET" "内置 Pi 提示词里不再有内联等待预算"
-assert_has "$TMP/print.log" "Prefer ending the turn over waiting" "内置 Pi 提示词引导「先结束回合而不是内联等」"
+assert_has "$TMP/print.log" "Do not wait inside the turn" "内置 Pi 提示词明说不要在回合内等"
 # 阻塞那条的示例必须点名通知 PM，不能是席位自己（否则按它照做的工人会通知自己、PM 静默收不到）
 assert_has "$TMP/print.log" 'notify pm "<one line>"' "The built-in Pi prompt carries the three states：hard-blocked 示例点名通知 PM"
 
