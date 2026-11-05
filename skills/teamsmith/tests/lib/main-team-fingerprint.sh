@@ -59,7 +59,7 @@ main_team_volatile() { # <relative path, starting with ./ >
         inbox-*|pm-*|pm.*|dispatch-*|draft-*|held) return 0 ;;
         notify*|nudge*|watchdog*|capacity*|digest-*|deaths.*|bg.log|panel*) return 0 ;;
         changes.json|refs|pane|_watch.*|reload-requested|interrupt.*|update-check.*|config.*) return 0 ;;
-        summary-*|prompt-*|pm-loaded.*|pm-launch*) return 0 ;;
+        summary-*|prompt-*|pm-launch*) return 0 ;;
       esac
       return 1 ;;
   esac

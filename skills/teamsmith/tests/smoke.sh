@@ -70,6 +70,19 @@ smoke_assignment() { # <repo> <seat> <task> [category] [branch] [model] [sid] [s
     > "$repo/.pi/team/state/$seat.env"
 }
 
+# P417：会话新旧靠推导（PM 进程启动时刻 vs skill 文件最近 mtime），不再有版本记录。
+# 夹具需要一份**可以随便改 mtime 的 skill 副本**：门禁运行期间真树不许写（运行指纹口径），
+# 所以副本只带跑 version --check / doctor 真正要用的那几处，并把所有 mtime 钉在 2020 年。
+smoke_skill_copy() { # <dir> → 一份 mtime 全钉在 2020 年的 skill 副本
+  local d="$1"
+  rm -rf "$d"; mkdir -p "$d/scripts"
+  cp -a "$SKILL_DIR/SKILL.md" "$SKILL_DIR/CHANGELOG.md" "$d/"
+  cp -a "$SKILL_DIR/scripts/team" "$SKILL_DIR/scripts/lib" "$SKILL_DIR/scripts/strings" "$SKILL_DIR/scripts/shim" "$d/scripts/"
+  cp -a "$SKILL_DIR"/scripts/*.mjs "$d/scripts/"
+  cp -a "$SKILL_DIR/extension" "$SKILL_DIR/references" "$d/"
+  find "$d" -exec touch -d '2020-01-01T00:00:00Z' {} +
+}
+
 # ── 身份隔离（必须最先做）：绝不继承调用者的团队身份 ────────────────────────────
 # 事故背景（v1.11.3 实测）：smoke 从 worker 的 Pi 会话里被调用时继承了 TEAM_ROOT，
 # 于是 `team` 读到的是**真实项目**的配置（session/agents/gates 全是真实的），
@@ -3220,11 +3233,6 @@ assert_has "$TMP/merge-gone.log" "board set" "提示 BOARD 收尾前提"
 if $TEAM pr T1.1 >/dev/null 2>&1; then bad "pr 应该已移除"; else ok "pr 命令已移除"; fi
 if $TEAM gh pr list >"$TMP/gh-gone.log" 2>&1; then bad "team gh 应该已移除"; else ok "team gh 透传已移除"; fi
 
-# 会话版本落后时，已移除的命令要顺带提示 /reload
-$TEAM mark-loaded --version 1.0.0 >/dev/null 2>&1
-$TEAM merge T1.1 >"$TMP/merge-gone-old.log" 2>&1 || true
-assert_has "$TMP/merge-gone-old.log" "/reload" "版本落后时提示 /reload"
-$TEAM mark-loaded >/dev/null 2>&1
 assert_has "$SKILL_DIR/references/workflows.md" "git -C" "文档里给出 PM 直接跑的 git 步骤"
 
 $TEAM dispatch dev T1.1 docs/team/tasks/T1.1-smoke-task.md --print >/dev/null 2>&1 || true
@@ -7247,7 +7255,7 @@ else ok "2.4 没有过期会议时 close --stale 非 0"; fi
 unset TEAM_MEETINGS_DIR
 
 # ---------------------------------------------------------------- 11f. 更新分发与版本自检
-section "11f · 更新与版本自检（mark-loaded / version --check / changelog）"
+section "11f · 更新与版本自检（version --check / changelog）"
 assert_file "$SKILL_DIR/CHANGELOG.md" "skill 带 CHANGELOG"
 CODE_V="$(grep -m1 '^TEAM_VERSION=' "$SKILL_DIR/scripts/lib/common.sh" | cut -d'"' -f2)"
 DOC_V="$(sed -n 's/^[[:space:]]*version:[[:space:]]*"\([0-9.]*\)".*/\1/p' "$SKILL_DIR/SKILL.md" | head -1)"
@@ -7284,22 +7292,34 @@ fi
 unset _p35 README_MD README_PINS README_PIN_BAD
 assert_not_file "$SKILL_INIT_DIR/CHANGELOG.md" "init skill 没有 CHANGELOG（变更史只有一份）"
 
-$TEAM mark-loaded >"$TMP/mark.log" 2>&1 && ok "mark-loaded 退出码 0" || bad "mark-loaded 失败"
-assert_has "$TMP/mark.log" "$CODE_V" "mark-loaded 记录了当前版本"
-assert_file "$REPO/.pi/team/state/pm-loaded.env" "版本记录写进 state"
-assert_has "$REPO/.pi/team/state/pm-loaded.env" "HASH=" "记录里含内容指纹"
-
-$TEAM version --check >"$TMP/vcheck.log" 2>&1 && ok "version --check 退出码 0" || bad "version --check 失败"
-assert_has "$TMP/vcheck.log" "一致" "本会话与磁盘一致时给出「一致」"
+# P417：会话新旧不再是一份由人记得写的记录，而是推导 ——
+#   PM 进程启动时刻（/proc/<pid>/stat 的 starttime） vs skill 文件的最近 mtime。
+# 夹具：一份 skill 副本（真树在门禁期间不写；mtime 全钉在 2020）+ 一个真活进程当 PM（本段自己）。
+P417_SK="$TMP/p417-skill"; smoke_skill_copy "$P417_SK"
+P417_TEAM="bash $P417_SK/scripts/team"
+P417_ST="$REPO/.pi/team/state"; mkdir -p "$P417_ST"   # state 目录是按需创建的，夹具自己先备好
+P417_PID_BAK="$TMP/p417-pm.pid.bak"; : > "$P417_PID_BAK"
+[ -f "$P417_ST/pm.pid" ] && cp "$P417_ST/pm.pid" "$P417_PID_BAK"
+# ① 没有 PM 在跑 → 只说磁盘版本，不谈会话
+rm -f "$P417_ST/pm.pid"
+( cd "$REPO" && $P417_TEAM version --check ) >"$TMP/vcheck.log" 2>&1 && ok "version --check 退出码 0" || bad "version --check 失败"
+assert_has "$TMP/vcheck.log" "一致" "没有 PM 时 version --check 说「一致」（磁盘版本）"
+assert_has "$TMP/vcheck.log" "没有 PM 在跑" "没有 PM 时明说不判断会话"
 assert_has "$TMP/vcheck.log" "CHANGELOG" "打印了 CHANGELOG 版本"
-
-# 模拟“本会话是旧的”：提示要给出 /reload 与三条生效路径
-$TEAM mark-loaded --version 1.7.0 >/dev/null 2>&1
-$TEAM version --check >"$TMP/vcheck-old.log" 2>&1 || true
-assert_has "$TMP/vcheck-old.log" "本会话是旧的" "旧版本会话被识别"
-assert_has "$TMP/vcheck-old.log" "/reload" "提示了 /reload 生效方式"
-assert_has "$TMP/vcheck-old.log" "scripts/**" "说明了 scripts 不需要刷新"
-$TEAM mark-loaded >/dev/null 2>&1
+# ② 磁盘比这台 PM 新 → 提示并给出那个改动时刻（不是「本会话加载 X」）
+printf '%s\n' "$$" > "$P417_ST/pm.pid"
+touch "$P417_SK/SKILL.md"
+( cd "$REPO" && $P417_TEAM version --check ) >"$TMP/vcheck-stale.log" 2>&1 || true
+assert_has "$TMP/vcheck-stale.log" "磁盘上的 skill 在这台 PM 启动之后有改动" "磁盘比 PM 新时给出提示"
+assert_has "$TMP/vcheck-stale.log" "起）" "提示里给出那个改动时刻"
+assert_has "$TMP/vcheck-stale.log" "/reload" "提示了 /reload 生效方式"
+assert_has "$TMP/vcheck-stale.log" "scripts/**" "说明了 scripts 不需要刷新"
+# ③ 把 mtime 改回旧时间 → 静默
+touch -d '2020-01-01T00:00:00Z' "$P417_SK/SKILL.md"
+( cd "$REPO" && $P417_TEAM version --check ) >"$TMP/vcheck-fresh.log" 2>&1 || true
+assert_has "$TMP/vcheck-fresh.log" "没有改动" "改回旧 mtime 后静默（说「没有改动」）"
+assert_not "$TMP/vcheck-fresh.log" "有改动（" "改回旧 mtime 后不再提示"
+if [ -s "$P417_PID_BAK" ]; then cp "$P417_PID_BAK" "$P417_ST/pm.pid"; else rm -f "$P417_ST/pm.pid"; fi
 
 $TEAM changelog >"$TMP/changelog.log" 2>&1 && assert_has "$TMP/changelog.log" "$CODE_V" "changelog 打印当前版本" || bad "changelog 失败"
 $TEAM reload >"$TMP/reload-req.log" 2>&1 && assert_file "$REPO/.pi/team/state/reload-requested" "reload 写了请求标记" || bad "reload 失败"
@@ -7419,13 +7439,17 @@ assert_has "$TMP/f6-digest.log" "忽略的非任务报告：P2-closure.md" "F6�
 
 # F21：只读的版本自检不能因为 SIGPIPE 以 141 收尾。旧实现用 `sed … | head -14 | sed …` 打 CHANGELOG
 # 摘要，head 一退出就把上游 sed 打成 141，pipefail 把它传给了调用方（`version --check && …` 把「你是旧的」当崩溃）。
-$TEAM mark-loaded --version 0.0.1 >/dev/null 2>&1
-$TEAM version --check >"$TMP/f21-stale.log" 2>&1; F21_RC=$?
-assert_eq "F21：旧会话的 version --check 退出码 0（不是 141/SIGPIPE）" "$F21_RC" "0"
-assert_has "$TMP/f21-stale.log" "本会话是旧的" "F21：仍然打印「本会话是旧的」"
-assert_has "$TMP/f21-stale.log" "最新变更" "F21：旧会话仍然打印 CHANGELOG 摘要（没被半路打断）"
-$TEAM mark-loaded >/dev/null 2>&1
-$TEAM version --check >"$TMP/f21-fresh.log" 2>&1; F21_RC2=$?
+P417_SK="$TMP/f21-skill"; smoke_skill_copy "$P417_SK"
+P417_ST="$REPO/.pi/team/state"; mkdir -p "$P417_ST"
+P417_PID_BAK="$TMP/f21-pm.pid.bak"; : > "$P417_PID_BAK"
+[ -f "$P417_ST/pm.pid" ] && cp "$P417_ST/pm.pid" "$P417_PID_BAK"
+printf '%s\n' "$$" > "$P417_ST/pm.pid"; touch "$P417_SK/SKILL.md"
+( cd "$REPO" && bash "$P417_SK/scripts/team" version --check ) >"$TMP/f21-stale.log" 2>&1; F21_RC=$?
+assert_eq "F21：磁盘比会话新的 version --check 退出码 0（不是 141/SIGPIPE）" "$F21_RC" "0"
+assert_has "$TMP/f21-stale.log" "磁盘上的 skill 在这台 PM 启动之后有改动" "F21：走的仍然是「磁盘比 PM 新」这条"
+assert_has "$TMP/f21-stale.log" "最新变更" "F21：仍然打印 CHANGELOG 摘要（没被半路打断）"
+if [ -s "$P417_PID_BAK" ]; then cp "$P417_PID_BAK" "$P417_ST/pm.pid"; else rm -f "$P417_ST/pm.pid"; fi
+( cd "$REPO" && $TEAM version --check ) >"$TMP/f21-fresh.log" 2>&1; F21_RC2=$?
 assert_eq "F21：一致时退出码 0" "$F21_RC2" "0"
 
 # F23：team reload 不能承诺一个不存在的 watchdog 行为。marker 的唯一消费者是 notify 扩展
@@ -10926,21 +10950,37 @@ rm -f "$M71R/AGENTS.md"
 cmp -s "$TMP/m71-block.md" "$M71R/AGENTS.md" \
   && ok "文件缺失：建出来的就是那一块渲染段" || bad "文件缺失：建出来的不是渲染段"
 
-# ③ 第二条判据：本会话加载的版本比磁盘旧 → 指引出现；mark-loaded 之后消失
+# ③ P417：会话新旧改成推导 —— PM 进程启动时刻 vs skill 文件最近 mtime；没有记录可读，也没有记录要维护。
+#     夹具：一份 skill 副本（真树在门禁期间不写；mtime 全钉在 2020）+ 一个真活进程当 PM（本段自己）。
 mkdir -p "$M71/.pi/team/state"
-printf 'VERSION=0.0.1\nHASH=stale\n' > "$M71/.pi/team/state/pm-loaded.env"
-( cd "$M71" && $TEAM doctor ) >"$TMP/m71-doctor-stale.log" 2>&1
-assert_has "$TMP/m71-doctor-stale.log" "references/migration.md" "旧会话版本 → doctor 指向迁移指南"
-assert_has "$TMP/m71-doctor-stale.log" "本会话加载 0.0.1" "指引说明的是版本这一条判据"
-( cd "$M71" && $TEAM mark-loaded ) >/dev/null 2>&1
-( cd "$M71" && $TEAM doctor ) >"$TMP/m71-doctor-current.log" 2>&1
-assert_not "$TMP/m71-doctor-current.log" "references/migration.md" "版本一致后指引消失"
+P417_SK="$TMP/m71-skill"; smoke_skill_copy "$P417_SK"
+P417_TEAM="bash $P417_SK/scripts/team"
+# ③a 没有 PM 在跑 → 不讲会话（doctor 不打新鲜度那一行）
+rm -f "$M71/.pi/team/state/pm.pid"
+( cd "$M71" && $P417_TEAM doctor ) >"$TMP/m71-doctor-nopm.log" 2>&1
+assert_not "$TMP/m71-doctor-nopm.log" "skill 新鲜度" "没有 PM 在跑时 doctor 不说会话的事"
+# ③b 磁盘比 PM 新 → 提示出现，并给出那个时刻
+printf '%s\n' "$$" > "$M71/.pi/team/state/pm.pid"
+touch "$P417_SK/SKILL.md"
+( cd "$M71" && $P417_TEAM doctor ) >"$TMP/m71-doctor-stale.log" 2>&1
+assert_has "$TMP/m71-doctor-stale.log" "skill 新鲜度" "磁盘比 PM 新时 doctor 多打一行"
+assert_has "$TMP/m71-doctor-stale.log" "在这台 PM 启动之后有改动" "说的是「磁盘比进程新」，不是「本会话加载 X」"
+assert_has "$TMP/m71-doctor-stale.log" "起）" "提示里给出那个改动时刻"
+assert_not "$TMP/m71-doctor-stale.log" "本会话加载" "不再有「本会话加载 X」这个说法"
+# ③c mtime 改回旧时间 → 静默
+touch -d '2020-01-01T00:00:00Z' "$P417_SK/SKILL.md"
+( cd "$M71" && $P417_TEAM doctor ) >"$TMP/m71-doctor-current.log" 2>&1
+assert_not "$TMP/m71-doctor-current.log" "skill 新鲜度" "改回旧 mtime 后 doctor 静默"
+rm -f "$M71/.pi/team/state/pm.pid"
 
-# ④ 两条判据同时成立也只打一行（不重复刷屏）
+# ④ 两条判据同时成立：各说各的一句（迁移指引一行、skill 新鲜度一行），互不吞并
 sed -i 's|<!-- teamsmith:begin -->|<!-- pi-team:begin -->|; s|<!-- teamsmith:end -->|<!-- pi-team:end -->|' "$M71/AGENTS.md"
-printf 'VERSION=0.0.1\nHASH=stale\n' > "$M71/.pi/team/state/pm-loaded.env"
-( cd "$M71" && $TEAM doctor ) >"$TMP/m71-doctor-both.log" 2>&1
-assert_eq "两条判据同时成立仍然只打一行" "$(grep -c 'references/migration.md' "$TMP/m71-doctor-both.log")" "1"
+printf '%s\n' "$$" > "$M71/.pi/team/state/pm.pid"
+touch "$P417_SK/SKILL.md"
+( cd "$M71" && $P417_TEAM doctor ) >"$TMP/m71-doctor-both.log" 2>&1
+assert_eq "迁移指引仍然只打一行（两件事分开说，不重复刷屏）" "$(grep -c 'references/migration.md' "$TMP/m71-doctor-both.log")" "1"
+assert_has "$TMP/m71-doctor-both.log" "skill 新鲜度" "另一条判据也在（两条判据各一行）"
+rm -f "$M71/.pi/team/state/pm.pid"
 
 # ⑤ 指南本身：八节都在、关键命令/开关在、篇幅不是占位符
 for m71sec in "What is stable" "The rename" "Removed commands" "New required dependencies" \

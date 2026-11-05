@@ -469,21 +469,20 @@ cmd.gl.example	team gl
 cmd.gl.read	不读任何东西
 cmd.gl.write	不写任何东西
 cmd.gl.see	`team gh`、`team pr`
-cmd.mark-loaded.title	记下这个会话加载的是哪个版本
-cmd.mark-loaded.what	把本会话使用的 skill 版本写下来，工具据此区分"会话是旧的"还是"会话是新的"。
-cmd.mark-loaded.when	会话开头跑一次，重载之后再跑一次。
-cmd.mark-loaded.example	team mark-loaded --version 0.2.0
-cmd.mark-loaded.read	装在机器上的 skill
-cmd.mark-loaded.write	已加载版本的记录
-cmd.mark-loaded.see	`team version`、`team reload`
-cmd.mark-loaded.arg.--version	记这个版本，而不是磁盘上找到的那个。
+cmd.mark-loaded.title	已移除的版本记录
+cmd.mark-loaded.what	这个命令以前把「本会话加载的是哪个 skill 版本」写进 state。那份记录只有人手动写，没人写就停在上一版，它报出来的旧会话多数是误报。现在它被拒绝，同一个问题由工具已有的事实回答。
+cmd.mark-loaded.when	只在想看替代做法时跑：PM 进程启动时刻与 skill 文件最近改动时刻的比较。
+cmd.mark-loaded.example	team mark-loaded
+cmd.mark-loaded.read	不读任何东西
+cmd.mark-loaded.write	不写任何东西
+cmd.mark-loaded.see	`team version --check`、`team doctor`
 cmd.version.title	磁盘上、skill 里和本会话各是什么版本
 cmd.version.what	打印装在机器上的 skill 版本、skill 文件里写的版本、变更史的开头，以及本会话加载的版本。带 check 参数时它给结论，而不是列清单。
 cmd.version.when	某个命令的行为跟本会话 skill 描述的不一样时用它，长会话开头也用它。
 cmd.version.example	team version --check
 cmd.version.read	装在机器上的 skill、变更史与会话记录
 cmd.version.write	不写任何东西
-cmd.version.see	`team changelog`、`team reload`、`team mark-loaded`
+cmd.version.see	`team changelog`、`team reload`
 cmd.version.arg.--check	只回答"本会话的 skill 是不是最新的"，而不是把每个版本都打出来。
 cmd.changelog.title	skill 改了什么
 cmd.changelog.what	打印 skill 的变更史，最新的在前；可以只看某个版本之后的部分。
@@ -499,5 +498,5 @@ cmd.reload.when	skill 升级之后、想让当前会话看到新文件时用它�
 cmd.reload.example	team reload
 cmd.reload.read	重载请求的记录
 cmd.reload.write	重载请求的记录
-cmd.reload.see	`team version`、`team mark-loaded`
+cmd.reload.see	`team version`
 cmd.reload.arg.--done	重载真的发生之后，把这个请求标记成已处理。

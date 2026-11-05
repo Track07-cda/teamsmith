@@ -483,21 +483,20 @@ cmd.gl.example	team gl
 cmd.gl.read	nothing
 cmd.gl.write	nothing
 cmd.gl.see	`team gh`, `team pr`
-cmd.mark-loaded.title	record which skill version this session loaded
-cmd.mark-loaded.what	Writes down the skill version this session is working with, so the tool can tell a stale session from a fresh one.
-cmd.mark-loaded.when	Use it once at the start of a session, and after a reload.
-cmd.mark-loaded.example	team mark-loaded --version 0.2.0
-cmd.mark-loaded.read	the installed skill
-cmd.mark-loaded.write	the loaded-version record
-cmd.mark-loaded.see	`team version`, `team reload`
-cmd.mark-loaded.arg.--version	record this version instead of the one found on disk.
+cmd.mark-loaded.title	the removed version record
+cmd.mark-loaded.what	This name used to write down which skill version the session had loaded. The record was only ever written by hand, so it went stale, and the staleness it reported was usually wrong. It is now refused, and the same question is answered from facts the tool already has.
+cmd.mark-loaded.when	Run it only to read the replacement: the PM process start time compared with the newest skill file mtime.
+cmd.mark-loaded.example	team mark-loaded
+cmd.mark-loaded.read	nothing
+cmd.mark-loaded.write	nothing
+cmd.mark-loaded.see	`team version --check`, `team doctor`
 cmd.version.title	which version is on disk, in the skill and in this session
 cmd.version.what	Prints the version of the installed skill, the version written in the skill file, the changelog's head and the version this session loaded. With the check argument it gives a verdict instead of a list.
 cmd.version.when	Use it when a command behaves differently from what this session's skill describes, or at the start of a long session.
 cmd.version.example	team version --check
 cmd.version.read	the installed skill, the changelog and the session record
 cmd.version.write	nothing
-cmd.version.see	`team changelog`, `team reload`, `team mark-loaded`
+cmd.version.see	`team changelog`, `team reload`
 cmd.version.arg.--check	answer whether this session's skill is current instead of printing every version.
 cmd.changelog.title	what changed in the skill
 cmd.changelog.what	Prints the skill's change history, newest first, optionally only what came after a given version.
@@ -513,5 +512,5 @@ cmd.reload.when	Use it after the skill was upgraded, when you want the current s
 cmd.reload.example	team reload
 cmd.reload.read	the reload request record
 cmd.reload.write	the reload request record
-cmd.reload.see	`team version`, `team mark-loaded`
+cmd.reload.see	`team version`
 cmd.reload.arg.--done	mark the request as handled, after the reload really happened.

@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# teamsmith · 更新与版本自检：mark-loaded / version [--check] / changelog
+# teamsmith · 更新与版本自检：version [--check] / changelog
 #
 # 三种更新粒度（实测自 Pi 的 reload 实现）：
 #   普通 scripts/**       每次调用现读盘 → 零操作；reply-capture/replies 是扩展的已加载依赖，须 reload
 #   SKILL.md / references / templates       → /reload（或 team reload）刷新描述与清单；正文本来就每次读盘
 #   已有 extension/*.ts   重新 import → /reload；PM 原启动未注入 reply 入口时须获权重启
 #
-# 本模块提供：把"本会话启动时的版本"记下来，之后任何时刻都能判断"我是不是旧的"。
+# 本模块提供：判断「磁盘上的 skill 是不是在这台 PM 启动之后改过」——由进程启动时刻与文件 mtime 推导，
+# 不维护任何版本记录（P417：记录没人写，就永远过期）。
 
 team_skill_file() { printf '%s/SKILL.md\n' "$TEAM_SKILL_DIR"; }
 team_skill_changelog() { printf '%s/CHANGELOG.md\n' "$TEAM_SKILL_DIR"; }
@@ -40,33 +41,6 @@ team_skill_hash() { # SKILL.md + 扩展入口/实际捕获依赖指纹（不代�
   } 2>/dev/null | { sha256sum 2>/dev/null || shasum -a 256 2>/dev/null || cat; } | cut -c1-12
 }
 
-team_loaded_env() { printf '%s/pm-loaded.env\n' "$TEAM_STATE_DIR"; }
-
-team_loaded_fields() { # <ver> → 记录里记录时间之前的字段（保持文件原来的字段顺序）
-  printf 'VERSION=%s\n' "$1"
-  printf 'DOC_VERSION=%s\n' "$(team_skill_doc_version)"
-  printf 'HASH=%s\n' "$(team_skill_hash)"
-  printf 'SKILL_DIR=%s\n' "$TEAM_SKILL_DIR"
-  printf 'INSTALL=%s\n' "$(team_skill_install_kind)"
-  return 0
-}
-
-team_loaded_core() { # <ver> <sid> → 记录里除记录时间之外的全部内容（P290：判断"要不要重写"的口径）
-  team_loaded_fields "$1"
-  if [ -n "$2" ]; then printf 'SESSION_ID=%s\n' "$2"; fi
-  return 0
-}
-
-team_loaded_version() { # 本会话启动时记录的版本（未记录则空）
-  local f; f="$(team_loaded_env)"
-  [ -f "$f" ] && grep -s '^VERSION=' "$f" | head -1 | cut -d= -f2- || true
-}
-
-team_loaded_hash() {
-  local f; f="$(team_loaded_env)"
-  [ -f "$f" ] && grep -s '^HASH=' "$f" | head -1 | cut -d= -f2- || true
-}
-
 team_skill_install_kind() { # git | copy
   if team_have_cmd git && git -C "$TEAM_SKILL_DIR" rev-parse --show-toplevel >/dev/null 2>&1; then
     printf 'git\n'
@@ -75,62 +49,65 @@ team_skill_install_kind() { # git | copy
   fi
 }
 
-team_cmd_mark_loaded() { # [--version X] [--session-id S]
-  local ver="" sid="${TEAM_PI_SESSION_ID:-}"
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --version) ver="${2:?}"; shift 2 ;;
-      --session-id) sid="${2:?}"; shift 2 ;;
-      -*) team_usage_die "mark-loaded: 未知参数 $1" ;;
-      *) team_usage_die "mark-loaded: 多余参数 $1" ;;
-    esac
+# ---------------------------------------------------------------- 会话新旧：推导，不记录（P417）
+# 这里以前有一份 `state/pm-loaded.env`（`team mark-loaded` 写的版本记录）。PM 提示词里没有这一步、
+# 也没人检查，它于是永远停在上一版，doctor 从「提示旧会话」退化成「永久误报」。它能回答的那件事
+# 可以由**已有事实**推导，所以这份会烂的副本删掉了：
+#   PM 进程启动时刻（/proc/<pid>/stat 的 starttime，复用 team_orphan_start_epoch）
+#   vs skill 文件的最近 mtime（SKILL.md + extension/* + scripts/* 的顶层文件）
+# 磁盘比进程新 → 这台 PM 起的还是旧的 skill；否则静默（doctor 不该多刷一行）。
+# 没有 PM 在跑 → 只说磁盘版本，不谈会话。
+team_skill_mtime() { # → `<epoch> <file>`（最近改动的那个）；一个都读不到 → 非 0
+  local f m newest=0 newest_f=""
+  for f in "$TEAM_SKILL_DIR/SKILL.md" "$TEAM_SKILL_DIR"/extension/* "$TEAM_SKILL_DIR"/scripts/*; do
+    [ -f "$f" ] || continue
+    m="$(stat -c %Y "$f" 2>/dev/null || true)"   # 留：平台没有 stat -c 时按「读不到」处理
+    case "$m" in ''|*[!0-9]*) continue ;; esac
+    if [ "$m" -gt "$newest" ]; then newest="$m"; newest_f="$f"; fi
   done
-  team_require_docs
-  [ -n "$ver" ] || ver="$TEAM_VERSION"
-  mkdir -p "$TEAM_STATE_DIR"
-  local f core hash stored_core="" stored_at=""
-  f="$(team_loaded_env)"
-  hash="$(team_skill_hash)"
-  core="$(team_loaded_core "$ver" "$sid")"
-  if [ -f "$f" ]; then
-    stored_core="$(grep -v '^AT=' "$f" 2>/dev/null || true)"
-    # V46 F1：裸赋值接一个「没命中就返回 1」的 grep，在 set -e 下会把整个 CLI 带走——记录在、
-    # 但没有 AT= 行时 rc=1、一字不写（既有的 smoke §17 用的就是这个形状）。语义上「没有可保留的
-    # 时间」等于「没有记录」：走写盘分支把记录补全，不是错误。写法与上一行对称。
-    stored_at="$(grep -s -m1 '^AT=' "$f" 2>/dev/null || true)"
-  fi
-  # P290：记录时间（AT）是这份记录自己的元数据，不是"该不该重写"的理由。版本号、skill 指纹、
-  # 安装方式、会话 id 都没变时**不重写**——否则每次调用都盖一个新时间，"再跑一次不会有任何变化"
-  # 这句话（mark-loaded 声明的 idempotent）就只在同一秒里碰巧成立：夹具在宿主上绿、在慢一档的容器里红。
-  if [ -n "$stored_at" ] && [ "$stored_core" = "$core" ]; then
-    team_ok "本会话 skill 版本未变化：$ver（指纹 $hash；保留 $(basename "$f") 里记录的时间）"
-    return 0
-  fi
-  {
-    team_loaded_fields "$ver"
-    printf 'AT=%s\n' "$(team_timestamp)"
-    [ -n "$sid" ] && printf 'SESSION_ID=%s\n' "$sid"
-  } > "$f"
-  team_ok "已记录本会话 skill 版本：$ver（指纹 $hash）"
-  team_dim "  之后 team version --check / digest 就能判断是不是该刷新"
+  [ "$newest" -gt 0 ] || return 1
+  printf '%s %s\n' "$newest" "$newest_f"
 }
 
-team_update_notice() { # 给 digest/doctor/watch 用的一行（无更新则空）
-  local loaded disk loaded_hash disk_hash doc_ver
+team_skill_mtime_when() { # <epoch> → UTC 时间（本机读不出来就原样给数字）
+  date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf '%s' "$1"
+}
+
+# 判「PM 启动时刻」用的 pid：记录的就够（本工具起的 PM 都会记）；没有记录再看窗口里认得出的 PM 进程。
+team_pm_age_pid() {
+  local pid
+  pid="$(team_pm_recorded_pid 2>/dev/null || true)"
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then printf '%s\n' "$pid"; return 0; fi
+  pid="$(team_pm_pane_agent_pid "$(team_pm_target)" 2>/dev/null || true)"   # 留：没有 tmux / 没有窗口＝没有 PM
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then printf '%s\n' "$pid"; return 0; fi
+  return 1
+}
+
+team_skill_stale_line() { # [<pm pid>] → 一行说明（磁盘比 PM 新）；否则空
+  local pid="${1:-}" start spec
+  [ -n "$pid" ] || pid="$(team_pm_age_pid)" || return 0
+  start="$(team_orphan_start_epoch "$pid" 2>/dev/null || true)"
+  [ -n "$start" ] || return 0
+  spec="$(team_skill_mtime 2>/dev/null || true)"
+  [ -n "$spec" ] || return 0
+  [ "${spec%% *}" -gt "$start" ] || return 0
+  printf '磁盘上的 skill 在这台 PM 启动之后有改动（%s 起）：/reload 或重启 PM 生效\n' \
+    "$(team_skill_mtime_when "${spec%% *}")"
+}
+
+team_update_notice() { # 给 digest/doctor/watch 用的一行（没有 PM 时也有一行：磁盘版本）
+  local disk line
   disk="$TEAM_VERSION"
-  doc_ver="$(team_skill_doc_version)"
-  loaded="$(team_loaded_version)"
-  loaded_hash="$(team_loaded_hash)"
-  disk_hash="$(team_skill_hash)"
-  [ -z "$loaded" ] && { printf 'skill %s ｜ 未记录本会话版本（跑 %s mark-loaded）\n' "$disk" "$TEAM_CLI"; return 0; }
-  if [ "$loaded" = "$disk" ] && [ "$loaded_hash" = "$disk_hash" ]; then
-    printf 'skill %s ｜ 与磁盘一致\n' "$disk"
+  line="$(team_skill_stale_line)"
+  if [ -n "$line" ]; then
+    printf 'skill %s ｜ %s\n' "$disk" "$line"
     return 0
   fi
-  local tail_note=""
-  [ "$doc_ver" != "$disk" ] && tail_note="（SKILL.md 里写的是 $doc_ver：文档/代码版本不一致，检查 CHANGELOG）"
-  printf 'skill %s → 磁盘 %s（本会话加载的是 %s）%s：跑 /reload 或 %s reload 生效\n' \
-    "$loaded" "$disk" "$loaded" "$tail_note" "$TEAM_CLI"
+  if team_pm_age_pid >/dev/null 2>&1; then
+    printf 'skill %s ｜ 与磁盘一致（这台 PM 启动之后没有改动）\n' "$disk"
+  else
+    printf 'skill %s ｜ 磁盘版本（没有 PM 在跑，不判断会话）\n' "$disk"
+  fi
 }
 
 team_cmd_reload() { # 让 PM 自助刷新 skill（写一个请求标记 + 告诉你在会话里怎么真的生效）
@@ -164,17 +141,17 @@ team_cmd_version_brief() { # [--check 由分发器接走]；未知旗标/多余�
 team_cmd_version_check() {
   team_require_docs
   team_hdr "teamsmith 版本自检 · $TEAM_PROJECT"
-  local loaded disk doc_ver hash loaded_hash kind changelog_ver
-  loaded="$(team_loaded_version)"; loaded_hash="$(team_loaded_hash)"
+  local disk doc_ver hash kind changelog_ver pid spec stale
   disk="$TEAM_VERSION"; doc_ver="$(team_skill_doc_version)"
   changelog_ver="$(team_skill_changelog_version)"; hash="$(team_skill_hash)"
-  kind="$(team_skill_install_kind)"
+  kind="$(team_skill_install_kind)"; spec="$(team_skill_mtime 2>/dev/null || true)"
+  pid="$(team_pm_age_pid 2>/dev/null || true)"; stale="$(team_skill_stale_line "$pid")"
 
   printf '  %-14s %s\n' "磁盘代码" "$disk"
   printf '  %-14s %s\n' "SKILL.md" "${doc_ver:-（未标注）}"
   printf '  %-14s %s\n' "CHANGELOG" "${changelog_ver:-（没有 CHANGELOG.md）}"
-  printf '  %-14s %s\n' "本会话加载" "${loaded:-（未记录：跑 $TEAM_CLI mark-loaded）}"
-  printf '  %-14s %s（当前 %s）\n' "指纹" "${loaded_hash:-—}" "$hash"
+  printf '  %-14s %s\n' "指纹" "$hash"
+  printf '  %-14s %s\n' "最近改动" "$([ -n "$spec" ] && printf '%s（%s）' "$(team_skill_mtime_when "${spec%% *}")" "$(basename "${spec#* }")" || echo '—')"
   printf '  %-14s %s\n' "安装方式" "$([ "$kind" = git ] && echo "git checkout（同步/拉取即更新）" || echo "copy 安装（升级需重新 install.sh）")"
   printf '  %-14s %s\n' "skill 目录" "$TEAM_SKILL_DIR"
   if [ "$kind" = "git" ]; then
@@ -183,18 +160,19 @@ team_cmd_version_check() {
   fi
 
   printf '\n'
-  if [ -z "$loaded" ]; then
-    team_warn "还不知道本会话加载的是哪个版本：跑一次 $TEAM_CLI mark-loaded 之后再检查"
+  # P417：不再比「记录 vs 磁盘」，而是比「PM 进程启动时刻 vs skill 最近 mtime」。
+  # 没有 PM 在跑就不谈会话的事，只说磁盘版本。
+  if [ -z "$pid" ]; then
+    team_ok "一致：磁盘 skill $disk（没有 PM 在跑，不判断会话）"
     return 0
   fi
-  if [ "$loaded" = "$disk" ] && [ "$loaded_hash" = "$hash" ]; then
-    team_ok "一致：本会话用的就是磁盘上的 skill（$disk）"
+  if [ -z "$stale" ]; then
+    team_ok "一致：磁盘 skill $disk 在这台 PM 启动之后没有改动"
     return 0
   fi
-  team_warn "本会话是旧的：加载 $loaded，磁盘 $disk"
+  team_warn "$stale"
   team_dim "  生效方式：在 Pi 里输入 /reload（或 /teamsmith-reload）；也可以让模型调用 reload_skills 工具"
   team_dim "  脚本类（scripts/**）本来就每次现读盘，不需要刷新"
-  team_dim "  看了 CHANGELOG 如果不想升：把 $TEAM_STATE_DIR/pm-loaded.env 里的 VERSION 改成 $disk 即可静音"
   if [ -f "$(team_skill_changelog)" ]; then
     printf '\n  最新变更：\n'
     # F21：这里原来是 `sed -n '/^## /,$p' … | head -14 | sed 's/^/    /'`。`head` 读够就退出，

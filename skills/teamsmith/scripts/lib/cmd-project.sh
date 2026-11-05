@@ -452,22 +452,18 @@ team_cmd_init() {
 }
 
 # ---------------------------------------------------------------- doctor
-# M7.1：这个项目要不要读迁移指南？两个判据都来自可查的真实状态，不猜：
+# M7.1：这个项目要不要读迁移指南？判据来自可查的真实状态，不猜：
 #   ① AGENTS.md 里还有围栏外的旧名标记 <!-- pi-team:begin -->（init 会就地改写；改写后不再触发）——
 #     判据是「可迁移的候选行」，所以正文里引用、缩进或围栏里的旧名示例不会让这条提示永不消失。
-#   ② 本会话加载的 skill 比磁盘旧（mark-loaded 记的版本/指纹与磁盘不一致）—— 与 version --check 同口径
 # 干净项目上保持静默（doctor 不该多刷一行）；返回原因字符串，没有原因则返回空。
+# P417：以前这里还有第二条判据「本会话加载的 skill 比磁盘旧」——它读 `state/pm-loaded.env` 这份
+# 由人记得写的记录，没人写就永远停在上一版。记录删掉了，会话新旧改由推导给出（见下面的「skill 新鲜度」）。
 team_migration_reasons() {
-  local reasons="" f="$TEAM_MAIN_ROOT/AGENTS.md" loaded
+  local reasons="" f="$TEAM_MAIN_ROOT/AGENTS.md"
   # 只看「init 真会改的那两行」：围栏外、独占整行、逐字节等于旧名标记。正文引用、缩进
   # 或围栏里的旧名示例都不会被 init 改写，所以它们也不该让这条提示永不消失。
   if [ -f "$f" ] && [ "$(team_legacy_marker_candidates "$f" '<!-- pi-team:begin -->' '<!-- pi-team:end -->')" -gt 0 ]; then
     reasons="AGENTS.md 还是旧名标记"
-  fi
-  loaded="$(team_loaded_version 2>/dev/null || true)"
-  if [ -n "$loaded" ] \
-     && { [ "$loaded" != "$TEAM_VERSION" ] || [ "$(team_loaded_hash 2>/dev/null || true)" != "$(team_skill_hash 2>/dev/null || true)" ]; }; then
-    reasons="${reasons:+$reasons；}本会话加载 $loaded、磁盘 $TEAM_VERSION"
   fi
   [ -n "$reasons" ] && printf '%s' "$reasons"
   return 0
@@ -768,7 +764,7 @@ team_cmd_doctor() {
     fi
   fi
 
-  # Disk, directed launch and actual process registration are separate evidence; mark-loaded is not runtime proof.
+  # Disk, directed launch and actual process registration are separate evidence; disk mtimes are not runtime proof.
   check "关键回复磁盘"
   if [ -f "$TEAM_SKILL_DIR/extension/team-reply.ts" ] && [ -f "$TEAM_SKILL_DIR/scripts/reply-capture.mjs" ]; then
     pass "捕获源码存在（不代表当前 PM 已加载）"
@@ -848,6 +844,13 @@ team_cmd_doctor() {
   local mig; mig="$(team_migration_reasons)"
   if [ -n "$mig" ]; then
     check "迁移指引"; warn "$mig：读 $TEAM_SKILL_DIR/references/migration.md（重命名 / 已删命令 / 必需依赖 / 行为变更 / 升级配方 / 回滚）"
+  fi
+
+  # P417：skill 比这台 PM 新吗？由「PM 进程启动时刻 vs skill 文件最近 mtime」推导，不维护任何记录。
+  # 磁盘比进程新才说话（给出那个时间与 /reload）；没有 PM 在跑时不谈会话；都没问题就整行不出现。
+  local skill_stale; skill_stale="$(team_skill_stale_line)"
+  if [ -n "$skill_stale" ]; then
+    check "skill 新鲜度"; warn "$skill_stale"
   fi
 
 

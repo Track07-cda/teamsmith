@@ -81,7 +81,7 @@ cmd	merge	finish	merge	-	-	-	ledger	-	read-only	none	idempotent	-	merge	team mer
 cmd	pr	finish	pr	-	-	-	ledger	-	read-only	none	idempotent	-	pr	team pr
 cmd	gh	finish	gh	-	-	-	ledger	-	read-only	none	idempotent	-	gh	team gh
 cmd	gl	finish	gl	-	-	-	ledger	-	read-only	none	idempotent	-	gl	team gl
-cmd	mark-loaded	versions	mark-loaded [--version <X>]	--version	-	-	gate	state	writes-state	none	idempotent	-	mark-loaded	team mark-loaded --version 0.2.0
+cmd	mark-loaded	versions	mark-loaded	-	-	-	gate	-	read-only	none	idempotent	-	mark-loaded	team mark-loaded
 cmd	version	versions	version [--check]	--check	-	-	gate	-	read-only	none	idempotent	-	version	team version --check
 cmd	changelog	versions	changelog [--since <X>]	--since	-	-	-	-	read-only	none	idempotent	-	changelog	team changelog
 cmd	reload	versions	reload [--done]	--done	-	-	gate	state	writes-state	none	not-reversible:every request leaves its own record	-	reload	team reload
