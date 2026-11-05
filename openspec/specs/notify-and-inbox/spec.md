@@ -648,10 +648,11 @@ next to `.reg`/`.skip`, and why the usage is best-effort: `references/troublesho
 
 While the watcher registration has failed, a spool line appended for the target MUST still produce exactly one wake
 within three effective poll intervals of its append, the wake MUST keep the shape a live-watcher session sends (one
-`team-inbox` message, `triggerTurn` and `deliverAs: followUp`, the inbox path and a truncated preview, no payload
-dump), and the ledger MUST name the fallback mode on the failure line and the delivery on its wake line. The
-fallback MUST NOT change the default poll interval (`TEAM_INBOX_WATCH_POLL_MS`, default 5000), MUST NOT reorder or
-alter spool semantics (`notify-and-inbox` owns them unchanged), and MUST NOT be reported as a delivery failure.
+`team-inbox` message, `triggerTurn`, the `deliverAs` its message category selects, the inbox path and a truncated
+preview, no payload dump), and the ledger MUST name the fallback mode on the failure line and the delivery on its
+wake line. The fallback MUST NOT change the default poll interval (`TEAM_INBOX_WATCH_POLL_MS`, default 5000), MUST NOT
+reorder or alter spool semantics (`notify-and-inbox` owns them unchanged), and MUST NOT be reported as a delivery
+failure.
 
 #### Scenario: A forced failure still wakes within the poll cadence
 
@@ -665,8 +666,42 @@ alter spool semantics (`notify-and-inbox` owns them unchanged), and MUST NOT be 
 
 - **GIVEN** the same forced-failure session
 - **WHEN** the wake arrives
-- **THEN** its `customType` is `team-inbox`, `opts.triggerTurn` is true and `opts.deliverAs` is `followUp`, the body
+- **THEN** its `customType` is `team-inbox`, `opts.triggerTurn` is true and `opts.deliverAs` is `steer`, the body
   names `docs/team/inbox/<inbox>.md`, and the payload text appears only inside the truncated preview
+
+### Requirement: The wake delivery mode follows the message category
+
+A wake batch containing at least one `kind=say` line (an instruction the PM sends a seat) MUST be delivered with
+`deliverAs: steer`, so it lands after the current tool call and before the next model request instead of behind the
+whole turn; a batch whose lines are all notices (`kind=notify`, `nudge`, `knock`, draft receipts) MUST keep
+`deliverAs: followUp`. The choice SHALL be made per batch from the kinds it carries — never from the batch size, the
+payload, or the sender — and a mixed batch SHALL still be one `sendMessage` carrying `steer`. `triggerTurn: true`, the
+wake content and shape, the one-wake-per-batch rule, the journal-before-send rule and the no-input-box rule MUST NOT
+change. The `wake n=…` ledger line SHALL name the chosen mode as `deliver=<steer|followUp>`, so both modes are
+observable on the same channel. `steer` lands between two tool calls: a seat that is inside one long tool call still
+waits for that call to return.
+
+#### Scenario: An instruction steers into the running turn
+
+- **GIVEN** a session whose watcher is registered on the channel
+- **WHEN** a batch carrying one `kind=say` line arrives
+- **THEN** the session receives exactly one `team-inbox` message with `opts.triggerTurn` true and `opts.deliverAs`
+  `steer`
+- **AND** the ledger's `wake n=1 …` line for it names `deliver=steer`
+
+#### Scenario: A notice waits for the end of the turn
+
+- **GIVEN** the same session
+- **WHEN** a batch of `notify` / `nudge` / `knock` lines with no `say` line arrives
+- **THEN** each batch is delivered once with `opts.triggerTurn` true and `opts.deliverAs` `followUp`
+- **AND** its ledger `wake …` line names `deliver=followUp`
+
+#### Scenario: A mixed batch is delivered once, in the instruction's mode
+
+- **GIVEN** the same session
+- **WHEN** one `notify` line and one `say` line reach the reader in the same batch
+- **THEN** exactly one message is sent, with `opts.deliverAs` `steer`
+- **AND** its body lists both lines and its ledger line reads `kinds=notify,say` with `deliver=steer`
 
 ### Requirement: The inbox-watch gate measures an unavailable watcher visibly and has a strict path
 

@@ -350,8 +350,8 @@ if (only('S2')) {
   const ok = await waitFor(() => sent.length > before + 0)
   check('S2 a new spool line wakes the session (fs.watch, polling disabled)', ok && sent.length === before + 1,
     `messages=${sent.length - before}`)
-  check('S2 wake is a custom team-inbox message with triggerTurn+followUp',
-    sent.at(-1)?.msg?.customType === 'team-inbox' && sent.at(-1)?.opts?.triggerTurn === true && sent.at(-1)?.opts?.deliverAs === 'followUp',
+  check('S2 wake is a custom team-inbox message with triggerTurn+steer',
+    sent.at(-1)?.msg?.customType === 'team-inbox' && sent.at(-1)?.opts?.triggerTurn === true && sent.at(-1)?.opts?.deliverAs === 'steer',
     JSON.stringify({ customType: sent.at(-1)?.msg?.customType, ...(sent.at(-1)?.opts ?? {}) }))
   const body = lastText()
   check('S2 wake is a pointer to the inbox file, not the payload', body.includes('docs/team/inbox/pm.md'), body.split('\n')[0])
@@ -1037,9 +1037,9 @@ const degradedFiles = () => (existsSync(WATCH_DIR) ? readdirSync(WATCH_DIR).filt
   check('S23 a forced-failure session still wakes within one poll interval (200 ms)',
     woke && sent.length === beforeWake + 1, `messages=${sent.length - beforeWake}`)
   const fallbackWake = sent.at(-1)
-  check('S23 the fallback wake keeps the live-watcher shape (customType/triggerTurn/followUp)',
+  check('S23 the fallback wake keeps the live-watcher shape (customType/triggerTurn/steer)',
     fallbackWake?.msg?.customType === 'team-inbox' && fallbackWake?.opts?.triggerTurn === true
-      && fallbackWake?.opts?.deliverAs === 'followUp',
+      && fallbackWake?.opts?.deliverAs === 'steer',
     JSON.stringify({ customType: fallbackWake?.msg?.customType, ...(fallbackWake?.opts ?? {}) }))
   const fallbackBody = lastText()
   check('S23 the fallback wake points at the inbox and truncates the payload',
@@ -1121,7 +1121,7 @@ if (only('S25j')) {
     recs.map(r => `${r.kind}${r.fields.seq ? `=${r.fields.seq}` : ''}`).join(' '))
   check('S25j every record is ISO-stamped', recs.every(r => /^\d{4}-\d{2}-\d{2}T/.test(r.ts)), recs[0]?.ts ?? '')
   check('S25j the wake ledger line names seq and the identities',
-    / wake n=1 total=1 inbox=pm kinds=say seq=1 ids=\S+$/.test(ledger().filter(l => / wake n=/.test(l)).at(-1) ?? ''),
+    / wake n=1 total=1 inbox=pm kinds=say seq=1 ids=\S+ deliver=steer$/.test(ledger().filter(l => / wake n=/.test(l)).at(-1) ?? ''),
     ledger().filter(l => / wake n=/.test(l)).at(-1) ?? '(no wake line)')
   // 过期行：不写日志记录、不唤醒、只计数
   const before = sent.length
@@ -1221,7 +1221,7 @@ if (only('S25a')) {
     woke && sent.length === before + 1, `messages=${sent.length - before}`)
   const wakeLine = ledger().filter(l => / wake n=/.test(l)).at(-1) ?? ''
   check('S25a the ledger records it as recovery with its seq',
-    / wake n=1 total=1 inbox=pm kinds=say seq=\d+ ids=\S+ recovery n=1$/.test(wakeLine), wakeLine.trim())
+    / wake n=1 total=1 inbox=pm kinds=say seq=\d+ ids=\S+ deliver=steer recovery n=1$/.test(wakeLine), wakeLine.trim())
   check('S25a the recovery is recorded in the journal as sent (at most once from now on)',
     journalOf('sent').length === 1, `sent records=${journalOf('sent').length}`)
   // 同一批字节再重写一次 —— **跨一次重启**（重启本身也不得再恢复）：证明至多一次是由日志
@@ -1566,15 +1566,65 @@ if (only('S26')) {
   check('S26 the wake names the delivery journal the identities were recorded in',
     body.includes(journalPathOf()) && existsSync(journalPathOf()),
     (body.split('\n').find(l => l.includes('Delivery journal')) ?? '(none)').slice(0, 200))
-  check('S26 the wake shape is unchanged (customType/triggerTurn/followUp)',
+  check('S26 the wake shape is unchanged (customType/triggerTurn/steer)',
     sent.at(-1)?.msg?.customType === 'team-inbox' && sent.at(-1)?.opts?.triggerTurn === true
-      && sent.at(-1)?.opts?.deliverAs === 'followUp',
+      && sent.at(-1)?.opts?.deliverAs === 'steer',
     JSON.stringify({ customType: sent.at(-1)?.msg?.customType, ...(sent.at(-1)?.opts ?? {}) }))
   check('S26 no payload dump: the wake stays a bounded one-line pointer per line',
     body.split('\n').filter(l => l.startsWith('- ')).every(l => l.length <= 220), `len=${body.length}`)
   check('S26 every wake line in the ledger names seq and ids',
     ledger().filter(l => / wake n=/.test(l)).every(l => / seq=\d+ ids=\S+/.test(l)),
     ledger().filter(l => / wake n=/.test(l)).join(' | '))
+  await shutdown()
+}
+
+// ── S28（P419）· 投递模式按**消息类别**选：通知等 → followUp；含 say 的批 → steer ────────────
+// 为什么要按类别：`team say` 是 PM 发给席位的**指令**，`followUp` 要等席位把手上这一轮跑完才投，指令就
+// 只能排在这一轮之后；`steer` 落在本次工具调用结束后、下一次模型请求之前，插得进正在跑的那一轮。通知类
+// （notify / nudge / knock / draft 回执）不该打断正在跑的一轮，保持 followUp；混批仍然只投一次，用 steer。
+// 这一组走 100ms 轮询（不依赖 fs.watch 前提），三种前提（真人/机器不可用/强制失败）下都真跑真判。
+process.env.TEAM_INBOX_WATCH_POLL_MS = '100'
+if (only('S28')) {
+  await resetState()
+  await sessionStart()
+  const lastOpts = () => sent.at(-1)?.opts ?? {}
+  // (a) 只含通知的批：三类都还是 followUp（只有 triggerTurn 的老形状）
+  for (const kind of ['notify', 'nudge', 'knock']) {
+    const before = sent.length
+    appendWake(kind, 'dev', 'pm', `S28-${kind}-only`)
+    const woke = await waitFor(() => sent.length > before)
+    check(`S28 a ${kind}-only batch is delivered as followUp`,
+      woke && sent.length === before + 1 && lastOpts().deliverAs === 'followUp' && lastOpts().triggerTurn === true,
+      `messages=${sent.length - before} deliverAs=${lastOpts().deliverAs} triggerTurn=${lastOpts().triggerTurn}`)
+  }
+  // (b) 批里只有一条 say：steer（这条红侧是「类别判定被删掉 → 恒 followUp」）
+  {
+    const before = sent.length
+    appendWake('say', 'pm', 'pm', 'S28-say-instruction')
+    const woke = await waitFor(() => sent.length > before)
+    check('S28 a say batch is delivered as steer',
+      woke && sent.length === before + 1 && lastOpts().deliverAs === 'steer' && lastOpts().triggerTurn === true,
+      `messages=${sent.length - before} deliverAs=${lastOpts().deliverAs}`)
+    check('S28 the steer wake still names its line and the inbox file, never the payload in full',
+      lastText().includes('S28-say-instruction') && lastText().includes('docs/team/inbox/pm.md'),
+      lastText().split('\n')[0])
+  }
+  // (c) 混批（一条通知 + 一条指令落在同一拍）：只投一次，且用 steer
+  {
+    const before = sent.length
+    appendWake('notify', 'dev', 'pm', 'S28-mixed-notify')
+    appendWake('say', 'pm', 'pm', 'S28-mixed-say')
+    await sleep(500)
+    const body = lastText()
+    const wakeLine = ledger().filter(l => / wake n=/.test(l)).at(-1) ?? ''
+    check('S28 a mixed batch is delivered once and as steer',
+      sent.length === before + 1 && lastOpts().deliverAs === 'steer',
+      `messages=${sent.length - before} deliverAs=${lastOpts().deliverAs}`)
+    check('S28 the mixed wake carries both lines and its ledger names the category decision',
+      body.includes('S28-mixed-notify') && body.includes('S28-mixed-say')
+        && / wake n=2 total=\d+ inbox=pm kinds=notify,say seq=\d+ ids=\S+ deliver=steer/.test(wakeLine),
+      wakeLine.trim())
+  }
   await shutdown()
 }
 

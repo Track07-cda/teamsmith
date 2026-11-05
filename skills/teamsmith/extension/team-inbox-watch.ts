@@ -9,8 +9,11 @@
  *   1. 发送方（outbox.sh）把消息写进 **durable 收件箱** `docs/team/inbox/<name>.md`（唯一真相）；
  *   2. 再往本项目 `state/inbox-watch/<key>.wake` 追加**一行指针**（kind / from / inbox / 截断预览）；
  *   3. 本扩展 `fs.watch` 那个目录，读到新行就
- *      `pi.sendMessage({customType:'team-inbox'}, …, {triggerTurn:true, deliverAs:'followUp'})`
+ *      `pi.sendMessage({customType:'team-inbox'}, …, {triggerTurn:true, deliverAs:<按类别>})`
  *      —— 消息进会话队列（agent 空闲时立刻触发一轮），输入框一个键都不碰。
+ *      `deliverAs` 由**消息类别**决定（P419，不看批量大小）：批里只要有一条 `kind=say`（PM 发给席位的
+ *      指令）→ `steer`（本次工具调用结束后、下一次模型请求之前落地，插得进正在跑的那一轮）；其余
+ *      （notify / nudge / knock / draft 回执…）→ `followUp`（等这一轮没有更多工具调用）。
  *
  * 就绪注册（发送方据此判定「目标是 pi 且有监视」）：`state/inbox-watch/<key>.reg` 里写
  * target / inbox / pid / cwd / started / heartbeat；心跳每 HEARTBEAT_MS 刷新。`team_inbox_watch_route`
@@ -1081,11 +1084,19 @@ export default function (pi: ExtensionAPI) {
 
   const shortError = (error: unknown): string => oneLine(String((error as Error)?.message ?? error ?? 'unknown'), 160)
 
+  /** P419 · 投递模式按**消息类别**选，不看批量大小：批里只要有一条 `kind=say`（PM 发给席位的指令），
+   *  整批用 `steer` —— 本次工具调用结束后、下一次模型请求之前落地，插得进正在跑的那一轮；
+   *  其余（notify / nudge / knock / draft 回执…）保持 `followUp`（等这一轮没有更多工具调用）。
+   *  已知极限：`steer` 也只能落在两次工具调用之间 —— 席位卡在一个长工具调用里时，仍要等那次返回。 */
+  const deliverModeOf = (lines: SpoolLine[]): 'steer' | 'followUp' =>
+    lines.some(l => l.kind === 'say') ? 'steer' : 'followUp'
+
   /** P81 · 唯一的发送出口：写前记录（read → intent）→ 发送 → sent/failed。
    *  `intent` 没写成**绝不发送**（fail-closed）；API 拒了记 `failed`，下一拍重试。 */
   const sendWake = (lines: SpoolLine[], meta: WakeMeta = {}): 'ok' | 'failed' | 'blocked' => {
     if (!lines.length) return 'ok'
     const seq = seqCounter++
+    const deliverAs = deliverModeOf(lines)
     const off = meta.off ?? offset
     const size = meta.size ?? fileSize(spool)
     const head = meta.head ?? headStamp(readHead(spool, size))
@@ -1104,7 +1115,7 @@ export default function (pi: ExtensionAPI) {
     if (abortAt === 'intent') fixtureAbort()
     try {
       pi.sendMessage({ customType: 'team-inbox', content: wakeText(seq, lines, meta), display: true },
-        { triggerTurn: true, deliverAs: 'followUp' })
+        { triggerTurn: true, deliverAs })
     } catch (error) {
       journalAppend(`failed seq=${seq} reason=${jesc(shortError(error))}`)
       appendLedger(root,
@@ -1123,7 +1134,7 @@ export default function (pi: ExtensionAPI) {
       recoveryQueue.delete(l.identity)
     }
     appendLedger(root,
-      `wake n=${lines.length} total=${seen} inbox=${inbox} kinds=${lines.map(l => l.kind).join(',')} seq=${seq} ids=${lines.map(l => l.identity).join('|')}` +
+      `wake n=${lines.length} total=${seen} inbox=${inbox} kinds=${lines.map(l => l.kind).join(',')} seq=${seq} ids=${lines.map(l => l.identity).join('|')} deliver=${deliverAs}` +
       (meta.recovery ? ` recovery n=${lines.length}` : '') +
       (meta.retry ? ' retry=1' : '') +
       (meta.dup !== undefined ? ` rescan[dup=${meta.dup} skipped=${meta.skipped ?? 0}]` : ''))

@@ -10396,11 +10396,19 @@ else
     "12b-pi P81：唤醒文本给出投递日志路径（收件方可自证）"
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S10 the printed identity resolves to exactly one delivered.log record" \
     "12b-pi P81：唤醒文本的 id 能在 delivered.log 里一一定位（端到端）"
+  # P419（S28）：投递模式按消息类别选 —— 指令 steer（插得进正在跑的那一轮）、通知 followUp（不打断它）。
+  # S2/S23/S26 的 deliverAs 断言按类别改写在各自的 watcher 前提里；这三条走轮询，两种前提下都真跑。
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S28 a notify-only batch is delivered as followUp" \
+    "P419：只含通知的批仍是 followUp"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S28 a say batch is delivered as steer" \
+    "P419：含 say 的批用 steer（本次工具调用结束后、下一次模型请求之前落地）"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S28 a mixed batch is delivered once and as steer" \
+    "P419：混批只投一次，用指令的模式（steer）"
   if [ "$M53_IW_OK" = "1" ]; then
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S1 session_start creates exactly one .reg" "12b-pi 扩展写就绪注册（发送方的判据）"
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S4 the wake names its own cut and where the whole text is" \
     "P370：watcher 路径上 wake 层也自己写标记（与 S27 的轮询路径同一条行为）"
-  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S2 wake is a custom team-inbox message with triggerTurn+followUp" "12b-pi 唤醒用的是 sendMessage(followUp+triggerTurn)"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S2 wake is a custom team-inbox message with triggerTurn+steer" "12b-pi 唤醒用的是 sendMessage(triggerTurn + 按类别选的 deliverAs；这条批是 say，所以 steer)"
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S4 long payload is truncated in the wake (no payload dump)" "12b-pi 唤醒只带截断预览（不带 payload 全文）"
   # P370（S27）：watcher 前提无关的同一条行为 —— 轮询路径上真跑真判，跳不过去
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S27 the wake names its own cut and where the whole text is" \
