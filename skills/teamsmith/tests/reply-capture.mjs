@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Product parser/source evidence. All fixtures and mutations stay here, never in product code. */
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, copyFileSync, existsSync, symlinkSync, openSync, closeSync, appendFileSync, chmodSync, lstatSync, realpathSync, constants as C } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, copyFileSync, existsSync, symlinkSync, linkSync, openSync, closeSync, appendFileSync, chmodSync, lstatSync, realpathSync, constants as C } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { spawn, spawnSync } from 'node:child_process'
@@ -9,7 +9,7 @@ import { spawn, spawnSync } from 'node:child_process'
 const here = dirname(fileURLToPath(import.meta.url))
 const modulePath = process.env.TEST_CAPTURE_MODULE ?? resolve(here, '../scripts/reply-capture.mjs')
 const product = await import(pathToFileURL(modulePath).href)
-const { parseReply, CaptureJournal, ReplyCapture, runReplyWriter, processIdentity, sourceKey, safeDirectory, inspectRuntime, resolvePMIdentity } = product
+const { parseReply, CaptureJournal, ReplyCapture, runReplyWriter, processIdentity, sourceKey, safeDirectory, inspectRuntime, resolvePMIdentity, updateRuntime } = product
 const tests = []
 const test = (name, run) => tests.push({ name, run })
 const message = (text, extra = {}) => ({ role: 'assistant', content: [{ type: 'text', text }], stopReason: 'stop', timestamp: 1, ...extra })
@@ -522,17 +522,18 @@ for (const fault of ['kill:body-staged', 'kill:index-written', 'kill:index-durab
   }))
 }
 
-// P415 · The ancestry refusal must name what it refuses, and an own-group 775 layout is not a foreign trust
-// domain. Both sides run: the acceptance would go red under the stricter pre-P415 rule (see ancestryFlip).
-const ancestryTests = []
-const ancestry = (name, run) => ancestryTests.push({ name, run })
-const ancestryTemp = () => realpathSync(mkdtempSync('/var/tmp/p415-ancestry.'))
-const foreignGroups = () => {
-  const saved = [process.getgid, process.getegid, process.getgroups]
-  process.getgid = () => 0
-  process.getegid = () => 0
-  process.getgroups = () => [0]
-  return () => { [process.getgid, process.getegid, process.getgroups] = saved }
+// D232 · The criteria defend against real failures, not imagined attackers: no permission-mode policing.
+// A file must be a plain non-symlink file this process owns; a directory must be a plain non-symlink on a
+// canonical path. 664 files and 775 (even 777) directories are normal layouts and must work — the old
+// mode/nlink rule is what disabled capture everywhere (P415, P418).
+const ownershipTests = []
+const ownership = (name, run) => ownershipTests.push({ name, run })
+const ownershipTemp = () => realpathSync(mkdtempSync('/var/tmp/p418-owner.'))
+/** Simulate "this file is not mine" without root: the rule compares st.uid with process.getuid(). */
+const foreignUid = () => {
+  const saved = process.getuid
+  process.getuid = () => 0
+  return () => { process.getuid = saved }
 }
 const refusal = (run, ...fragments) => {
   try { run() } catch (e) {
@@ -542,112 +543,180 @@ const refusal = (run, ...fragments) => {
   }
   return assert.fail('expected an ancestry refusal, the directory was accepted')
 }
-ancestry('0755 ancestry is accepted (baseline)', () => {
-  const root = ancestryTemp()
-  try { assert.equal(safeDirectory(root), root) } finally { rmSync(root, { recursive: true, force: true }) }
-})
-ancestry('0775 owned by this process group is accepted (this machine layout)', () => {
-  const root = ancestryTemp()
-  const dir = join(root, 'own-group')
+function ownershipProject(root) {
+  const state = join(root, '.pi/team/state'), config = join(root, '.pi/team/config.sh'), session = join(root, 'session.jsonl')
+  assert.equal(spawnSync('git', ['init', '-q', '-b', 'main', root]).status, 0)
+  mkdirSync(state, { recursive: true })
+  writeFileSync(config, "TEAM_PROJECT='p418'\n")
+  writeFileSync(session, '')
+  return { state, config, session }
+}
+/** The real entry point, in a real git project, with the fixture files' modes chosen by the caller. */
+function register(root, files, modes) {
+  for (const [key, mode] of Object.entries(modes)) chmodSync(files[key], mode)
+  const context = { cwd: root, sessionId: 'p418', sessionFile: files.session }
+  const env = { TEAM_STATE_DIR: files.state, TEAM_CONFIG_FILE: files.config, TEAM_PM_WINDOW: 'pm', TEAM_SESSION: 'p418' }
+  const cwd = process.cwd()
+  process.chdir(root)
+  try { return { identity: resolvePMIdentity(context, env) } }
+  catch (e) { return { error: e } }
+  finally { process.chdir(cwd) }
+}
+ownership('0755 / 0775 / 0777 / 1777 directories are accepted: mode is not a judgement', () => {
+  const root = ownershipTemp()
   try {
-    mkdirSync(dir); chmodSync(dir, 0o775)
-    assert.equal(lstatSync(dir).gid, process.getgid(), 'fixture premise: the directory belongs to this process group')
-    assert.equal(safeDirectory(dir), dir)
+    for (const [name, mode] of [['plain', 0o755], ['own-group', 0o775], ['open', 0o777], ['sticky', 0o1777]]) {
+      const dir = join(root, name)
+      mkdirSync(dir); chmodSync(dir, mode)
+      assert.equal(safeDirectory(dir), dir, `${name} (${mode.toString(8)}) must be accepted`)
+    }
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
-ancestry('1777 sticky temp parent stays accepted', () => {
-  const root = ancestryTemp()
-  const dir = join(root, 'sticky')
+ownership('symlinked directory is refused by path', () => {
+  const root = ownershipTemp()
   try {
-    mkdirSync(dir); chmodSync(dir, 0o1777)
-    assert.equal(safeDirectory(dir), dir)
+    const real = join(root, 'real'), link = join(root, 'link')
+    mkdirSync(real); symlinkSync(real, link)
+    refusal(() => safeDirectory(link), link, 'is not a plain directory')
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
-ancestry('0777 other-writable ancestor is refused by path', () => {
-  const root = ancestryTemp()
-  const dir = join(root, 'open')
+ownership('noncanonical directory path is refused', () => {
+  const root = ownershipTemp()
   try {
-    mkdirSync(dir); chmodSync(dir, 0o777)
-    refusal(() => safeDirectory(dir), dir, 'is other-writable')
+    assert.throws(() => safeDirectory(`${root}/./nested`), e => e.message === 'noncanonical directory')
+    assert.throws(() => safeDirectory('relative/dir'), e => e.message === 'noncanonical directory')
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
-ancestry('0775 owned by a group outside the process groups is refused by path', () => {
-  const root = ancestryTemp()
-  const dir = join(root, 'foreign-group')
+ownership('real git project: a 0775 root and 0775 state register (this machine layout)', () => {
+  const root = ownershipTemp()
   try {
-    mkdirSync(dir); chmodSync(dir, 0o775)
-    const restore = foreignGroups()
-    try { refusal(() => safeDirectory(dir), dir, 'is group-writable outside the effective groups') } finally { restore() }
+    const files = ownershipProject(root)
+    chmodSync(root, 0o775); chmodSync(files.state, 0o775)
+    const { error } = register(root, files, { session: 0o664, config: 0o664 })
+    // Reaching the tmux fact proves the directory and file checks accepted; a refusal would stop earlier.
+    assert.equal(error?.message, 'no actual tmux pane', `a 0775 layout must not be refused: ${error?.message ?? 'accepted'}`)
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
-ancestry('real git project: own-group 0775 resolves, 0777 root and 0777 state are refused', () => {
-  const root = ancestryTemp()
-  const state = join(root, '.pi/team/state'), config = join(root, '.pi/team/config.sh'), cwd = process.cwd()
-  const context = { cwd: root, sessionId: 'p415-fixture', sessionFile: join(root, 'session.jsonl') }
+ownership('doctor reason names the refused directory and the rule, not an errno class', () => {
+  const root = ownershipTemp()
   try {
-    assert.equal(spawnSync('git', ['init', '-q', '-b', 'main', root]).status, 0)
-    mkdirSync(state, { recursive: true })
-    writeFileSync(config, '# fixture\n')
-    writeFileSync(join(root, 'session.jsonl'), '')
-    chmodSync(root, 0o775)
-    process.chdir(root)
+    const files = ownershipProject(root), link = join(root, 'state-link')
+    symlinkSync(files.state, link)
+    const seen = inspectRuntime({ root, state: link, config: files.config, session: 'p418', window: 'pm', skill: resolve(here, '..') })
+    assert.equal(seen.state, 'unknown')
+    assert.ok(seen.reason.startsWith('not registered: unsafe directory ancestry: '), `unexpected reason: ${seen.reason}`)
+    assert.ok(seen.reason.includes(link) && seen.reason.includes('is not a plain directory'), `the refused directory is missing: ${seen.reason}`)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+ownership('664 session file and 664 config register (this machine layout)', () => {
+  const root = ownershipTemp()
+  try {
+    const files = ownershipProject(root)
+    const { error } = register(root, files, { session: 0o664, config: 0o664 })
+    assert.equal(lstatSync(files.session).uid, process.getuid(), 'fixture premise: the session file belongs to this process')
+    assert.equal(error?.message, 'no actual tmux pane', `a 664 session file must not be refused: ${error?.message ?? 'accepted'}`)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+ownership('666 session file also registers: mode is not a judgement', () => {
+  const root = ownershipTemp()
+  try {
+    const files = ownershipProject(root)
+    const { error } = register(root, files, { session: 0o666, config: 0o664 })
+    assert.equal(error?.message, 'no actual tmux pane', `mode bits must not refuse a file we own: ${error?.message ?? 'accepted'}`)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+ownership('hardlinked session file (nlink 2) registers: link count is not a judgement', () => {
+  const root = ownershipTemp()
+  try {
+    const files = ownershipProject(root)
+    chmodSync(files.session, 0o664)
+    linkSync(files.session, join(root, 'session-alias.jsonl'))
+    assert.equal(lstatSync(files.session).nlink, 2, 'fixture premise: a hardlinked session file')
+    const { error } = register(root, files, { config: 0o664 })
+    assert.equal(error?.message, 'no actual tmux pane', `nlink alone must not refuse a file we own: ${error?.message ?? 'accepted'}`)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+ownership('symlinked session file is refused, never followed', () => {
+  const root = ownershipTemp()
+  try {
+    const files = ownershipProject(root)
+    const target = join(root, 'real-session.jsonl')
+    writeFileSync(target, ''); chmodSync(target, 0o664); rmSync(files.session); symlinkSync(target, files.session)
+    const { error } = register(root, files, { config: 0o644 })
+    assert.equal(error?.code, 'ELOOP', `a symlink must be refused without following it: ${error?.message ?? 'accepted'}`)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+ownership('project config owned by another user is refused and names the file', () => {
+  const root = ownershipTemp()
+  try {
+    const files = ownershipProject(root)
+    const restore = foreignUid()
     try {
-      // Own group: the ancestry passes and the same entry stops at the next fact it actually needs.
-      assert.throws(() => resolvePMIdentity(context, {}), e => e.message === 'missing directed PM launch environment')
-      chmodSync(root, 0o777)
-      refusal(() => resolvePMIdentity(context, {}), root)
-      chmodSync(root, 0o775); chmodSync(state, 0o777)
-      refusal(() => resolvePMIdentity(context, { TEAM_STATE_DIR: state, TEAM_CONFIG_FILE: config, TEAM_PM_WINDOW: 'pm', TEAM_SESSION: 'p415' }), state)
-    } finally { process.chdir(cwd) }
-  } finally { rmSync(root, { recursive: true, force: true }) }
-})
-ancestry('doctor reason names the directory and the rule, not an errno class', () => {
-  const root = ancestryTemp()
-  const state = join(root, '.pi/team/state'), config = join(root, '.pi/team/config.sh')
-  try {
-    mkdirSync(state, { recursive: true })
-    writeFileSync(config, '# fixture\n')
-    chmodSync(root, 0o775)
-    const args = { root, state, config, session: 'p415', window: 'pm', skill: resolve(here, '..') }
-    assert.equal(inspectRuntime(args).reason, 'registration:ENOENT', 'a missing registration is not a refusal')
-    const restore = foreignGroups()
-    try {
-      const refused = inspectRuntime(args)
-      assert.equal(refused.state, 'unknown')
-      assert.ok(refused.reason.startsWith('not registered: unsafe directory ancestry: '), `unexpected reason: ${refused.reason}`)
-      assert.ok(refused.reason.includes(root), `the refused directory is missing: ${refused.reason}`)
-      assert.ok(refused.reason.includes('is group-writable outside the effective groups'), `the rule is missing: ${refused.reason}`)
+      const { error } = register(root, files, { session: 0o644, config: 0o664 })
+      assert.ok(error && error.message.startsWith('unsafe regular file: ') && error.message.includes(files.config) &&
+        error.message.includes('is not owned by this process'), `a foreign owner must be refused by path: ${error?.message ?? 'accepted'}`)
     } finally { restore() }
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
-async function ancestryFlip() {
-  const root = mkdtempSync('/var/tmp/p415-flip.')
+ownership('our own runtime.json: 664 is written (mode is not a judgement)', () => {
+  const root = ownershipTemp()
+  try {
+    const files = ownershipProject(root)
+    const directory = join(files.state, 'reply-capture'); mkdirSync(directory)
+    const path = join(directory, 'runtime.json')
+    writeFileSync(path, '{"owner":"us"}\n'); chmodSync(path, 0o664)
+    updateRuntime({ state: files.state }, () => ({ reason: 'probe' }))
+    assert.equal(readFileSync(path, 'utf8'), '{"reason":"probe"}\n', 'a 664 registry we own must be replaced, not refused')
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+ownership('a runtime lock owned by another user is refused and names the file', () => {
+  const root = ownershipTemp()
+  try {
+    const files = ownershipProject(root)
+    const directory = join(files.state, 'reply-capture'); mkdirSync(directory)
+    const restore = foreignUid()
+    let error
+    try { updateRuntime({ state: files.state }, () => ({ reason: 'probe' })) } catch (e) { error = e }
+    finally { restore() }
+    assert.ok(error && error.message.includes('runtime.lock') && error.message.includes('is not owned by this process'),
+      `the ownership check must cover our own write surface: ${error?.message ?? 'written'}`)
+    assert.equal(existsSync(join(directory, 'runtime.json')), false, 'a refused transaction must not write the registry')
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+async function ownershipFlip() {
+  const root = mkdtempSync('/var/tmp/p418-owner-flip.')
   try {
     const scripts = join(root, 'scripts'); mkdirSync(scripts)
     copyFileSync(resolve(here, '../scripts/replies.mjs'), join(scripts, 'replies.mjs'))
     const source = readFileSync(modulePath, 'utf8')
-    const anchor = "  if (mode & 0o1000) return '' // Sticky directories (system temp) protect entries the caller does not own.\n" +
-      "  if (mode & 0o002) return 'is other-writable'\n" +
-      "  if ((mode & 0o020) && !groups.has(gid)) return 'is group-writable outside the effective groups'\n  return ''"
-    assert.equal(source.split(anchor).length, 2, 'flip: unique target for the pre-P415 rule')
-    const target = join(scripts, 'reply-capture.mjs')
-    writeFileSync(target, source.replace(anchor, "  return (mode & 0o022) && !(mode & 0o1000) ? 'is other-writable or group-writable' : ''"))
-    const red = spawnSync(process.execPath, [fileURLToPath(import.meta.url), '--select', 'ancestry'],
-      { env: { ...process.env, TEST_CAPTURE_MODULE: target }, encoding: 'utf8' })
-    const lines = `${red.stdout}${red.stderr}`.split('\n')
-    assert.equal(red.status, 1, `pre-P415 rule must fail the acceptance: ${lines.join(' | ')}`)
-    const flipped = lines.find(line => line.startsWith('FAIL ') && line.includes('0775 owned by this process group'))
-    assert.ok(flipped, 'the own-group acceptance must be the assertion that goes red')
-    for (const kept of ['0777 other-writable ancestor is refused by path', '1777 sticky temp parent stays accepted']) {
-      assert.ok(lines.includes(`PASS ${kept}`), `the flip must not change the ${kept} verdict`)
-      assert.ok(!lines.some(line => line.startsWith('FAIL ') && line.includes(kept)), `the flip changed the ${kept} verdict`)
+    const rule = "  const unsafe = !st.isFile() ? 'is not a regular file' : st.uid !== process.getuid() ? 'is not owned by this process' : ''"
+    const owner = "st.uid !== process.getuid() ? 'is not owned by this process' : ''"
+    assert.equal(source.split(rule).length, 2, 'flip: unique target for the file rule')
+    assert.equal(source.split(owner).length, 2, 'flip: unique target for the owner clause')
+    const arms = [
+      ['mode-policing', rule,
+        "  const unsafe = !st.isFile() || st.nlink !== 1 || (st.mode & 0o022) ? 'is not an exclusively owned regular file' : ''",
+        '664 session file and 664 config register', ['symlinked session file is refused, never followed']],
+      ['no-owner-check', owner, "''",
+        'project config owned by another user is refused', ['664 session file and 664 config register (this machine layout)']],
+    ]
+    for (const [name, old, replacement, red, kept] of arms) {
+      const target = join(scripts, 'reply-capture.mjs')
+      writeFileSync(target, source.replace(old, replacement))
+      const result = spawnSync(process.execPath, [fileURLToPath(import.meta.url), '--select', 'ownership'],
+        { env: { ...cleanEnv, TEST_CAPTURE_MODULE: target }, encoding: 'utf8' })
+      const lines = `${result.stdout}${result.stderr}`.split('\n')
+      assert.equal(result.status, 1, `${name}: the mutated rule must fail the acceptance: ${lines.join(' | ')}`)
+      const flipped = lines.find(line => line.startsWith('FAIL ') && line.includes(red))
+      assert.ok(flipped, `${name}: named assertion must go red: ${red}`)
+      for (const stay of kept) {
+        assert.ok(lines.includes(`PASS ${stay}`), `${name}: the flip must not change the ${stay} verdict`)
+        assert.ok(!lines.some(line => line.startsWith('FAIL ') && line.includes(stay)), `${name}: the flip changed the ${stay} verdict`)
+      }
+      console.log(`PASS flip ${name}: named assertion red (${flipped})`)
     }
-    console.log(`PASS flip pre-P415 rule: own-group acceptance red (${flipped})`)
   } finally { rmSync(root, { recursive: true, force: true }) }
 }
-// The shipped instruction surfaces print a concrete marker example. This group runs that printed text
-// through the product parser and the real writer, so the promise "printed example works" is exercised
-// rather than asserted about prose. A broken example must fail here (no vacuous pass).
 async function shippedExample() {
   const file = process.env.TEST_EXAMPLE_FILE
   assert.ok(file, 'TEST_EXAMPLE_FILE must name the shipped marker example')
@@ -716,10 +785,10 @@ if (args[0] === '--recover-child') { await recoverChild(args[1]); process.exit(0
 if (args[0] === '--crash-child') crashChild(args[1], args[2])
 let groups = ['parser']
 if (args.length && args[0] !== '--all') {
-  if (args[0] !== '--select' || args.length !== 2) throw new Error('usage: reply-capture.mjs --all | --select parser,state,mutations,state-mutations,ancestry  (or --select example with TEST_EXAMPLE_FILE)')
+  if (args[0] !== '--select' || args.length !== 2) throw new Error('usage: reply-capture.mjs --all | --select parser,state,mutations,state-mutations,ownership  (or --select example with TEST_EXAMPLE_FILE)')
   groups = args[1].split(',')
-} else if (args[0] === '--all') groups = ['parser', 'state', 'mutations', 'state-mutations', 'ancestry']
-if (groups.some(g => !['parser', 'state', 'mutations', 'state-mutations', 'ancestry', 'example'].includes(g))) throw new Error('unknown test group')
+} else if (args[0] === '--all') groups = ['parser', 'state', 'mutations', 'state-mutations', 'ownership']
+if (groups.some(g => !['parser', 'state', 'mutations', 'state-mutations', 'ownership', 'example'].includes(g))) throw new Error('unknown test group')
 let passed = 0, failed = 0
 if (groups.includes('parser')) for (const { name, run } of tests) {
   try { await run(); passed++; console.log(`PASS ${name}`) }
@@ -737,15 +806,15 @@ if (groups.includes('state-mutations')) {
   try { await stateMutations(); passed += 4 }
   catch (e) { failed++; console.log(`FAIL state mutations: ${e.stack}`) }
 }
-if (groups.includes('ancestry')) {
-  for (const { name, run } of ancestryTests) {
+if (groups.includes('ownership')) {
+  for (const { name, run } of ownershipTests) {
     try { await run(); passed++; console.log(`PASS ${name}`) }
-    catch (e) { failed++; console.log(`FAIL ${name}: ${e.stack}`) }
+    catch (e) { failed++; console.log(`FAIL ${name}: ${e.message}`) }
   }
   // The flip mutates the module under test, so it is meaningless again inside its own child run.
   if (!process.env.TEST_CAPTURE_MODULE) {
-    try { await ancestryFlip(); passed++ }
-    catch (e) { failed++; console.log(`FAIL ancestry flip: ${e.stack}`) }
+    try { await ownershipFlip(); passed++ }
+    catch (e) { failed++; console.log(`FAIL ownership flip: ${e.stack}`) }
   }
 }
 if (groups.includes('example')) {

@@ -172,19 +172,9 @@ export function processIdentity(pid) {
   }
 }
 
-/** Groups this process can write as; a directory owned by one of them is not a foreign trust domain. */
-const writableGroups = () => new Set([process.getgid(), process.getegid(), ...process.getgroups()])
-/** Why a writable ancestor is unsafe: someone outside this process's groups can replace its entries. */
-function foreignWriter(mode, gid, groups) {
-  if (mode & 0o1000) return '' // Sticky directories (system temp) protect entries the caller does not own.
-  if (mode & 0o002) return 'is other-writable'
-  if ((mode & 0o020) && !groups.has(gid)) return 'is group-writable outside the effective groups'
-  return ''
-}
-/** Canonical, nonsymlink ancestry. Sticky system temp parents are allowed; so are own-group 775 layouts. */
+/** Canonical, nonsymlink ancestry of plain directories. Mode bits are not a judgement (D232). */
 export function safeDirectory(path, create = false) {
   if (!isAbsolute(path) || resolve(path) !== path) throw new Error('noncanonical directory')
-  const groups = writableGroups()
   let at = sep
   for (const part of path.split(sep).filter(Boolean)) {
     at = join(at, part)
@@ -195,19 +185,19 @@ export function safeDirectory(path, create = false) {
       st = lstatSync(at)
     }
     if (!st.isDirectory() || st.isSymbolicLink()) throw new Error(`unsafe directory ancestry: ${at} is not a plain directory`)
-    const unsafe = foreignWriter(st.mode, st.gid, groups)
-    if (unsafe) throw new Error(`unsafe directory ancestry: ${at} ${unsafe}`)
   }
   if (realpathSync(path) !== path) throw new Error('directory identity changed')
   return path
 }
 
+/** A plain file this process owns, opened without following a symlink; mode and link count are not a judgement (D232). */
 function regular(path, flags, mode = 0o600) {
   const fd = openSync(path, flags | C.O_NOFOLLOW | C.O_NONBLOCK, mode)
   const st = fstatSync(fd)
-  if (!st.isFile() || st.nlink !== 1 || (st.mode & 0o022)) {
+  const unsafe = !st.isFile() ? 'is not a regular file' : st.uid !== process.getuid() ? 'is not owned by this process' : ''
+  if (unsafe) {
     closeSync(fd)
-    throw new Error('unsafe regular file')
+    throw new Error(`unsafe regular file: ${path} ${unsafe}`)
   }
   return fd
 }
