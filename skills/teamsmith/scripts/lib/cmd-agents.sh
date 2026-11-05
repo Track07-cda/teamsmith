@@ -128,7 +128,7 @@ team_build_prompt() { # <agent> <ID> <taskfile-abs> <worktree> <model> [<session
   # 其它 adapter 不提：工具不存在，教了只会让 worker 白找。
   case "${TEAM_AGENT_CMD:-}" in
     ''|*'{bg_ext}'*)
-      bg_block="$(printf '\n**Long jobs (a gate, a build)**: start them with `team_bg_run` (it returns a job id immediately and keeps\nworking while you go on), then **end your turn** -- the completion wake-up is the normal harvest point: when the\njob finishes you are woken once (several jobs finishing together arrive as one message) and harvest it with\n`team_bg_wait <id>` (the exit code and the log tail come back inline). **In-turn waiting is the bounded\nexception**: use it only when all three hold -- the job is expected to finish within the inline-wait budget (about 2 minutes),\nits result blocks your immediate next step, and no other task work can advance meanwhile.\n')" ;;
+      bg_block="$(printf '\n**Long jobs (a gate, a build)**: start them with `team_bg_run` (it returns a job id immediately and keeps\nworking while you go on), then **end your turn** -- the completion wake-up is the normal harvest point: when the\njob finishes you are woken once (several jobs finishing together arrive as one message) and harvest it with\n`team_bg_wait <id>` (the exit code and the log tail come back inline). Do not wait inside the turn (`sleep`, `team wait`, a blocking harvest).\n')" ;;
   esac
 
   cat <<PROMPT
