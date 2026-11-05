@@ -101,8 +101,9 @@ Do not run long work in your own session — not a full gate, not a long test ma
 does that work, or `team_bg_run` does it in the background; your session does routing, judgement and acceptance.
 Guidance, not a limit: nothing stops you, but a busy PM cannot answer the user and cannot be steered.
 
-Long commands run in the background, and waiting is never `sleep`: end the turn and let the completion wake-up
-bring you back, or set a reminder for a fixed moment.
+Long commands run in the background. Waiting is never `sleep`, never `team wait`, and never a blocking harvest:
+end the turn and let the completion wake-up or a reminder bring you back. Nothing you do may hold the user's input
+hostage — a PM that is waiting is a PM the user cannot talk to.
 
 The lane default is the suspension: `team_bg_run` starts a long job (a gate, a build) and you **let the turn end**;
 the completion wake-up is the normal harvest point, and `team_bg_wait <id>` then brings back the exit code and the log
