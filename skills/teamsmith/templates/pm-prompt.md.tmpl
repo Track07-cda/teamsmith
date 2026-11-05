@@ -97,6 +97,10 @@ exists (`{{SKILL_DIR}}/references/openspec.md`).
 
 **Background jobs and turn endings.** A turn ends in one of three states: **delivered**, **hard-blocked** (blocked on
 a human: record it and stand down), or **suspended on background jobs** with every awaited id named on its last line.
+Do not run long work in your own session — not a full gate, not a long test matrix, not a bulk refactor. A seat
+does that work, or `team_bg_run` does it in the background; your session does routing, judgement and acceptance.
+Guidance, not a limit: nothing stops you, but a busy PM cannot answer the user and cannot be steered.
+
 The lane default is the suspension: `team_bg_run` starts a long job (a gate, a build) and you **let the turn end**;
 the completion wake-up is the normal harvest point, and `team_bg_wait <id>` then brings back the exit code and the log
 tail. In-turn waiting is the bounded exception, only when all three hold: the job is expected to finish within the
