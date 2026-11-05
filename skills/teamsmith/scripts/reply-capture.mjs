@@ -114,6 +114,8 @@ function derivedTitle(body) {
 }
 
 /** No mutation outside exact original control ranges; character offsets are NOT UTF-8 byte offsets. */
+const TAG_PREFIX = /^\u00a7\d+\u00a7\s*/
+
 export function parseReply(message) {
   const blocks = Array.isArray(message.content) ? message.content : []
   const original = blocks.filter(b => b.type === 'text').map(b => b.text).join('')
@@ -328,6 +330,23 @@ function writerOutcome(result, record) {
   return { status: 'uncertain', reason: 'inconsistent-outcome' }
 }
 
+/**
+ * Another extension may rewrite the finalized message after ours returns -- magic-context, for one,
+ * removes the leading `§N§` tag it asked for. Compare the reply text with that tag normalized away,
+ * because the entry id already names the message; requiring byte equality bound nothing and dropped
+ * every reply on a machine that runs a second message_end transform.
+ */
+function sameReplyMessage(a, b) {
+  if (!a || !b || a.role !== b.role || !Array.isArray(a.content) || !Array.isArray(b.content)) return false
+  if (a.content.length !== b.content.length) return false
+  return a.content.every((item, i) => {
+    const other = b.content[i]
+    if (!item || !other || item.type !== other.type) return false
+    if (item.type !== 'text') return isDeepStrictEqual(item, other)
+    return String(item.text).replace(TAG_PREFIX, '') === String(other.text).replace(TAG_PREFIX, '')
+  })
+}
+
 /** Pi event state, deliberately independent of the host. Only view.entry/branch of the actual current session bind a source. */
 export class ReplyCapture {
   constructor({ identity, journal = new CaptureJournal(identity), current, verify, writer, owner, diagnostic }) {
@@ -377,8 +396,8 @@ export class ReplyCapture {
     // that never grew. Name it, with the same diagnostic sink that records a mismatched binding.
     if (!this.eligibleHost(view)) { this.report('ineligible-at-turn'); return }
     const entry = view.entry(event.messageEntryId)
-    if (!event.messageEntryId || entry?.type !== 'message' || !isDeepStrictEqual(entry.message, latest.message) ||
-        !isDeepStrictEqual(event.message, latest.message) || !branchWitness(view, a.startLeaf, event.messageEntryId)) {
+    if (!event.messageEntryId || entry?.type !== 'message' || !sameReplyMessage(entry.message, latest.message) ||
+        !sameReplyMessage(event.message, latest.message) || !branchWitness(view, a.startLeaf, event.messageEntryId)) {
       latest.intent = null // A bad binding cannot be repaired by another event or current-leaf inference.
       this.report('binding-mismatch', event.messageEntryId)
       return
@@ -427,7 +446,7 @@ export class ReplyCapture {
         }
         return Object.values(snapshot.sources).filter(record => record.status === 'eligible' &&
           branchWitness(view, record.startLeaf, record.entryId, record.settledLeaf) &&
-          isDeepStrictEqual(view.entry(record.entryId)?.message, record.message))
+          sameReplyMessage(view.entry(record.entryId)?.message, record.message))
       })
     } catch (e) {
       if (e.code !== 'ENOENT') this.report(`recovery:${e.code ?? e.name}`)
