@@ -56,3 +56,12 @@ $ npm view teamsmith@0.4.0 dist.tarball       → https://registry.npmjs.org/tea
 - 没有构建/推送容器镜像：`ci/Containerfile` 的 OpenSpec 1.16 层仍未在本机实测（依赖宿主机 podman 与联网装层），首次公开 CI 才会验证它。
 - nightly 元套件作业（`cron 47 3 * * *`，`timeout-minutes: 150`）首次上线，要在推 main 后看 Actions 首跑。
 - `0.1.1 → 0.4.0` 的会话内版本差仍在：当前 PM 会话加载的是 0.1.1，`team version --check` 会提示这一行，属预期。
+
+## 五、v0.4.1（2026-11-05）
+
+修复 0.4.0 的捕获注册失效（组可写目录被判不安全）。用户在 npm 网页批准后发布。
+
+核对：`npm view teamsmith version` → `0.4.1`；`dist-tags.latest` → `0.4.1`；`dist.shasum` → `c36f770c…`；解包 tarball 后 `package.json` 为 `0.4.1`，`reply-capture.mjs` 里能找到新判据串 `is other-writable`。tag `v0.4.1` → `ce154658`。
+
+**0.4.1 不含 P416 的文案修正**（那条在 `ce154658` 之后合入），随下一个补丁发布。
+
