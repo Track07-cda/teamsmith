@@ -32,7 +32,7 @@ branch: task/P421-gate-red-attribution
 `P212 真实账本有命中`（15 处）都集中在我这两天写的文档里：
 
 - `docs/team/reviews/P415.md:7`、`docs/team/reviews/P418.md:9`、`docs/team/tasks/P415-safe-dir-own-group.md:16,18`
-  ——出现了别的项目名（ai_interview / erp，被扫描替换成 `<names#8>`）。
+  ——出现了别的项目名（本地用户的两个项目目录名，被扫描替换成 `<names#N>`）。
 - 同族文件里 `drwxrwxr-x <user> <user>` 命中用户名。
 
 要改的是**文档**：把别的项目名替换成「另一个项目（本地用户项目，带未升级的 PM）」这类描述，把 `ls` 输出的属主名
