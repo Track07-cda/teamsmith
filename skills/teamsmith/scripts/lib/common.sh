@@ -509,6 +509,7 @@ team_identity_resolve() {
   TEAM_IDENTITY_INHERIT_MAIN_ROOT="${TEAM_IDENTITY_INHERIT_MAIN_ROOT-${TEAM_MAIN_ROOT:-}}"
   TEAM_IDENTITY_INHERIT_PROJECT="${TEAM_IDENTITY_INHERIT_PROJECT-${TEAM_PROJECT:-}}"
   TEAM_IDENTITY_INHERIT_SESSION="${TEAM_IDENTITY_INHERIT_SESSION-${TEAM_SESSION:-}}"
+  TEAM_IDENTITY_INHERIT_STATE_DIR="${TEAM_IDENTITY_INHERIT_STATE_DIR-${TEAM_STATE_DIR:-}}"
   # 注意：这六个 TEAM_IDENTITY_* 一律**不 export** —— 它们是本进程内部的判定输入，
   # 泄进子进程会让子进程拿父进程的冲突档案去判自己的身份（M40 实测：panel 的 __panel-data 孩子被误拒）。
   # M50：先在父进程上下文把目录身份装进 memo（$(…) 子 shell 里的 memo 写留不下来，
@@ -1152,7 +1153,16 @@ team_load_config() {
   # 门禁，沙盒派单读到了真实项目的 state/dev.env），还会把派单提示词与 assignment 写进那个项目。
   # 临时/替代目录形状照旧生效（夹具靠它）。唯一的例外是 reload：它整条命令就是在写这个目录，
   # 判据更硬（拒绝并点名两个目录，见 team_cmd_reload）—— 所以这里不替它做决定。
-  if [ "${CMD:-}" != reload ] && team_state_dir_foreign; then
+  # state-authority 自己也在例外名单里：它的定位函数要看到**原始**的 state 根才能拒绝外来项目
+  # （P406 的「inside another project's .pi/team」断言）；先在这里替换掉，它就只能看到替换后的值。
+  # Only rewrite an **inherited** value. A caller that explicitly set TEAM_STATE_DIR for this invocation
+  # (the authority fixture, a deliberate alternative root) is not inheritance: the authority must see it
+  # verbatim so it can refuse a foreign root instead of silently landing on the project's own one.
+  # An explicit per-invocation value that names another project is still rejected by the authority's own
+  # locator, so the shell boundary does not need to rewrite it.
+  _sa_inherited=0
+  if [ "${TEAM_STATE_DIR_EXPLICIT:-0}" != 1 ] && [ "${TEAM_STATE_DIR:-}" = "${TEAM_IDENTITY_INHERIT_STATE_DIR:-__unset__}" ] && [ -n "${TEAM_STATE_DIR:-}" ]; then _sa_inherited=1; fi
+  if [ "${CMD:-}" != reload ] && [ "$_sa_inherited" = 1 ] && team_state_dir_foreign; then
     team_warn "TEAM_STATE_DIR=$TEAM_STATE_DIR 是别的项目的 state 目录（本项目是 $TEAM_MAIN_ROOT/.pi/team/state）：继承值被忽略，本命令按本项目执行"
     team_dim "  清掉继承变量：env -u TEAM_STATE_DIR …（或 cd 到那个项目再执行）" >&2
     TEAM_STATE_DIR="$TEAM_MAIN_ROOT/.pi/team/state"
@@ -1678,11 +1688,33 @@ team_authority_cli() { # <resolve|init|read|allocate> [参数]；助手自己取
   main="$(team_authority_main_root)" || return 1
   state="${TEAM_STATE_DIR:-}"
   [ -n "$state" ] || { team_err "state-authority：TEAM_STATE_DIR 未解析（先 team_load_config）"; return 1; }
+  # The common layer deliberately tolerates a foreign inherited state directory (it is only a warning for
+  # dispatch paths), but the authority must never silently adopt it: a fixture pointing at another project's
+  # .pi/team/state would otherwise start a second authority over there. The helper's locate() refuses that
+  # shape, so make the shell boundary fail closed as well.
+  # Unlike the ordinary warning in the common layer, this is a fail-closed refusal: the authority must
+  # never silently adopt a foreign root (a fixture pointing at another project's .pi/team/state would
+  # otherwise create a second authority there). Compare canonical paths, because a worktree main root
+  # may be a symlink target different from the directory that was passed in.
+  # Compare against the root the helper itself resolved, not against the environment variable:
+  # inside a fixture that runs from another project's directory the two differ, and the refusal must
+  # fire on the project the authority would actually create.
+  case "$state" in
+    */.pi/team/state)
+      _sa_other="${state%/.pi/team/state}"
+      if [ -n "$_sa_other" ] && { [ -d "$_sa_other/.git" ] || [ -f "$_sa_other/.git" ]; }; then
+        if [ "$_sa_other" != "$main" ]; then
+          team_err "state-authority：state 根在别的项目的 .pi/team 下（inside another project's .pi/team）：$state（本项目 $main/.pi/team/state）——请传本项目自己的状态根"
+          return 2
+        fi
+      fi
+      ;;
+  esac
   "$runner" "${TEAM_SKILL_DIR:-$(team_skill_dir)}/scripts/state-authority.mjs" --cli "$main" "$state" "$@"
 }
-team_authority_state_root() { team_authority_cli resolve --print stateRoot; }
-team_authority_init() { team_authority_cli init; }
-team_authority_read() { team_authority_cli read; }
+team_authority_state_root() { TEAM_AUTHORITY_CALL=1 team_authority_cli resolve --print stateRoot; }
+team_authority_init() { TEAM_AUTHORITY_CALL=1 team_authority_cli init; }
+team_authority_read() { TEAM_AUTHORITY_CALL=1 team_authority_cli read; }
 team_authority_allocate() { # <reminder|batch|queue> → 分配到的序号（持久 high-water，不重用）
   local kind="${1:-}"
   [ -n "$kind" ] || { team_err "state-authority：allocate 需要序号类别（reminder|batch|queue）"; return 1; }

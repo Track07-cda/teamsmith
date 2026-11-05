@@ -206,7 +206,10 @@ else
 fi
 [ ! -e "$ROOT/alt-state" ] && ok "冲突的 override 被拒绝时没有建出第二个权威目录" || bad "冲突的 override 留下了目录 $ROOT/alt-state"
 
-out="$(runchild "$C" TEAM_STATE_DIR="$B/.pi/team/state" -- "$PREP; team_authority_state_root" 2>&1)"; rc=$?
+# A caller may deliberately point at another project's state root; the authority must refuse it
+# itself. Mark it as explicit for this invocation so the shell's inherited-value rewrite (P420) does
+# not quietly turn it back into this project's own root before the authority sees it.
+out="$(runchild "$C" TEAM_STATE_DIR="$B/.pi/team/state" TEAM_STATE_DIR_EXPLICIT=1 -- "$PREP; team_authority_state_root" 2>&1)"; rc=$?
 if [ "$rc" -ne 0 ] && case "$out" in *"inside another project's .pi/team"*) true ;; *) false ;; esac; then
   ok "别的项目的 .pi/team 作为状态根：显式拒绝（inside another project's .pi/team）"
 else

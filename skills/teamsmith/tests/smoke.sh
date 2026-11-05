@@ -3514,9 +3514,8 @@ env TEAM_AGENT_CMD="$P237_TPL_BG" TEAM_AGENT_BIN=bash $TEAM dispatch dev T1.1 "$
   || bad "A template without the lane placeholder：带 {bg_ext} 的模板派单 --print 失败（见 $TMP/p237-lane.log）"
 assert_has "$TMP/p237-lane.log" "team_bg_run" "A template without the lane placeholder：带 {bg_ext} → 车道段出现"
 # P401：车道段的例外判据是三条**同时**成立（缺一条就变成「任何时候都内联等」，正是旧措辞的病）。
-assert_has "$TMP/p237-lane.log" "inline-wait budget (about 2 minutes)" "P401：车道例外带内联等待预算"
-assert_has "$TMP/p237-lane.log" "its result blocks your immediate next step" "P401：车道例外第二条——结果挡住下一步"
-assert_has "$TMP/p237-lane.log" "no other task work can advance meanwhile" "P401：车道例外第三条——没有别的活能干"
+assert_has "$TMP/p237-lane.log" "Do not wait inside the turn" "车道段明说不要在回合内等"
+assert_not "$TMP/p237-lane.log" "inline-wait budget" "车道段不再有内联等待预算"
 
 # ---------------------------------------------------------------- 6b. 容量守卫矩阵（D2：zram 不当额度）
 section "6b · 容量守卫矩阵（zram / 磁盘 swap 分账）"
@@ -8777,10 +8776,9 @@ assert_has "$TMP/print.log" "$P237_STATE3" "The built-in Pi prompt carries the t
 assert_has "$TMP/print.log" "waiting on: <id>" "The built-in Pi prompt carries the three states：挂起要求回合末行点名在等的 job id"
 assert_has "$TMP/print.log" "end your turn" "The built-in Pi prompt carries the three states：起完默认结束回合"
 assert_has "$TMP/print.log" "$P237_LANE" "The built-in Pi prompt carries the three states：完成叫醒是正常收割点"
-assert_has "$TMP/print.log" "$P237_BUDGET" "The built-in Pi prompt carries the three states：例外三条带内联预算数字"
+assert_not "$TMP/print.log" "$P237_BUDGET" "内置 Pi 提示词不再有内联等待预算"
 # P401：例外的三条要**同时**成立；只留给预算数字，读到的人就会把「等一下子」当成默认。
-assert_has "$TMP/print.log" "its result blocks your immediate next step" "P401：车道例外第二条（结果挡住下一步）也在提示词里"
-assert_has "$TMP/print.log" "no other task work can advance meanwhile" "P401：车道例外第三条（没有别的活能干）也在提示词里"
+assert_has "$TMP/print.log" "Do not wait inside the turn" "内置 Pi 提示词明说不要在回合内等"
 # 阻塞那条的示例必须点名通知 PM，不能是席位自己（否则按它照做的工人会通知自己、PM 静默收不到）
 assert_has "$TMP/print.log" 'notify pm "<one line>"' "The built-in Pi prompt carries the three states：hard-blocked 示例点名通知 PM"
 
@@ -8793,8 +8791,8 @@ assert_has "$TMP/print.log" "team bg list" "The resume guidance points at the on
 P237_SURFACES=("worker prompt:$TMP/print.log" "AGENTS template:$P237_TMPL" "PM prompt template:$P237_PMP" "protocol.md:$P237_PROTO" "workflows.md §E2:$P237_WF")
 for P237_PAIR in "${P237_SURFACES[@]}"; do
   P237_SURFACE="${P237_PAIR%%:*}"; P237_FILE="${P237_PAIR#*:}"
-  p237_has "$P237_SURFACE" "$P237_FILE" "$P237_LANE" "车道默认（完成叫醒是正常收割点）"
-  p237_has "$P237_SURFACE" "$P237_FILE" "$P237_BUDGET" "例外预算数字"
+  p237_has "$P237_SURFACE" "$P237_FILE" "harvest point" "收割点措辞在"
+  p237_absent "$P237_SURFACE" "$P237_FILE" "$P237_BUDGET" "内联等待预算（已于 2026-11-05 取消）"
   p237_has "$P237_SURFACE" "$P237_FILE" "delivered" "第一态 delivered"
   p237_has "$P237_SURFACE" "$P237_FILE" "hard-blocked" "第二态 hard-blocked"
   p237_has "$P237_SURFACE" "$P237_FILE" "$P237_STATE3" "第三态 suspended on background jobs"
@@ -10484,7 +10482,7 @@ else
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S1 session_start creates exactly one .reg" "12b-pi 扩展写就绪注册（发送方的判据）"
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S4 the wake names its own cut and where the whole text is" \
     "P370：watcher 路径上 wake 层也自己写标记（与 S27 的轮询路径同一条行为）"
-  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S2 wake is a custom team-inbox message with triggerTurn+followUp" "12b-pi 唤醒用的是 sendMessage(followUp+triggerTurn)"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S28 a say batch is delivered as steer" "12b-pi 指令批用 steer（P419）"
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S4 long payload is truncated in the wake (no payload dump)" "12b-pi 唤醒只带截断预览（不带 payload 全文）"
   # P370（S27）：watcher 前提无关的同一条行为 —— 轮询路径上真跑真判，跳不过去
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S27 the wake names its own cut and where the whole text is" \
