@@ -172,9 +172,19 @@ export function processIdentity(pid) {
   }
 }
 
-/** Canonical, nonsymlink ancestry. Sticky system temp parents are allowed, writable private parents are not. */
+/** Groups this process can write as; a directory owned by one of them is not a foreign trust domain. */
+const writableGroups = () => new Set([process.getgid(), process.getegid(), ...process.getgroups()])
+/** Why a writable ancestor is unsafe: someone outside this process's groups can replace its entries. */
+function foreignWriter(mode, gid, groups) {
+  if (mode & 0o1000) return '' // Sticky directories (system temp) protect entries the caller does not own.
+  if (mode & 0o002) return 'is other-writable'
+  if ((mode & 0o020) && !groups.has(gid)) return 'is group-writable outside the effective groups'
+  return ''
+}
+/** Canonical, nonsymlink ancestry. Sticky system temp parents are allowed; so are own-group 775 layouts. */
 export function safeDirectory(path, create = false) {
   if (!isAbsolute(path) || resolve(path) !== path) throw new Error('noncanonical directory')
+  const groups = writableGroups()
   let at = sep
   for (const part of path.split(sep).filter(Boolean)) {
     at = join(at, part)
@@ -184,7 +194,9 @@ export function safeDirectory(path, create = false) {
       mkdirSync(at, { mode: 0o700 })
       st = lstatSync(at)
     }
-    if (!st.isDirectory() || st.isSymbolicLink() || ((st.mode & 0o022) && !(st.mode & 0o1000))) throw new Error('unsafe directory ancestry')
+    if (!st.isDirectory() || st.isSymbolicLink()) throw new Error(`unsafe directory ancestry: ${at} is not a plain directory`)
+    const unsafe = foreignWriter(st.mode, st.gid, groups)
+    if (unsafe) throw new Error(`unsafe directory ancestry: ${at} ${unsafe}`)
   }
   if (realpathSync(path) !== path) throw new Error('directory identity changed')
   return path
@@ -578,6 +590,10 @@ export function captureDiskFingerprint(skill) {
 export function inspectRuntime({ root, state, config, session, window, skill }) {
   let disk
   try { disk = captureDiskFingerprint(skill) } catch (e) { return { state: 'unknown', reason: `disk:${e.code ?? e.name}` } }
+  // A refused ancestry is the reason registration never happened, so name the directory and the rule.
+  try { safeDirectory(root); safeDirectory(state) } catch (e) {
+    if (e.code !== 'ENOENT') return { disk, state: 'unknown', reason: `not registered: ${e.message}` }
+  }
   let runtime
   try { runtime = JSON.parse(readRegular(join(state, 'reply-capture/runtime.json'))) }
   catch (e) { return { disk, state: 'unknown', reason: `registration:${e.code ?? e.name}` } }

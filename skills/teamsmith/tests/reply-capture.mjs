@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Product parser/source evidence. All fixtures and mutations stay here, never in product code. */
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, copyFileSync, existsSync, symlinkSync, openSync, closeSync, appendFileSync, constants as C } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, copyFileSync, existsSync, symlinkSync, openSync, closeSync, appendFileSync, chmodSync, lstatSync, realpathSync, constants as C } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { spawn, spawnSync } from 'node:child_process'
@@ -9,7 +9,7 @@ import { spawn, spawnSync } from 'node:child_process'
 const here = dirname(fileURLToPath(import.meta.url))
 const modulePath = process.env.TEST_CAPTURE_MODULE ?? resolve(here, '../scripts/reply-capture.mjs')
 const product = await import(pathToFileURL(modulePath).href)
-const { parseReply, CaptureJournal, ReplyCapture, runReplyWriter, processIdentity, sourceKey } = product
+const { parseReply, CaptureJournal, ReplyCapture, runReplyWriter, processIdentity, sourceKey, safeDirectory, inspectRuntime, resolvePMIdentity } = product
 const tests = []
 const test = (name, run) => tests.push({ name, run })
 const message = (text, extra = {}) => ({ role: 'assistant', content: [{ type: 'text', text }], stopReason: 'stop', timestamp: 1, ...extra })
@@ -522,6 +522,129 @@ for (const fault of ['kill:body-staged', 'kill:index-written', 'kill:index-durab
   }))
 }
 
+// P415 · The ancestry refusal must name what it refuses, and an own-group 775 layout is not a foreign trust
+// domain. Both sides run: the acceptance would go red under the stricter pre-P415 rule (see ancestryFlip).
+const ancestryTests = []
+const ancestry = (name, run) => ancestryTests.push({ name, run })
+const ancestryTemp = () => realpathSync(mkdtempSync('/var/tmp/p415-ancestry.'))
+const foreignGroups = () => {
+  const saved = [process.getgid, process.getegid, process.getgroups]
+  process.getgid = () => 0
+  process.getegid = () => 0
+  process.getgroups = () => [0]
+  return () => { [process.getgid, process.getegid, process.getgroups] = saved }
+}
+const refusal = (run, ...fragments) => {
+  try { run() } catch (e) {
+    assert.ok(e.message.startsWith('unsafe directory ancestry'), `expected an ancestry refusal, got: ${e.message}`)
+    for (const fragment of fragments) assert.ok(e.message.includes(fragment), `${fragment} missing from: ${e.message}`)
+    return e
+  }
+  return assert.fail('expected an ancestry refusal, the directory was accepted')
+}
+ancestry('0755 ancestry is accepted (baseline)', () => {
+  const root = ancestryTemp()
+  try { assert.equal(safeDirectory(root), root) } finally { rmSync(root, { recursive: true, force: true }) }
+})
+ancestry('0775 owned by this process group is accepted (this machine layout)', () => {
+  const root = ancestryTemp()
+  const dir = join(root, 'own-group')
+  try {
+    mkdirSync(dir); chmodSync(dir, 0o775)
+    assert.equal(lstatSync(dir).gid, process.getgid(), 'fixture premise: the directory belongs to this process group')
+    assert.equal(safeDirectory(dir), dir)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+ancestry('1777 sticky temp parent stays accepted', () => {
+  const root = ancestryTemp()
+  const dir = join(root, 'sticky')
+  try {
+    mkdirSync(dir); chmodSync(dir, 0o1777)
+    assert.equal(safeDirectory(dir), dir)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+ancestry('0777 other-writable ancestor is refused by path', () => {
+  const root = ancestryTemp()
+  const dir = join(root, 'open')
+  try {
+    mkdirSync(dir); chmodSync(dir, 0o777)
+    refusal(() => safeDirectory(dir), dir, 'is other-writable')
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+ancestry('0775 owned by a group outside the process groups is refused by path', () => {
+  const root = ancestryTemp()
+  const dir = join(root, 'foreign-group')
+  try {
+    mkdirSync(dir); chmodSync(dir, 0o775)
+    const restore = foreignGroups()
+    try { refusal(() => safeDirectory(dir), dir, 'is group-writable outside the effective groups') } finally { restore() }
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+ancestry('real git project: own-group 0775 resolves, 0777 root and 0777 state are refused', () => {
+  const root = ancestryTemp()
+  const state = join(root, '.pi/team/state'), config = join(root, '.pi/team/config.sh'), cwd = process.cwd()
+  const context = { cwd: root, sessionId: 'p415-fixture', sessionFile: join(root, 'session.jsonl') }
+  try {
+    assert.equal(spawnSync('git', ['init', '-q', '-b', 'main', root]).status, 0)
+    mkdirSync(state, { recursive: true })
+    writeFileSync(config, '# fixture\n')
+    writeFileSync(join(root, 'session.jsonl'), '')
+    chmodSync(root, 0o775)
+    process.chdir(root)
+    try {
+      // Own group: the ancestry passes and the same entry stops at the next fact it actually needs.
+      assert.throws(() => resolvePMIdentity(context, {}), e => e.message === 'missing directed PM launch environment')
+      chmodSync(root, 0o777)
+      refusal(() => resolvePMIdentity(context, {}), root)
+      chmodSync(root, 0o775); chmodSync(state, 0o777)
+      refusal(() => resolvePMIdentity(context, { TEAM_STATE_DIR: state, TEAM_CONFIG_FILE: config, TEAM_PM_WINDOW: 'pm', TEAM_SESSION: 'p415' }), state)
+    } finally { process.chdir(cwd) }
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+ancestry('doctor reason names the directory and the rule, not an errno class', () => {
+  const root = ancestryTemp()
+  const state = join(root, '.pi/team/state'), config = join(root, '.pi/team/config.sh')
+  try {
+    mkdirSync(state, { recursive: true })
+    writeFileSync(config, '# fixture\n')
+    chmodSync(root, 0o775)
+    const args = { root, state, config, session: 'p415', window: 'pm', skill: resolve(here, '..') }
+    assert.equal(inspectRuntime(args).reason, 'registration:ENOENT', 'a missing registration is not a refusal')
+    const restore = foreignGroups()
+    try {
+      const refused = inspectRuntime(args)
+      assert.equal(refused.state, 'unknown')
+      assert.ok(refused.reason.startsWith('not registered: unsafe directory ancestry: '), `unexpected reason: ${refused.reason}`)
+      assert.ok(refused.reason.includes(root), `the refused directory is missing: ${refused.reason}`)
+      assert.ok(refused.reason.includes('is group-writable outside the effective groups'), `the rule is missing: ${refused.reason}`)
+    } finally { restore() }
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+async function ancestryFlip() {
+  const root = mkdtempSync('/var/tmp/p415-flip.')
+  try {
+    const scripts = join(root, 'scripts'); mkdirSync(scripts)
+    copyFileSync(resolve(here, '../scripts/replies.mjs'), join(scripts, 'replies.mjs'))
+    const source = readFileSync(modulePath, 'utf8')
+    const anchor = "  if (mode & 0o1000) return '' // Sticky directories (system temp) protect entries the caller does not own.\n" +
+      "  if (mode & 0o002) return 'is other-writable'\n" +
+      "  if ((mode & 0o020) && !groups.has(gid)) return 'is group-writable outside the effective groups'\n  return ''"
+    assert.equal(source.split(anchor).length, 2, 'flip: unique target for the pre-P415 rule')
+    const target = join(scripts, 'reply-capture.mjs')
+    writeFileSync(target, source.replace(anchor, "  return (mode & 0o022) && !(mode & 0o1000) ? 'is other-writable or group-writable' : ''"))
+    const red = spawnSync(process.execPath, [fileURLToPath(import.meta.url), '--select', 'ancestry'],
+      { env: { ...process.env, TEST_CAPTURE_MODULE: target }, encoding: 'utf8' })
+    const lines = `${red.stdout}${red.stderr}`.split('\n')
+    assert.equal(red.status, 1, `pre-P415 rule must fail the acceptance: ${lines.join(' | ')}`)
+    const flipped = lines.find(line => line.startsWith('FAIL ') && line.includes('0775 owned by this process group'))
+    assert.ok(flipped, 'the own-group acceptance must be the assertion that goes red')
+    for (const kept of ['0777 other-writable ancestor is refused by path', '1777 sticky temp parent stays accepted']) {
+      assert.ok(lines.includes(`PASS ${kept}`), `the flip must not change the ${kept} verdict`)
+      assert.ok(!lines.some(line => line.startsWith('FAIL ') && line.includes(kept)), `the flip changed the ${kept} verdict`)
+    }
+    console.log(`PASS flip pre-P415 rule: own-group acceptance red (${flipped})`)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+}
 // The shipped instruction surfaces print a concrete marker example. This group runs that printed text
 // through the product parser and the real writer, so the promise "printed example works" is exercised
 // rather than asserted about prose. A broken example must fail here (no vacuous pass).
@@ -593,10 +716,10 @@ if (args[0] === '--recover-child') { await recoverChild(args[1]); process.exit(0
 if (args[0] === '--crash-child') crashChild(args[1], args[2])
 let groups = ['parser']
 if (args.length && args[0] !== '--all') {
-  if (args[0] !== '--select' || args.length !== 2) throw new Error('usage: reply-capture.mjs --all | --select parser,state,mutations,state-mutations  (or --select example with TEST_EXAMPLE_FILE)')
+  if (args[0] !== '--select' || args.length !== 2) throw new Error('usage: reply-capture.mjs --all | --select parser,state,mutations,state-mutations,ancestry  (or --select example with TEST_EXAMPLE_FILE)')
   groups = args[1].split(',')
-} else if (args[0] === '--all') groups = ['parser', 'state', 'mutations', 'state-mutations']
-if (groups.some(g => !['parser', 'state', 'mutations', 'state-mutations', 'example'].includes(g))) throw new Error('unknown test group')
+} else if (args[0] === '--all') groups = ['parser', 'state', 'mutations', 'state-mutations', 'ancestry']
+if (groups.some(g => !['parser', 'state', 'mutations', 'state-mutations', 'ancestry', 'example'].includes(g))) throw new Error('unknown test group')
 let passed = 0, failed = 0
 if (groups.includes('parser')) for (const { name, run } of tests) {
   try { await run(); passed++; console.log(`PASS ${name}`) }
@@ -613,6 +736,17 @@ if (groups.includes('mutations')) {
 if (groups.includes('state-mutations')) {
   try { await stateMutations(); passed += 4 }
   catch (e) { failed++; console.log(`FAIL state mutations: ${e.stack}`) }
+}
+if (groups.includes('ancestry')) {
+  for (const { name, run } of ancestryTests) {
+    try { await run(); passed++; console.log(`PASS ${name}`) }
+    catch (e) { failed++; console.log(`FAIL ${name}: ${e.stack}`) }
+  }
+  // The flip mutates the module under test, so it is meaningless again inside its own child run.
+  if (!process.env.TEST_CAPTURE_MODULE) {
+    try { await ancestryFlip(); passed++ }
+    catch (e) { failed++; console.log(`FAIL ancestry flip: ${e.stack}`) }
+  }
 }
 if (groups.includes('example')) {
   try { await shippedExample(); passed += 1 }

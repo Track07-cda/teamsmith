@@ -5,6 +5,16 @@
 > `SKILL.md`/`references/**`/`templates/**`/`extension/**` 在 Pi 里输入 `/reload`（或 `/pi-team-reload`）即生效；
 > 判断自己是不是旧的：`team mark-loaded`（开局记一次）→ `team version --check`。
 
+## v0.4.1（2026-11-05）
+
+修复 0.4.0 的一处功能失效：关键回复在组可写的项目目录下从不注册。
+
+- 目录安全检查原先拒绝任何“组可写且无 sticky 位”的祖先目录。个人项目常见的 775 布局（组就是本人）因此被判不安全，`[[team-reply]]` 标记不会被剥离、也不会进编号回复。
+- 现在只拒绝“他人可写”，以及“组可写但该组不在本进程的有效组内”；sticky 位仍然放行。
+- `team doctor` 的“关键回复运行”在未注册时给出目录与原因，不再只显示 `unknown`。
+
+升级方式：在 Pi 中执行 `/reload`，或运行 `npm i -g teamsmith@0.4.1`。无需修改目录权限。
+
 ## v0.4.0（2026-11-04）
 
 升级方式：在 Pi 中执行 `/reload`，或运行 `npm i -g teamsmith@0.4.0`。无配置迁移。
