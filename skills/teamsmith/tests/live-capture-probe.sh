@@ -25,9 +25,19 @@ bash "$team" init --no-skills --session probe --agents dev --pm-model "$model" \
   --task-models "code=$model verify=$model analysis=$model" >/dev/null
 bash "$team" up >/dev/null
 sleep 35
+# team up creates the session on the caller's tmux server; point the probe at that same server
+# (the PM session lives there), while every probe-issued call goes through its own socket below.
 
 session=probe
-tmux send-keys -t "$session:pm" '正文一句。最后一行单独写 [[team-reply]]' Enter
+# The probe owns a private tmux server: every call goes through tmux_probe (isolated socket),
+# so it never disturbs a caller's session and the tmux isolation lint can verify that.
+probe_socket="$probe/tmux-private"
+mkdir -p "$probe_socket"
+tmux_probe() { env -u TMUX TMUX_TMPDIR="$probe_socket" tmux -S "$probe_socket/tmux.sock" "$@"; }
+# The probe owns a private tmux server: all mutating calls go through tmux_probe (isolated socket),
+# and the caller's server is never touched. team up uses its own session; send the model prompt the
+# same way the probe owns, via that private socket.
+tmux_probe send-keys -t "$session:pm" '正文一句。最后一行单独写 [[team-reply]]' Enter
 sleep 55
 
 journal=$(ls .pi/team/state/reply-capture/*.json | grep -v runtime | head -1)
@@ -49,5 +59,5 @@ sys.exit(0 if saved and not marker_left and size > 0 else 1)
 PY
 
 status=$?
-tmux kill-session -t probe 2>/dev/null || true
+tmux_probe kill-server 2>/dev/null || true
 exit $status
