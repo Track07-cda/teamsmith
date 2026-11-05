@@ -57,7 +57,7 @@ const CMD_ELLIPSIS = '…'
 const SUSPEND_DEFAULT =
   'End your turn after starting; the completion wake-up (several completions merge into one message) is the normal harvest point.'
 const NO_INLINE_WAIT =
-  'Prefer ending the turn over waiting inside it: `sleep`, `team wait` and a blocking harvest keep the user from typing. Guidance, not a restriction.'
+  'Do not wait inside the turn (`sleep`, `team wait`, a blocking harvest): end the turn instead.'
 
 /**
  * 定位**本会话自己的根**：team-bg 的产物（作业日志、账本、合并窗口）都是会话本地的，
