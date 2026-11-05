@@ -27,12 +27,19 @@ git push public main:dev           # dev 镜像同名前进
 ```
 $ npm whoami --userconfig <temp>            → track07-cda
 $ npm stage publish --access public --tag latest --userconfig <temp>
-+ teamsmith@0.4.0 (staged with id 4af296c4-78dd-4ae4-8920-36bfd67d5e96)
-npm notice stage package teamsmith@0.4.0 has been staged with tag latest
++ teamsmith@0.4.0 (staged with id 4af296c4-…)      ← 第一次，来自 e5d565b0
+→ 用户 reject 后重新暂存（见 §三之二）
++ teamsmith@0.4.0 (staged with id 004eedeb-287d-4655-a018-2af34b442f36)  shasum 34a978e7…
 publish_rc=0
 $ npm stage list
 status: validating | access: public | shasum: d007d317654c2dfe0cdcf62f37b67a423ddee277 | staged by track07-cda
 ```
+
+### 三之二、为什么重新暂存了一次（PM 的操作失误，记下来）
+
+P413（CI 里那八条 `command not found`）修完后，为了「标签指向含修复的提交」，我把**已推的** `v0.4.0` 标签强制移到了 `d64f5a34`，却发现 npm 侧仍是 `e5d565b0` 的暂存，而 npm 不允许同版本二次暂存（`409 Conflict`）。撤回需要 2FA，只能由用户在网页 reject；用户 reject 后从 `d64f5a34` 重新暂存成功（id `004eedeb`、shasum `34a978e7…`）。现在的三方一致：tag `d64f5a34` = 暂存来源 = 将要发布的 tarball。
+
+教训写在这里：**推出去的标签不要动**。正确顺序是先确认要发哪棵树（门禁全绿），再打 tag；这次的代价是用户手动 reject 一次。
 
 **还没真正发布**：`npm stage publish` 只做到暂存，要用户在 npmjs 网页批准 2FA 才生效。批准后核对 `npm view teamsmith@0.4.0 version dist.tarball` 与 `npm view teamsmith dist-tags`。
 
