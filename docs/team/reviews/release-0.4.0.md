@@ -20,26 +20,21 @@ git push public main:dev           # dev 镜像同名前进
 
 远端核对：`refs/heads/main = e5d565b0…`、`refs/tags/v0.4.0 = 1eb01e3d…`。
 
-## 三、npm 未完成：缺发布凭据（卡在这里）
+## 三、npm 暂存完成（等用户 2FA 批准）
+
+凭据在 `~/.npm-token`（用户提供）。PM 用一份**临时 userconfig**（`/var/tmp/npmrc-publish.*`，600 权限，用后 shred）注入，token 值不进对话、不进 argv、不进日志：
 
 ```
-$ npm stage publish --access public --tag latest
-npm error code ENEEDAUTH
-npm error need auth This command requires you to be logged in to https://registry.npmmirror.com
+$ npm whoami --userconfig <temp>            → track07-cda
+$ npm stage publish --access public --tag latest --userconfig <temp>
++ teamsmith@0.4.0 (staged with id 4af296c4-78dd-4ae4-8920-36bfd67d5e96)
+npm notice stage package teamsmith@0.4.0 has been staged with tag latest
+publish_rc=0
+$ npm stage list
+status: validating | access: public | shasum: d007d317654c2dfe0cdcf62f37b67a423ddee277 | staged by track07-cda
 ```
 
-本机 `npm config get registry` = `https://registry.npmmirror.com`（镜像，不是 npmjs），且环境里没有 `NPM_TOKEN`、仓库无 `.npmrc`。镜像站不接受发布。**凭据属用户本人，PM 不读取也不代填。**
-
-用户在自己手上执行（二选一）：
-
-```bash
-# A. 直接对 npmjs 暂存（网页 2FA 批准后才算发布）
-npm stage publish --access public --tag latest --registry https://registry.npmjs.org
-
-# B. 先配置 token（用户自己写入，PM 不接触），再发布
-npm config set //registry.npmjs.org/:_authToken=<用户自己的 token>
-npm stage publish --access public --tag latest --registry https://registry.npmjs.org
-```
+**还没真正发布**：`npm stage publish` 只做到暂存，要用户在 npmjs 网页批准 2FA 才生效。批准后核对 `npm view teamsmith@0.4.0 version dist.tarball` 与 `npm view teamsmith dist-tags`。
 
 ## 四、本次未做（写明边界）
 
