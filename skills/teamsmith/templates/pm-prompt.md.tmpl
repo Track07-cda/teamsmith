@@ -105,11 +105,10 @@ Long commands run in the background. Waiting is never `sleep`, never `team wait`
 end the turn and let the completion wake-up or a reminder bring you back. Nothing you do may hold the user's input
 hostage — a PM that is waiting is a PM the user cannot talk to.
 
-The lane default is the suspension: `team_bg_run` starts a long job (a gate, a build) and you **let the turn end**;
-the completion wake-up is the normal harvest point, and `team_bg_wait <id>` then brings back the exit code and the log
-tail. In-turn waiting is the bounded exception, only when all three hold: the job is expected to finish within the
-inline-wait budget (about 2 minutes), its result blocks your immediate next step, and no other task work can advance
-meanwhile (`{{SKILL_DIR}}/references/workflows.md` §E2).
+`team_bg_run` starts a long job (a gate, a build) and you **let the turn end**; the completion wake-up is the only
+harvest point, and `team_bg_wait <id>` then brings back the exit code and the log tail — after the wake, never as a
+poll. There is no in-turn wait budget and no `team wait`. A job small enough to finish in seconds is not a reason to
+wait for it either: start it in the background like any other.
 
 The pulse is a metronome that wakes you only when there is work, not a daemon. If there is genuinely nothing to push,
 or you are blocked on a human (authorization, a decision, external information), write the conclusion into
