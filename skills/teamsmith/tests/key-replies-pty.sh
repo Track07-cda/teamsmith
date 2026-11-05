@@ -92,8 +92,8 @@ kr_group_pages() {
   start_panel || { bad "pages：面板起不来"; return 1; }
   keys "5"; sleep 0.6
   want_frame list5 "pages：第 5 页列表帧（编号/标题/发布者标签）" "#2 第二份回复" "#1 完整结论与取舍" "关键回复"
-  assert_has "$tmp/$current/list5.txt" "「这条回复是写给谁的？」" "pages：第 5 页说明行带着判据的自测题（删整行或只删自测题都会红）"
-  assert_has "$tmp/$current/list5.txt" "个编号槽位" "pages：列表带编号槽位计数"
+  assert_not "$tmp/$current/list5.txt" "「这条回复是写给谁的？」" "pages：第 5 页不再有反问式说明行（把说明行加回去必须变红）"
+  assert_has "$tmp/$current/list5.txt" "2 条" "pages：列表显示条数（新文案「{n} 条」，不再是内部行话）"
   assert_has "$tmp/$current/list5.txt" "更早" "pages：Older 控件可见"
   ev_save "$tmp/$current/list5.txt" "pty-pages-list5.txt"
   # 原 1–4 页不动 + Tab 回绕：5 → 1
@@ -148,7 +148,7 @@ PYT
   start_panel || { bad "overview：面板起不来"; return 1; }
   want_frame ov_pane "overview：面板总览上的摘要行" "#1 总览入口标题" "最新关键回复"
   keys "5"; sleep 0.6
-  want_frame ov_page5 "overview：按 5 到第 5 页最新列表" "#1 总览入口标题" "个编号槽位"
+  want_frame ov_page5 "overview：按 5 到第 5 页最新列表" "#1 总览入口标题" "1 条"
   keys Enter; sleep 0.6
   want_frame ov_body "overview：列表上 Enter 用同一正文视窗打开" "总览入口回复" "只读 · 按发布的原文显示"
   ev_save "$tmp/$current/ov_pane.txt" "pty-overview-summary.txt"
@@ -163,7 +163,7 @@ kr_group_list() {
   for i in $(seq 2 60); do kr_cli "$ROOT" reply post --from dev2 --title "第 $i 号" --stdin <"$b" >/dev/null; done
   start_panel || { bad "list：面板起不来"; return 1; }
   keys "5"; sleep 0.6
-  want_frame page1 "list：第 1 页（最新）" "#60 第 60 号" "个编号槽位"
+  want_frame page1 "list：第 1 页（最新）" "#60 第 60 号" "60 条"
   keys Left; sleep 1.2
   want_frame page2 "list：Older 拿到更旧的一页（50 个槽位一页，最旧页只剩 10 条）" "#10 第 10 号" "#1 第 1 号"
   keys Left; sleep 1.0
@@ -181,7 +181,7 @@ kr_group_list() {
   keys Right; sleep 1.2
   want_frame newer "list：Newer 回到上一页（最新页顶行 #60）" "#60 第 60 号"
   keys "r"; sleep 1.2
-  want_frame newest "list：r 回到最新页" "#60 第 60 号" "个编号槽位"
+  want_frame newest "list：r 回到最新页" "#60 第 60 号" "60 条"
   ev_save "$tmp/$current/page3.txt" "pty-list-oldest.txt"
 }
 
@@ -202,7 +202,7 @@ kr_group_body() {
   keys PageDown; sleep 0.6
   want_frame pgdn "body：PgDn 回到结尾" "END-MARKER-P234"
   keys "q"; sleep 0.6
-  want_frame ret "body：q 回列表（不是收起控制台）" "个编号槽位"
+  want_frame ret "body：q 回列表（不是收起控制台）" "1 条"
   assert_eq "body：q 后窗格仍然活着" "$(pty_pane_state | cut -d: -f1)" "0"
   # 坏正文：本地不可用提示 + 同样的返回路
   local KR="$state/key-replies" body_id
@@ -221,7 +221,7 @@ PYB
   want_frame bad "body：坏正文给出不可用提示" "不可用"
   assert_has "$tmp/$current/bad.txt" "返回" "body：坏正文同样有返回路"
   keys "q"; sleep 0.6
-  want_frame bad_back "body：坏正文返回后列表仍在" "个编号槽位"
+  want_frame bad_back "body：坏正文返回后列表仍在" "1 条"
   ev_save "$tmp/$current/end.txt" "pty-body-end.txt"
 }
 
@@ -440,7 +440,7 @@ kr_group_resize() {
   want_frame narrow "resize：59 列下页签身份与 Older 仍在" "关键回复" "更早"
   tmux -L "$sock" resize-window -t "$sess:panel" -x 140 -y 34 2>/dev/null || true
   sleep 0.8
-  want_frame wide "resize：放大后在仍在第 5 页且列表可用" "#1 缩放一号" "个编号槽位"
+  want_frame wide "resize：放大后在仍在第 5 页且列表可用" "#1 缩放一号" "1 条"
   keys Enter; sleep 0.6
   tmux -L "$sock" resize-window -t "$sess:panel" -x 61 -y 18 2>/dev/null || true
   sleep 0.8
@@ -457,7 +457,7 @@ kr_group_language() {
   printf 'lang=en\n' >"$state/panel.conf"
   start_panel || { bad "language：面板起不来"; return 1; }
   keys "5"; sleep 0.6
-  want_frame en "language：en 表下第 5 页标签与路由完整（含说明行的自测题）" "key replies" "Older" "Older" '"who is this reply written for?"'
+  want_frame en "language：en 表下第 5 页标签与路由完整（说明行已删：反问句不在，单数用单数式）" "key replies" "Older" "#1 语言一号" "1 reply" "!written for the user"
   printf 'lang=zh\n' >"$state/panel.conf"
   start_panel || bad "language：重启失败"
   keys "5"; sleep 0.6
@@ -481,7 +481,7 @@ kr_group_async() {
   # ② 进第 5 页 → 多一个 list，无 body
   reset_argv
   keys "5"; sleep 1.2
-  want_frame list "async：第 5 页列表到达" "个编号槽位"
+  want_frame list "async：第 5 页列表到达" "2 条"
   assert_eq "async：进第 5 页后 body 仍为 0" "$(block_calls reply_body)" "0"
   assert_match "$(kr_argv)" 'reply_list' "async：list 调用进 argv 日志"
   # ③ 打开正文 → 一个带编号的 body 调用
@@ -530,7 +530,7 @@ kr_group_compose() {
   want_frame draft "compose：第 5 页上 m 打开写信面板" "写信" 
   assert_has "$tmp/$current/draft.txt" "Esc" "compose：写信面板带取消提示"
   keys Escape; sleep 0.5
-  want_frame after "compose：Esc 回到第 5 页列表" "个编号槽位"
+  want_frame after "compose：Esc 回到第 5 页列表" "1 条"
   local after_store
   after_store="$(find "$state/key-replies" -printf '%p %s %T@\n' | sort | sha256sum | cut -d' ' -f1)"
   assert_eq "compose：写信不写 key-replies store（前后哈希一致）" "$after_store" "$before_store"

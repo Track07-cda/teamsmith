@@ -13,7 +13,7 @@
 #   output    短/长/失败/被杀/超量 五格落点与退出码
 #   env       剥离三个「替你说 yes」的变量、不注入 --yes
 #   resolve   项目根向上找、CLI 解析顺序（项目本地 → TEAM_CLI → 兄弟目录）
-#   probe     表里每行路径喂 `--teamsmith-slash-probe`，不得得到顶层「未知子命令：<命令>」
+#   probe     表里每行路径喂 `--teamsmith-slash-probe`，不得得到顶层「unknown command: <命令>」
 #
 # `--flip`：把实现逐条改坏（scratch 副本），要求**具名组**变红、真实源保持绿 —— 证明这套夹具会咬人。
 # 纯逻辑组零进程；只有 probe 组起真 CLI（read-only 的 `--teamsmith-slash-probe` 探针）。
@@ -449,14 +449,14 @@ async function runGroups(): Promise<void> {
     for (const row of mod.TEAM_ROWS) {
       for (const p of row.paths) {
         const out = runCli(p)
-        const top = `未知子命令：${p[0]}`
-        if (out.includes('未知参数') || out.includes('未知子命令')) ownRefusals++
+        const top = `unknown command: ${p[0]}`
+        if (out.includes('未知参数') || out.includes('未知子命令') || out.includes('unknown command:')) ownRefusals++
         check(`表里这一行 CLI 真的分发：team ${p.join(' ')}`, !out.includes(top), out.split('\n')[0].slice(0, 60))
       }
     }
     check('探针非空洞：至少 5 行得到 CLI 自己的参数/子命令拒绝（真的分发了）', ownRefusals >= 5, `ownRefusals=${ownRefusals}`)
     const bad = runCli(['frobnicate'])
-    check('红侧样本：表外命令得到顶层「未知子命令：frobnicate」', bad.includes('未知子命令：frobnicate'), bad.split('\n')[0].slice(0, 60))
+    check('红侧样本：表外命令得到顶层「unknown command: frobnicate」', bad.includes('unknown command: frobnicate'), bad.split('\n')[0].slice(0, 60))
   }
 
   if (savedCli === undefined) delete process.env.TEAM_CLI

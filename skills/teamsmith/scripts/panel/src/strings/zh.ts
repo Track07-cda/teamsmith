@@ -411,9 +411,10 @@ export const zh = {
   replyNewer: '更新',
   replyBack: '返回',
   replyScrollHint: '↑/↓ PgUp/PgDn Home/End 滚动',
-  replyTotalSlots: '{n} 个编号槽位',
+  replyTotalSlots: '{n} 条',
+  // Chinese has no singular form; this key exists so the English table can say "1 reply".
+  replyTotalSlotOne: '{n} 条',
   replyTailWarning: '索引尾部不完整（上一次追加没有写完）',
-  replyPageNote: '「这条回复是写给谁的？」——PM 写给用户的回复都在这里',
 
   // 全局键位（页脚）
   keyCompose: 'm 写信',

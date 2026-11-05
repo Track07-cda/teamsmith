@@ -183,7 +183,7 @@ kr_group_pane() {
   keys "5"; sleep 0.6
   want_frame list5 "pane：第 5 页列表帧（编号 + 标题 + 发布者标签）" "#3 长正文" "#2 第二份回复" "#1 完整结论与取舍" "关键回复"
   assert_has "$tmp/$current/list5.txt" "关键回复" "pane：页签显示第 5 页身份"
-  assert_has "$tmp/$current/list5.txt" "个编号槽位" "pane：列表带编号槽位计数（不冒充可读回复数）"
+  assert_has "$tmp/$current/list5.txt" "3 条" "pane：列表显示条数（新文案「{n} 条」，计数不是可读数）"
   ev_save "$tmp/$current/list5.txt" "pane-list5.txt"
   # ② Enter 打开焦点（最新号）→ 正文视窗；End 滚到最后一行，END-MARKER 可达
   keys Enter; sleep 0.6
@@ -199,7 +199,7 @@ kr_group_pane() {
   ev_save "$tmp/$current/viewer_end.txt" "pane-viewer-end.txt"
   # ③ q 返回列表（不是收起整个控制台）：列表在、窗格没死
   keys "q"; sleep 0.6
-  want_frame back "pane：q 回到列表（同页状态）" "#3 长正文" "个编号槽位"
+  want_frame back "pane：q 回到列表（同页状态）" "#3 长正文" "3 条"
   assert_eq "pane：q 后窗格仍然活着（0 表示活）" "$(pty_pane_state | cut -d: -f1)" "0"
   # ④ 重启后仍可读：面板页记的是第 5 页，store 不变 → 列表照旧
   start_panel || bad "pane：重启失败"
@@ -236,7 +236,7 @@ kr_group_demand() {
   # ② 进第 5 页：多一个 reply_list（带 cursor 或 newest 形态）
   reset_argv
   keys "5"; sleep 1.5
-  want_frame list "demand：第 5 页列表到达" "个编号槽位"
+  want_frame list "demand：第 5 页列表到达" "2 条"
   assert_eq "demand：进第 5 页后 body 调用仍为 0" "$(block_calls reply_body)" "0"
   if [ "$(block_calls reply_list)" -ge 1 ]; then ok "demand：进第 5 页后 list 被调度（$(block_calls reply_list) 次）"; else bad "demand：进第 5 页后没有 list 调用"; fi
   assert_has "$(kr_argv)" 'reply_list' "demand：argv 日志里能看到 reply_list 的真实参数"
@@ -250,7 +250,7 @@ kr_group_demand() {
   # ④ 返回列表：不再请求 body
   reset_argv
   keys "q"; sleep 1.2
-  want_frame back "demand：返回列表" "个编号槽位"
+  want_frame back "demand：返回列表" "2 条"
   assert_eq "demand：返回列表后 body 不再被请求" "$(block_calls reply_body)" "0"
   # ⑤ 离开第 5 页：list/body 都不再请求
   reset_argv

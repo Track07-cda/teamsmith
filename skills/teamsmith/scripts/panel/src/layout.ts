@@ -1364,10 +1364,9 @@ function replyNavLine(ctx: Ctx, innerW: number): PlacedLine {
 }
 
 /**
- * Page 5's list block. It draws the nav row, the page's one-line self-description (what this page
- * holds and who publishes into it), the slot count (never a claim about readable replies), the tail
- * warning when the reader reported one, and the windowed rows. The returned window is what the App
- * clamps `↑`/`↓` against; `focus` is the focused slot's number.
+ * Page 5's list block. It draws the nav row, the slot count (never a claim about readable
+ * replies), the tail warning when the reader reported one, and the windowed rows. The returned
+ * window is what the App clamps `↑`/`↓` against; `focus` is the focused slot's number.
  */
 function replyListBlock(ctx: Ctx): Block | null {
   const { s, blocks, deg, view } = ctx
@@ -1384,18 +1383,17 @@ function replyListBlock(ctx: Ctx): Block | null {
     replyList: win,
     summary: { line: truncLine(ln(seg(` ${s.replyHeading}`, 'heading')), ctx.width) },
   })
-  const lines: PlacedLine[] = [
-    replyNavLine(ctx, innerW),
-    { line: truncLine(ln(seg(` ${s.replyPageNote}`, 'dim')), innerW) },
-  ]
+  const lines: PlacedLine[] = [replyNavLine(ctx, innerW)]
   if (!data || deg.has('reply_list')) {
     lines.push({ line: truncLine(ln(seg(` ${data ? s.dash : s.replyLoading}`, 'dim')), innerW) })
     return build(lines, { focus: 0, offset: 0, visible: 0, count: 0 })
   }
   // An empty store says so in one line: the slot count would only repeat "0" (and it is never a
-  // claim about readable replies when the store does have slots).
+  // claim about readable replies when the store does have slots). A one-slot store gets the
+  // singular form, because "1 replies" reads as a defect on the English page.
   if (data.state !== 'empty') {
-    lines.push({ line: truncLine(ln(seg(` ${fill(s.replyTotalSlots, { n: data.total_slots })}`, 'dim')), innerW) })
+    const count = data.total_slots === 1 ? s.replyTotalSlotOne : s.replyTotalSlots
+    lines.push({ line: truncLine(ln(seg(` ${fill(count, { n: data.total_slots })}`, 'dim')), innerW) })
   }
   if ((data.warnings ?? []).some((w) => w.kind === 'partial-tail')) {
     lines.push({ line: truncLine(ln(seg(` ${s.replyTailWarning}`, 'warn')), innerW) })
