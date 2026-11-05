@@ -115,6 +115,9 @@ function derivedTitle(body) {
 
 /** No mutation outside exact original control ranges; character offsets are NOT UTF-8 byte offsets. */
 const TAG_PREFIX = /^\u00a7\d+\u00a7\s*/
+/** What a host may legitimately change about a reply we just produced: the leading tag it asked for,
+ *  and trailing whitespace left behind by removing the control line. Nothing else is compared. */
+const normalizeReplyText = text => String(text).replace(TAG_PREFIX, '').replace(/\s+$/, '')
 
 export function parseReply(message) {
   const blocks = Array.isArray(message.content) ? message.content : []
@@ -343,7 +346,7 @@ function sameReplyMessage(a, b) {
     const other = b.content[i]
     if (!item || !other || item.type !== other.type) return false
     if (item.type !== 'text') return isDeepStrictEqual(item, other)
-    return String(item.text).replace(TAG_PREFIX, '') === String(other.text).replace(TAG_PREFIX, '')
+    return normalizeReplyText(item.text) === normalizeReplyText(other.text)
   })
 }
 
@@ -355,7 +358,17 @@ export class ReplyCapture {
     this.running = new Set()
   }
   memoryHost(view) { return this.current() && sameIdentity(this.identity, view.identity) }
-  eligibleHost(view) { return this.memoryHost(view) && this.verify() }
+  // Re-proving identity costs a git/tmux/getconf round trip; doing it on every event made a transient
+  // shell failure look like a refused host, which dropped the reply. Prove once per turn and reuse it.
+  eligibleHost(view) {
+    if (!this.memoryHost(view)) return false
+    const a = this.activity
+    if (a && typeof a.verified === 'boolean') return a.verified
+    let ok = false
+    try { ok = !!this.verify() } catch { ok = false }
+    if (a) a.verified = ok
+    return ok
+  }
   report(reason, entryId = '') {
     try { this.diagnostic({ reason, entryId, path: this.journal.path }) }
     catch { /* An unavailable diagnostic sink must not block final message cleanup. */ }
@@ -432,7 +445,8 @@ export class ReplyCapture {
   }
   reset() { this.activity = null }
   recover(view) {
-    if (this.activity || !this.eligibleHost(view)) return
+    if (this.activity) { this.report('recover-skip:busy'); return }
+    if (!this.eligibleHost(view)) { this.report('recover-skip:ineligible'); return }
     let records
     try {
       records = this.journal.transact(snapshot => {
@@ -444,9 +458,17 @@ export class ReplyCapture {
             record.reason = 'attempt-owner-exited'
           }
         }
-        return Object.values(snapshot.sources).filter(record => record.status === 'eligible' &&
+        const all = Object.values(snapshot.sources)
+        const keep = all.filter(record => record.status === 'eligible' &&
           branchWitness(view, record.startLeaf, record.entryId, record.settledLeaf) &&
           sameReplyMessage(view.entry(record.entryId)?.message, record.message))
+        for (const record of all) {
+          if (record.status !== 'eligible' || keep.includes(record)) continue
+          const why = !branchWitness(view, record.startLeaf, record.entryId, record.settledLeaf) ? 'not-on-branch'
+            : 'text-differs'
+          this.report(`recover-skipped:${why}`, record.entryId)
+        }
+        return keep
       })
     } catch (e) {
       if (e.code !== 'ENOENT') this.report(`recovery:${e.code ?? e.name}`)
@@ -455,7 +477,10 @@ export class ReplyCapture {
     for (const record of records) this.attempt(record, view)
   }
   attempt(record, view) {
-    if (this.activity || !this.eligibleHost(view)) return
+    if (this.activity || !this.eligibleHost(view)) {
+      this.report(this.activity ? 'attempt-busy' : 'attempt-ineligible', record.entryId)
+      return
+    }
     const token = randomUUID()
     const key = sourceKey(this.identity, record.entryId)
     try {
@@ -466,7 +491,8 @@ export class ReplyCapture {
         stored.attempt = { token, ...this.owner, at: new Date().toISOString() }
         return true
       })
-      if (!acquired || !this.eligibleHost(view)) return
+      if (!acquired) { this.report('attempt-cas-lost', record.entryId); return }
+      if (!this.eligibleHost(view)) { this.report('attempt-ineligible', record.entryId); return }
     } catch (e) { this.report(`attempting:${e.code ?? e.name}`, record.entryId); return }
     // Durable CAS above is the barrier, including a crash right before this invocation.
     const work = Promise.resolve().then(() => {
