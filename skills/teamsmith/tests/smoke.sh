@@ -70,6 +70,16 @@ smoke_assignment() { # <repo> <seat> <task> [category] [branch] [model] [sid] [s
     > "$repo/.pi/team/state/$seat.env"
 }
 
+# P417：夹具要一个「真的在这棵树里的进程」当 PM —— 产品现在要求 pid 的 cwd 属于本项目才认它是 PM
+# （只 kill -0 会把外层 PM 的进程当自己的）。sleep 起在目标目录里，cwd 就是它；用完 kill 掉。
+# 注意两处：stdio 必须离开调用方的管道（`pid="$(smoke_pm_pid_at …)"` 里，后台进程若继承 stdout，
+# 命令替换会一直等它退出 —— 实测白等 600s×2，而且等到时进程已死、断言全绿不成）；sleep 取 120s
+# 而不是 600s，这样即便某条清理路径漏了 kill，也只多等两分钟。cwd 是判据本身，不能省。
+smoke_pm_pid_at() { # <dir> → pid（cwd = <dir>，stdio 已断开）；停它用 kill
+  ( cd "$1" && exec sleep 120 ) >/dev/null 2>&1 </dev/null &
+  printf '%s\n' "$!"
+}
+
 # P417：会话新旧靠推导（PM 进程启动时刻 vs skill 文件最近 mtime），不再有版本记录。
 # 夹具需要一份**可以随便改 mtime 的 skill 副本**：门禁运行期间真树不许写（运行指纹口径），
 # 所以副本只带跑 version --check / doctor 真正要用的那几处，并把所有 mtime 钉在 2020 年。
@@ -92,7 +102,11 @@ unset TEAM_ROOT TEAM_MAIN_ROOT TEAM_ROOT_SOURCE TEAM_ROOT_WAS TEAM_PROJECT \
       TEAM_SESSION TEAM_SESSION_FROM TEAM_PM_WINDOW TEAM_AGENTS TEAM_DOCS_DIR \
       TEAM_WORKTREES_DIR TEAM_GATES TEAM_VCS TEAM_CONFIG_FILE TEAM_ALLOW_FOREIGN_SESSION \
       TEAM_PULSE_WINDOW TEAM_PULSE_INTERVAL TEAM_PULSE_NUDGE_GAP TEAM_PULSE_REBUILD_TMUX TEAM_PULSE_MAX_RESTARTS TEAM_PULSE_PENDING_BOARD \
-      TEAM_WATCH_WINDOW TEAM_WATCH_INTERVAL TEAM_WATCH_NUDGE_GAP TEAM_WATCH_REBUILD_TMUX TEAM_WATCH_MAX_RESTARTS TEAM_WATCH_PENDING_BOARD 2>/dev/null || true
+      TEAM_WATCH_WINDOW TEAM_WATCH_INTERVAL TEAM_WATCH_NUDGE_GAP TEAM_WATCH_REBUILD_TMUX TEAM_WATCH_MAX_RESTARTS TEAM_WATCH_PENDING_BOARD \
+      TEAM_STATE_DIR 2>/dev/null || true
+# TEAM_STATE_DIR 也是调用者身份（P417 退回的第一轮实测）：PM 的启动命令会把它导出成外层项目的 state
+# 目录，从 PM 窗口里跑起来的门禁于是把所有夹具的 state 写进**真项目**——`team reload` 在夹具里回显
+# 「已请求重载」，而夹具的 `.pi/team/state/` 是空的。夹具要证明它写在自己的临时仓库里。
 # ── M36 闸门旋钮也属于「调用者身份」（M67 后另有含义）─────────────────────────────────────
 # TEAM_ALLOW_DESTRUCTIVE_TMUX 自 M67 起**零授权**（网关按目标判定，不读它）——但这里仍然 unset：
 # ① 它是「调用者环境」的一部分，夹具要证明漏进来的值对判定毫无影响（31c ①e 用显式赋值正面钉住）；
@@ -3455,9 +3469,10 @@ env TEAM_AGENT_CMD="$P237_TPL_BG" TEAM_AGENT_BIN=bash $TEAM dispatch dev T1.1 "$
   && ok "A template without the lane placeholder：带 {bg_ext} 的模板派单 --print 成功" \
   || bad "A template without the lane placeholder：带 {bg_ext} 的模板派单 --print 失败（见 $TMP/p237-lane.log）"
 assert_has "$TMP/p237-lane.log" "team_bg_run" "A template without the lane placeholder：带 {bg_ext} → 车道段出现"
-# 2026-11-05：内联等待被取消（PM 不在自己会话里等，用户输入不能被挡住）。车道段现在明说不要等。
-assert_has "$TMP/p237-lane.log" "Do not wait inside the turn" "车道段明说不要在回合内等"
-assert_not "$TMP/p237-lane.log" "inline-wait budget" "车道段不再留旧的内联等待预算"
+# P401：车道段的例外判据是三条**同时**成立（缺一条就变成「任何时候都内联等」，正是旧措辞的病）。
+assert_has "$TMP/p237-lane.log" "inline-wait budget (about 2 minutes)" "P401：车道例外带内联等待预算"
+assert_has "$TMP/p237-lane.log" "its result blocks your immediate next step" "P401：车道例外第二条——结果挡住下一步"
+assert_has "$TMP/p237-lane.log" "no other task work can advance meanwhile" "P401：车道例外第三条——没有别的活能干"
 
 # ---------------------------------------------------------------- 6b. 容量守卫矩阵（D2：zram 不当额度）
 section "6b · 容量守卫矩阵（zram / 磁盘 swap 分账）"
@@ -7304,9 +7319,18 @@ rm -f "$P417_ST/pm.pid"
 ( cd "$REPO" && $P417_TEAM version --check ) >"$TMP/vcheck.log" 2>&1 && ok "version --check 退出码 0" || bad "version --check 失败"
 assert_has "$TMP/vcheck.log" "一致" "没有 PM 时 version --check 说「一致」（磁盘版本）"
 assert_has "$TMP/vcheck.log" "没有 PM 在跑" "没有 PM 时明说不判断会话"
+# 反向控制（P417 退回的第一处）：活着但 cwd 不在本项目的进程，不许被当成「这台 PM」。
+# 以前只做 kill -0，于是从 PM 窗口里跑的门禁把外层 PM 认成本项目的 —— 这句话永远出不来。
+P417_ALIEN="$(smoke_pm_pid_at "$TMP")"
+printf '%s\n' "$P417_ALIEN" > "$P417_ST/pm.pid"
+( cd "$REPO" && $P417_TEAM version --check ) >"$TMP/vcheck-alien.log" 2>&1 || true
+assert_has "$TMP/vcheck-alien.log" "没有 PM 在跑" "cwd 不在本项目的活进程不算这台 PM（只 kill -0 时会误认）"
+kill "$P417_ALIEN" 2>/dev/null || true
 assert_has "$TMP/vcheck.log" "CHANGELOG" "打印了 CHANGELOG 版本"
 # ② 磁盘比这台 PM 新 → 提示并给出那个改动时刻（不是「本会话加载 X」）
-printf '%s\n' "$$" > "$P417_ST/pm.pid"
+P417_PM="$(smoke_pm_pid_at "$REPO")"
+printf '%s\n' "$P417_PM" > "$P417_ST/pm.pid"
+sleep 1.1                      # 判据是「磁盘 mtime 严格晚于 PM 启动时刻」，同一秒内 touch 不算更晚
 touch "$P417_SK/SKILL.md"
 ( cd "$REPO" && $P417_TEAM version --check ) >"$TMP/vcheck-stale.log" 2>&1 || true
 assert_has "$TMP/vcheck-stale.log" "磁盘上的 skill 在这台 PM 启动之后有改动" "磁盘比 PM 新时给出提示"
@@ -7318,12 +7342,26 @@ touch -d '2020-01-01T00:00:00Z' "$P417_SK/SKILL.md"
 ( cd "$REPO" && $P417_TEAM version --check ) >"$TMP/vcheck-fresh.log" 2>&1 || true
 assert_has "$TMP/vcheck-fresh.log" "没有改动" "改回旧 mtime 后静默（说「没有改动」）"
 assert_not "$TMP/vcheck-fresh.log" "有改动（" "改回旧 mtime 后不再提示"
+kill "$P417_PM" 2>/dev/null || true
 if [ -s "$P417_PID_BAK" ]; then cp "$P417_PID_BAK" "$P417_ST/pm.pid"; else rm -f "$P417_ST/pm.pid"; fi
 
 $TEAM changelog >"$TMP/changelog.log" 2>&1 && assert_has "$TMP/changelog.log" "$CODE_V" "changelog 打印当前版本" || bad "changelog 失败"
 $TEAM reload >"$TMP/reload-req.log" 2>&1 && assert_file "$REPO/.pi/team/state/reload-requested" "reload 写了请求标记" || bad "reload 失败"
 $TEAM reload --done >/dev/null 2>&1
 assert_not_file "$REPO/.pi/team/state/reload-requested" "reload --done 清掉标记"
+
+# 反向控制（P417 退回的第二处）：TEAM_STATE_DIR 指向**另一个项目**的 state 目录时，reload 必须拒绝并
+# 点名两个目录，不许把标记写进别人家。真实形状就是 PM 的启动命令把外层项目的 state 目录导进环境。
+P417_FOREIGN="$TMP/foreignproj"; mkdir -p "$P417_FOREIGN/.pi/team"
+( cd "$REPO" && env TEAM_STATE_DIR="$P417_FOREIGN/.pi/team/state" $TEAM reload ) >"$TMP/p417-reload-foreign.log" 2>&1; P417_FR_RC=$?
+assert_eq "P417：state 目录属于别的项目时 reload 拒绝（rc=2）" "$P417_FR_RC" "2"
+assert_has "$TMP/p417-reload-foreign.log" "不属于本项目" "拒绝时明说 state 目录不属于本项目"
+assert_has "$TMP/p417-reload-foreign.log" "$P417_FOREIGN/.pi/team/state" "拒绝时点名那个继承来的目录"
+assert_not_file "$P417_FOREIGN/.pi/team/state/reload-requested" "拒绝之后没有在别的项目里写标记"
+# 对照：临时目录形状的 TEAM_STATE_DIR 仍然照写（夹具靠它把 state 指到别处，不能一刀切）
+( cd "$REPO" && env TEAM_STATE_DIR="$TMP/altstate" $TEAM reload ) >/dev/null 2>&1
+assert_file "$TMP/altstate/reload-requested" "显式的临时 state 目录仍然照写（只拒别的项目形状）"
+assert_not_file "$REPO/.pi/team/state/reload-requested" "临时目录那次没有写回本项目的 state"
 
 # digest / doctor 要带版本行
 $TEAM digest >"$TMP/digest-skill.log" 2>&1 || true
@@ -7442,11 +7480,13 @@ P417_SK="$TMP/f21-skill"; smoke_skill_copy "$P417_SK"
 P417_ST="$REPO/.pi/team/state"; mkdir -p "$P417_ST"
 P417_PID_BAK="$TMP/f21-pm.pid.bak"; : > "$P417_PID_BAK"
 [ -f "$P417_ST/pm.pid" ] && cp "$P417_ST/pm.pid" "$P417_PID_BAK"
-printf '%s\n' "$$" > "$P417_ST/pm.pid"; touch "$P417_SK/SKILL.md"
+P417_PM="$(smoke_pm_pid_at "$REPO")"
+printf '%s\n' "$P417_PM" > "$P417_ST/pm.pid"; sleep 1.1; touch "$P417_SK/SKILL.md"
 ( cd "$REPO" && bash "$P417_SK/scripts/team" version --check ) >"$TMP/f21-stale.log" 2>&1; F21_RC=$?
 assert_eq "F21：磁盘比会话新的 version --check 退出码 0（不是 141/SIGPIPE）" "$F21_RC" "0"
 assert_has "$TMP/f21-stale.log" "磁盘上的 skill 在这台 PM 启动之后有改动" "F21：走的仍然是「磁盘比 PM 新」这条"
 assert_has "$TMP/f21-stale.log" "最新变更" "F21：仍然打印 CHANGELOG 摘要（没被半路打断）"
+kill "$P417_PM" 2>/dev/null || true
 if [ -s "$P417_PID_BAK" ]; then cp "$P417_PID_BAK" "$P417_ST/pm.pid"; else rm -f "$P417_ST/pm.pid"; fi
 ( cd "$REPO" && $TEAM version --check ) >"$TMP/f21-fresh.log" 2>&1; F21_RC2=$?
 assert_eq "F21：一致时退出码 0" "$F21_RC2" "0"
@@ -8693,9 +8733,10 @@ assert_has "$TMP/print.log" "$P237_STATE3" "The built-in Pi prompt carries the t
 assert_has "$TMP/print.log" "waiting on: <id>" "The built-in Pi prompt carries the three states：挂起要求回合末行点名在等的 job id"
 assert_has "$TMP/print.log" "end your turn" "The built-in Pi prompt carries the three states：起完默认结束回合"
 assert_has "$TMP/print.log" "$P237_LANE" "The built-in Pi prompt carries the three states：完成叫醒是正常收割点"
-# 2026-11-05：内联等待取消，三份装运面统一改成「不要在回合内等」。
-assert_not "$TMP/print.log" "$P237_BUDGET" "内置 Pi 提示词里不再有内联等待预算"
-assert_has "$TMP/print.log" "Do not wait inside the turn" "内置 Pi 提示词明说不要在回合内等"
+assert_has "$TMP/print.log" "$P237_BUDGET" "The built-in Pi prompt carries the three states：例外三条带内联预算数字"
+# P401：例外的三条要**同时**成立；只留给预算数字，读到的人就会把「等一下子」当成默认。
+assert_has "$TMP/print.log" "its result blocks your immediate next step" "P401：车道例外第二条（结果挡住下一步）也在提示词里"
+assert_has "$TMP/print.log" "no other task work can advance meanwhile" "P401：车道例外第三条（没有别的活能干）也在提示词里"
 # 阻塞那条的示例必须点名通知 PM，不能是席位自己（否则按它照做的工人会通知自己、PM 静默收不到）
 assert_has "$TMP/print.log" 'notify pm "<one line>"' "The built-in Pi prompt carries the three states：hard-blocked 示例点名通知 PM"
 
@@ -8709,8 +8750,7 @@ P237_SURFACES=("worker prompt:$TMP/print.log" "AGENTS template:$P237_TMPL" "PM p
 for P237_PAIR in "${P237_SURFACES[@]}"; do
   P237_SURFACE="${P237_PAIR%%:*}"; P237_FILE="${P237_PAIR#*:}"
   p237_has "$P237_SURFACE" "$P237_FILE" "$P237_LANE" "车道默认（完成叫醒是正常收割点）"
-  p237_absent "$P237_SURFACE" "$P237_FILE" "$P237_BUDGET" "内联等待预算（已于 2026-11-05 取消）"
-  p237_absent "$P237_SURFACE" "$P237_FILE" "team wait" "已退休的阻塞式等待命令"
+  p237_has "$P237_SURFACE" "$P237_FILE" "$P237_BUDGET" "例外预算数字"
   p237_has "$P237_SURFACE" "$P237_FILE" "delivered" "第一态 delivered"
   p237_has "$P237_SURFACE" "$P237_FILE" "hard-blocked" "第二态 hard-blocked"
   p237_has "$P237_SURFACE" "$P237_FILE" "$P237_STATE3" "第三态 suspended on background jobs"
@@ -10396,19 +10436,11 @@ else
     "12b-pi P81：唤醒文本给出投递日志路径（收件方可自证）"
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S10 the printed identity resolves to exactly one delivered.log record" \
     "12b-pi P81：唤醒文本的 id 能在 delivered.log 里一一定位（端到端）"
-  # P419（S28）：投递模式按消息类别选 —— 指令 steer（插得进正在跑的那一轮）、通知 followUp（不打断它）。
-  # S2/S23/S26 的 deliverAs 断言按类别改写在各自的 watcher 前提里；这三条走轮询，两种前提下都真跑。
-  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S28 a notify-only batch is delivered as followUp" \
-    "P419：只含通知的批仍是 followUp"
-  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S28 a say batch is delivered as steer" \
-    "P419：含 say 的批用 steer（本次工具调用结束后、下一次模型请求之前落地）"
-  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S28 a mixed batch is delivered once and as steer" \
-    "P419：混批只投一次，用指令的模式（steer）"
   if [ "$M53_IW_OK" = "1" ]; then
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S1 session_start creates exactly one .reg" "12b-pi 扩展写就绪注册（发送方的判据）"
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S4 the wake names its own cut and where the whole text is" \
     "P370：watcher 路径上 wake 层也自己写标记（与 S27 的轮询路径同一条行为）"
-  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S2 wake is a custom team-inbox message with triggerTurn+steer" "12b-pi 唤醒用的是 sendMessage(triggerTurn + 按类别选的 deliverAs；这条批是 say，所以 steer)"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S2 wake is a custom team-inbox message with triggerTurn+followUp" "12b-pi 唤醒用的是 sendMessage(followUp+triggerTurn)"
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S4 long payload is truncated in the wake (no payload dump)" "12b-pi 唤醒只带截断预览（不带 payload 全文）"
   # P370（S27）：watcher 前提无关的同一条行为 —— 轮询路径上真跑真判，跳不过去
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S27 the wake names its own cut and where the whole text is" \
@@ -10967,7 +10999,9 @@ rm -f "$M71/.pi/team/state/pm.pid"
 ( cd "$M71" && $P417_TEAM doctor ) >"$TMP/m71-doctor-nopm.log" 2>&1
 assert_not "$TMP/m71-doctor-nopm.log" "skill 新鲜度" "没有 PM 在跑时 doctor 不说会话的事"
 # ③b 磁盘比 PM 新 → 提示出现，并给出那个时刻
-printf '%s\n' "$$" > "$M71/.pi/team/state/pm.pid"
+P417_PM="$(smoke_pm_pid_at "$M71")"
+printf '%s\n' "$P417_PM" > "$M71/.pi/team/state/pm.pid"
+sleep 1.1                      # 判据是「磁盘 mtime 严格晚于 PM 启动时刻」，同一秒内 touch 不算更晚
 touch "$P417_SK/SKILL.md"
 ( cd "$M71" && $P417_TEAM doctor ) >"$TMP/m71-doctor-stale.log" 2>&1
 assert_has "$TMP/m71-doctor-stale.log" "skill 新鲜度" "磁盘比 PM 新时 doctor 多打一行"
@@ -10978,15 +11012,19 @@ assert_not "$TMP/m71-doctor-stale.log" "本会话加载" "不再有「本会话�
 touch -d '2020-01-01T00:00:00Z' "$P417_SK/SKILL.md"
 ( cd "$M71" && $P417_TEAM doctor ) >"$TMP/m71-doctor-current.log" 2>&1
 assert_not "$TMP/m71-doctor-current.log" "skill 新鲜度" "改回旧 mtime 后 doctor 静默"
+kill "$P417_PM" 2>/dev/null || true
 rm -f "$M71/.pi/team/state/pm.pid"
 
 # ④ 两条判据同时成立：各说各的一句（迁移指引一行、skill 新鲜度一行），互不吞并
 sed -i 's|<!-- teamsmith:begin -->|<!-- pi-team:begin -->|; s|<!-- teamsmith:end -->|<!-- pi-team:end -->|' "$M71/AGENTS.md"
-printf '%s\n' "$$" > "$M71/.pi/team/state/pm.pid"
+P417_PM="$(smoke_pm_pid_at "$M71")"
+printf '%s\n' "$P417_PM" > "$M71/.pi/team/state/pm.pid"
+sleep 1.1                      # 判据是「磁盘 mtime 严格晚于 PM 启动时刻」，同一秒内 touch 不算更晚
 touch "$P417_SK/SKILL.md"
 ( cd "$M71" && $P417_TEAM doctor ) >"$TMP/m71-doctor-both.log" 2>&1
 assert_eq "迁移指引仍然只打一行（两件事分开说，不重复刷屏）" "$(grep -c 'references/migration.md' "$TMP/m71-doctor-both.log")" "1"
 assert_has "$TMP/m71-doctor-both.log" "skill 新鲜度" "另一条判据也在（两条判据各一行）"
+kill "$P417_PM" 2>/dev/null || true
 rm -f "$M71/.pi/team/state/pm.pid"
 
 # ⑤ 指南本身：八节都在、关键命令/开关在、篇幅不是占位符

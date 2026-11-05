@@ -161,6 +161,57 @@ $ TEAM_HELP_SURFACE_FLIP_ONLY=internal-list-short bash skills/teamsmith/tests/he
 5. **没有碰 `CHANGELOG.md` 与版本号**：`team mark-loaded` 的移除是用户可见变更，但五处版本一致性断言要求同步
    升版，那是发布流程的事。
 
+## 返修（2026-11-05 · PM 退回两处）
+
+**退回意见**：①「没有 PM 在跑」从不出现（夹具删了 `state/pm.pid` 仍认定有一台 PM）；②`team reload`
+把标记写到本项目之外（沙盒 `state/` 是空的，命令却回显「已请求重载」）。
+
+**同一个根因**：`TEAM_STATE_DIR` 没有被当成「调用者身份」。PM 的启动命令会把它导出成外层项目的 state
+目录，于是从 PM 窗口里跑起来的任何工具都读写外层项目 —— 夹具删掉 `pm.pid` 后读到的是**外层项目的
+pm.pid**（真 PM、活着），旧判据只做 `kill -0` 就认了；`team reload` 的 `mkdir -p "$TEAM_STATE_DIR"`
+也落在外层目录。
+
+**改动**
+
+| Path | What |
+|---|---|
+| `skills/teamsmith/scripts/lib/cmd-update.sh` | `team_pm_age_pid` 只用产品自己的归属判据：记录的 pid 走 `team_pm_pid_live`（活着 + cwd 属于本项目）；窗口的 pid 必须**先有本项目的 PM 窗口**（目标为空/不存在时下层 `tmux list-panes` 的目标匹配会退化，把别的会话里的 pi 当自家 PM），再要求 cwd 属于本项目，取不到 cwd 就当没有 PM。新增 `team_state_dir_foreign`：`TEAM_STATE_DIR` 形如 `<某根>/.pi/team/state` 而根不是本项目 → `team reload` 拒绝并点名两个目录（rc=2）；临时目录形状照旧允许 |
+| `skills/teamsmith/tests/smoke.sh` | 身份隔离清单补上 `TEAM_STATE_DIR`（缺陷就是这个形状，夹具必须自己消毒）；`smoke_pm_pid_at` 造「真在这棵树里的进程」（stdio 断开、120s 上限）；§11f/§17/§11h 的假 PM 换成它并加 `sleep 1.1`（判据是「严格晚于启动时刻」）；新增反向控制：cwd 在别处的活进程不算 PM；指向别的项目的 state 目录必须拒绝且不在那边落标记 |
+
+**你退回的那两条现在是断言**：
+
+```
+✓ cwd 不在本项目的活进程不算这台 PM（只 kill -0 时会误认）
+✓ P417：state 目录属于别的项目时 reload 拒绝（rc=2）
+✓ 拒绝时明说 state 目录不属于本项目 / ✓ 拒绝时点名那个继承来的目录
+✓ 拒绝之后没有在别的项目里写标记
+✓ 显式的临时 state 目录仍然照写（只拒别的项目形状）
+```
+
+**选段**（环境按你复现时的形状，`TEAM_STATE_DIR` 指向本项目 state）：
+
+```
+$ env TEAM_STATE_DIR=<本项目>/state bash skills/teamsmith/tests/smoke.sh --select 11f,17,11h,3b </dev/null
+#8  3b  ✓54  ✗0      #10 11h ✓43  ✗0
+#9  11f ✓25  ✗1  ← 唯一一红＝README pin（你的）      #11 15b ✓25  ✗0
+#12 17  ✓69  ✗0
+== 选段结果 ==  ✓ 287  ✗ 1
+```
+
+**红侧**（各跑一次后 `sha256sum -c` 逐字节还原，两次都 `OK`）：
+
+```
+判据换回「只 kill -0」 → ✗ cwd 不在本项目的活进程不算这台 PM（只 kill -0 时会误认）
+                     == 选段结果 == ✓ 243 ✗ 2（另一条是 README）
+去掉 reload 守卫     → ✗ 拒绝 rc=2（期望 2，实际 0）/ ✗ 明说不属于本项目 / ✗ 点名那个目录
+                       ✗ 拒绝之后没有在别的项目里写标记（那个目录下确实出现了 reload-requested）
+                     == 选段结果 == ✓ 84 ✗ 5
+```
+
+**返修过程中我自己犯的、已改掉的夹具错误**（都不涉及产品行为）：假 PM 的后台进程继承了命令替换的
+stdout，`pid="$(…)"` 于是等到它退出（实测白等 600s×2，且等到时进程已死、断言全绿不成）；`sleep` 与
+`touch` 落在同一秒 → mtime 不比启动时刻晚（判据是严格大于）；`TEAM_STATE_DIR` 漏在身份隔离清单外。
+
 ## 边界与待办（交给 PM）
 
 - `BLOCKED:` **面向读者的文档仍在教人跑已删的 `team mark-loaded`**（`SKILL.md` 与 `references/**` 不在本任务书

@@ -73,14 +73,27 @@ team_skill_mtime_when() { # <epoch> → UTC 时间（本机读不出来就原样
   date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf '%s' "$1"
 }
 
-# 判「PM 启动时刻」用的 pid：记录的就够（本工具起的 PM 都会记）；没有记录再看窗口里认得出的 PM 进程。
+# 判「PM 启动时刻」用的 pid：命中的必须是**本项目的 PM**，不是某个活着的进程。
+# P417 退回实测过两种假阳性：①只做 kill -0 —— 夹具里删掉 pm.pid 之后，指标来自外层环境的别的
+# 项目的 pm.pid，那个进程活着，于是「没有 PM 在跑」永远出不来；②窗口目标为空/不存在时，下层
+# `tmux list-panes` 的目标匹配会退化，把**别的会话里的 pi** 当成本项目的 PM。
+# 两个来源都用产品自己的归属判据，不另立一套：
+#   记录的 pid → team_pm_pid_live（活着 + cwd 属于本项目；`up`/`resume` 判存活用的就是它）
+#   窗口的 pid → 必须真有这个窗口，再要 cwd 属于本项目（取不到 cwd 就当没有 PM）
 team_pm_age_pid() {
-  local pid
-  pid="$(team_pm_recorded_pid 2>/dev/null || true)"
-  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then printf '%s\n' "$pid"; return 0; fi
-  pid="$(team_pm_pane_agent_pid "$(team_pm_target)" 2>/dev/null || true)"   # 留：没有 tmux / 没有窗口＝没有 PM
-  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then printf '%s\n' "$pid"; return 0; fi
-  return 1
+  local pid cwd
+  if team_pm_pid_live 2>/dev/null; then
+    team_pm_recorded_pid
+    return 0
+  fi
+  team_pm_window_exists || return 1
+  pid="$(team_pm_pane_agent_pid "$(team_pm_target)" 2>/dev/null || true)"   # 留：窗口可能刚消失（竞态）
+  [ -n "$pid" ] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1   # 留：进程可能刚消失（竞态）
+  cwd="$(team_proc_cwd "$pid" 2>/dev/null || true)"   # 留：没有 /proc 或没权限＝判不出来，按不是本项目的
+  [ -n "$cwd" ] || return 1
+  team_cwd_in_project "$cwd" || return 1
+  printf '%s\n' "$pid"
 }
 
 team_skill_stale_line() { # [<pm pid>] → 一行说明（磁盘比 PM 新）；否则空
@@ -110,8 +123,32 @@ team_update_notice() { # 给 digest/doctor/watch 用的一行（没有 PM 时也
   fi
 }
 
+# P417 退回的第二处：`team reload` 把标记写到了**项目之外**。TEAM_STATE_DIR 允许被显式指定
+# （夹具把它指到临时目录，delivery-guard 的 spec 场景就靠这一条），但一个别的项目的 state 目录
+# （`<别的项目根>/.pi/team/state`）几乎只可能来自继承的外层身份：PM 的启动命令会把 TEAM_STATE_DIR
+# 写进环境，从那个窗口里跑起来的工具于是会读到、写到外层项目。那种形状一律拒绕并点名两个目录。
+team_state_dir_foreign() { # 0 = TEAM_STATE_DIR 看起来是别的项目的 state 目录
+  local dir root
+  case "${TEAM_STATE_DIR:-}" in
+    */.pi/team/state) root="${TEAM_STATE_DIR%/.pi/team/state}" ;;
+    *) return 1 ;;                       # 临时/替代目录（夹具形状）：不是「别的项目的 state」
+  esac
+  [ -n "$root" ] || return 1
+  dir="$(cd "$root" 2>/dev/null && pwd -P)" || return 1   # 留：目录不存在＝解析不出，按“不是我们的”处理
+  [ -n "$dir" ] || return 1
+  case "$dir" in
+    "$TEAM_MAIN_ROOT"|"$TEAM_MAIN_ROOT"/*) return 1 ;;
+  esac
+  return 0
+}
+
 team_cmd_reload() { # 让 PM 自助刷新 skill（写一个请求标记 + 告诉你在会话里怎么真的生效）
   local req="${1:-}"
+  if team_state_dir_foreign; then
+    team_err "state 目录不属于本项目：$TEAM_STATE_DIR（本项目是 $TEAM_MAIN_ROOT/.pi/team/state）"
+    team_dim "  这通常是从外层环境继承来的另一个项目的目录；在 $TEAM_MAIN_ROOT 里重跑，或 unset TEAM_STATE_DIR"
+    exit 2
+  fi
   case "$req" in
     ""|--request)
       mkdir -p "$TEAM_STATE_DIR"
