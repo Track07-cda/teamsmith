@@ -666,7 +666,7 @@
 | P414 | lib 里的裸 tmux | dev | - | - | done |
 | P415 | 捕获扩展 775 拒绝注册 | dev | - | - | done |
 | P416 | UI 文案两处 | dev | - | - | done |
-| P417 | team up 写版本记录 | dev | - | - | wip |
+| P417 | team up 写版本记录 | dev | - | - | done |
 | P418 | 会话文件 664 被拒 | dev | - | - | done |
 | P419 | say 用 steer 投递 | dev | - | - | done |
 | P420 | 派单身份与只警告的阻塞 | dev | - | - | wip |
