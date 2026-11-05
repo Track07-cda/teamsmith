@@ -121,9 +121,8 @@ Guards and limitations:
   `awaiting=` too when its jobs are alive). A suspension omits the `⚠ 未提交` prefix — it is not a delivery claim —
   while `uncommitted=<n>` stays. The three states are **delivered**, **hard-blocked** and
   **suspended on background jobs**, and the lane rule is the suspend default: `team_bg_run` starts a long job and
-  the turn ends; the completion wake-up is the normal harvest point; in-turn waiting is the bounded exception,
-  only inside the inline-wait budget (about 2 minutes), when the result blocks the next step and nothing else can
-  advance. A seat that suspended and then died needs no new patrol clause: an unfinished task with no live window
+  the turn ends; the completion wake-up is the only harvest point. There is no in-turn wait budget and no `team
+  wait`: a PM that waits is a PM the user cannot talk to. A seat that suspended and then died needs no new patrol clause: an unfinished task with no live window
   is already pending work (§8).
 - The **other** injected extension is `extension/team-bg.ts` (M27) — not notification, but the team's own
   background lane: `team_bg_run` starts a detached job (bounded `state/bg/<id>.log`), `team_bg_wait <id>` harvests

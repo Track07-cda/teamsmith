@@ -194,9 +194,8 @@ The four rules that make it safe (they are the extension's code, not a conventio
 1. **End the turn after starting; the completion wake-up is the normal harvest point.** The tool returns at once,
    so the turn is free: end it, and when the job finishes and you are idle you are woken once (several jobs
    finishing together arrive as one message) to run `team_bg_wait <id>`; a harvested job stays silent (its result
-   came back inline). In-turn waiting is the bounded exception: use it only when all three hold -- the job is
-   expected to finish within the inline-wait budget (about 2 minutes), its result blocks your immediate next step,
-   and no other task work can advance meanwhile. A turn that ends with this session's jobs still running is
+   came back inline). There is no in-turn wait budget: waiting inside the turn blocks the user's input, so a job
+   small enough to finish in seconds goes to the background like any other. A turn that ends with this session's jobs still running is
    **suspended on background jobs** -- a third legal ending beside **delivered** and **hard-blocked**, not a
    delivery and not a blockage, and its last line names every awaited job id.
 2. **The ledger is on disk**: `team_bg_run` appends `<ISO timestamp> start id=<id> pid=<pid>` before it returns the
