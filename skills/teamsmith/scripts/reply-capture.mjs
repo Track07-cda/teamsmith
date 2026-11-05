@@ -372,7 +372,10 @@ export class ReplyCapture {
   }
   turn(event, view) {
     const a = this.activity, latest = a?.latest
-    if (!latest?.intent || latest.entryId || !this.eligibleHost(view)) return
+    if (!latest?.intent || latest.entryId) return
+    // A refused host used to drop the pending intent without a word; the only symptom was a reply page
+    // that never grew. Name it, with the same diagnostic sink that records a mismatched binding.
+    if (!this.eligibleHost(view)) { this.report('ineligible-at-turn'); return }
     const entry = view.entry(event.messageEntryId)
     if (!event.messageEntryId || entry?.type !== 'message' || !isDeepStrictEqual(entry.message, latest.message) ||
         !isDeepStrictEqual(event.message, latest.message) || !branchWitness(view, a.startLeaf, event.messageEntryId)) {

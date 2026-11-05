@@ -5,6 +5,15 @@
 > `SKILL.md`/`references/**`/`templates/**`/`extension/**` 在 Pi 里输入 `/reload`（或 `/pi-team-reload`）即生效；
 > 判断自己是不是旧的：`team mark-loaded`（开局记一次）→ `team version --check`。
 
+## v0.4.3（2026-11-05）
+
+让"回复没进编号回复页"这件事留下可查的原因。
+
+- 扩展的诊断行不再只写 stderr（TUI 里看不见）：同时追加到 `.pi/team/state/reply-capture/diagnostics.log`，超过 256 KB 保留最近 400 行。
+- 收束时若判定当前会话不合格，会记一条 `ineligible-at-turn`，不再无声丢弃待发布的条目。
+
+行为未变，只是把失败原因写下来。
+
 ## v0.4.2（2026-11-05）
 
 修复续用旧会话的 PM 无法捕获关键回复：会话文件被过度严格的权限判据拒绝注册。

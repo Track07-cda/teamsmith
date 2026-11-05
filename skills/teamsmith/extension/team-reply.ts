@@ -1,7 +1,7 @@
 /** PM-only, explicit live-message capture. No tools, provider hooks, history import, or automatic selection. */
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
 import { createHash, randomUUID } from 'node:crypto'
-import { readFileSync, realpathSync } from 'node:fs'
+import { appendFileSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
@@ -39,7 +39,21 @@ export default async function (pi: ExtensionAPI) {
   })
   const diagnostic = (d: { reason: string; entryId: string; path: string }) => {
     // Never title/body/model text. Diagnostics are separate from the ordinary answer, including print/JSON modes.
-    process.stderr.write(`[team-reply] ${d.reason}; source=${d.entryId || 'unbound'}; evidence=${d.path}\n`)
+    const line = `[team-reply] ${d.reason}; source=${d.entryId || 'unbound'}; evidence=${d.path}\n`
+    process.stderr.write(line)
+    // A TUI swallows stderr, so the same line also lands beside the journal: without it a refused
+    // publication leaves no trace at all and the only symptom is a reply page that never grows.
+    try {
+      const state = registration?.state
+      if (!state) return
+      const file = join(state, 'reply-capture', 'diagnostics.log')
+      appendFileSync(file, `${new Date().toISOString()} ${line}`)
+      const stat = statSync(file)
+      if (stat.size > 256 * 1024) {
+        const kept = readFileSync(file, 'utf8').split('\n').slice(-400).join('\n')
+        writeFileSync(file, kept)
+      }
+    } catch { /* A diagnostic sink that cannot be written must not block cleanup. */ }
   }
   const runtime = (status: string, reason?: string) => {
     if (!current()) return
