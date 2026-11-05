@@ -41,7 +41,15 @@ P413（CI 里那八条 `command not found`）修完后，为了「标签指向�
 
 教训写在这里：**推出去的标签不要动**。正确顺序是先确认要发哪棵树（门禁全绿），再打 tag；这次的代价是用户手动 reject 一次。
 
-**还没真正发布**：`npm stage publish` 只做到暂存，要用户在 npmjs 网页批准 2FA 才生效。批准后核对 `npm view teamsmith@0.4.0 version dist.tarball` 与 `npm view teamsmith dist-tags`。
+**已发布（用户在网页批准 2FA 后）**。PM 用只读命令核对：
+
+```
+$ npm view teamsmith version dist-tags        → 0.4.0 / { latest: '0.4.0' }
+$ npm view teamsmith@0.4.0 dist.shasum        → 34a978e73d5d93f3192c326576abf27deb6212f9   （与暂存时一致）
+$ npm view teamsmith@0.4.0 dist.tarball       → https://registry.npmjs.org/teamsmith/-/teamsmith-0.4.0.tgz
+```
+
+**包内容也核对过**（`npm pack teamsmith@0.4.0` 后解包）：`package.json` 版本 `0.4.0`、`SKILL.md` 的 `version: "0.4.0"`、`tests/lib/pm-window.sh` 在包里、`section-select.sh` 含 `self-sufficient`（10 处）——也就是说发布出去的那份带着 P413 的修复，与 tag `d64f5a34` 一致。
 
 ## 四、本次未做（写明边界）
 
