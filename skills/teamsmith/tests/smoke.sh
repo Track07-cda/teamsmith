@@ -3377,6 +3377,50 @@ assert_eq "F15：拒绝发生在开窗之前（tmux 一次都没被要求建窗�
 assert_not "$TMP/dispatch-outside-noprint.log" "含启动校验" "F15：不带 --print 也没有真的派单"
 
 section "6 · dispatch"
+# ---------------------------------------------------------------- P420 · 两条派单身份/报告缺陷
+# A：派单的身份来自**项目根**，不来自继承的 TEAM_STATE_DIR。现场（PM 窗口里跑选段）：沙盒的 dispatch
+#    读到了真实项目的 state/dev.env（据此拒派），真派单还把 prompt-dev-*.md 与 assignment 写进了真实项目。
+#    判据 = 「别的项目的 state 目录」形状（team_state_dir_foreign）；临时/替代目录照旧生效（§12b 靠它）。
+#    这里钉**写侧**（拿不到「手上有活」的席位记录）；读侧在 §22 的 ⑥。
+P420_FOREIGN="$TMP/p420-foreign"; mkdir -p "$P420_FOREIGN/.pi/team/state"
+( cd "$REPO" && env TEAM_STATE_DIR="$P420_FOREIGN/.pi/team/state" $TEAM outbox enqueue \
+    --kind say --target "$SESSION:dev" --payload "P420 写侧" ) >"$TMP/p420-write.log" 2>&1 \
+  && ok "P420-A：外来 state 目录下 enqueue 仍成功（写进本项目）" || bad "P420-A：enqueue 失败（见 $TMP/p420-write.log）"
+assert_has "$TMP/p420-write.log" "继承值被忽略" "P420-A：继承的 TEAM_STATE_DIR 被忽略并说明（不静默采用）"
+assert_eq "P420-A 写侧：外来 state 目录里一个文件都没多" \
+  "$(find "$P420_FOREIGN" -type f | wc -l | tr -d ' ')" "0"
+P420_MSG="$(grep -l 'P420 写侧' "$REPO/.pi/team/state/outbox"/*.msg 2>/dev/null | head -1)"
+if [ -n "$P420_MSG" ]; then ok "P420-A 写侧：这条队列记录落在本项目的 state 里"; else bad "P420-A 写侧：本项目的队列里找不到这条记录"; fi
+rm -f "$P420_MSG"           # 只删自己刚造的那一条（后面的段会数队列）
+
+# B：判不了也是阻塞项，但 report 必须说得出是哪一项。现场（同一选段）：守卫只 warn（`!`）后 return 1，
+#    report 只重放那条警告，末行却是「共 1 个阻塞项」——人看得见计数、看不见是哪一项。
+#    红侧：只 warn 后 return 1 → 必须出现点名那守卫的补行；return 0 → 不得出现；已有 ✗ → 不重复补。
+P420B="$TMP/p420b"; mkdir -p "$P420B"
+( cd "$REPO" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION -u TEAM_AGENTS \
+    bash -c '
+      . "$1/scripts/lib/common.sh"
+      for _f in "$1"/scripts/lib/cmd-*.sh; do . "$_f"; done
+      d="$2"
+      p420b_warn1() { team_df_warn "只是警告"; return 1; }
+      p420b_warn0() { team_df_warn "只是警告"; return 0; }
+      p420b_err()   { team_df_err "真的原因"; return 1; }
+      p420b_lib()   { printf "! 库守卫只说了警告\n"; return 1; }
+      team_df_reset; team_df_run p420b_warn1;   team_df_report >"$d/warn1.log" 2>&1; printf "%s\n" "$?" >"$d/warn1.rc"
+      team_df_reset; team_df_run p420b_warn0;   team_df_report >"$d/ok.log"    2>&1; printf "%s\n" "$?" >"$d/ok.rc"
+      team_df_reset; team_df_run p420b_err;     team_df_report >"$d/err.log"   2>&1; printf "%s\n" "$?" >"$d/err.rc"
+      team_df_reset; team_df_run_lib p420b_lib; team_df_report >"$d/lib.log"   2>&1; printf "%s\n" "$?" >"$d/lib.rc"
+    ' _ "$SKILL_DIR" "$P420B" ) >/dev/null 2>&1
+assert_file "$P420B/warn1.log" "P420-B 夹具跑起来了（只 warn 后 return 1）"
+assert_has "$P420B/warn1.log" "p420b_warn1：判不了（rc=1），没有任何具体原因" "P420-B：rc≠0 却没有 ✗ 行 → 补一条点名守卫的阻塞行"
+assert_has "$P420B/warn1.log" "共 1 个阻塞项" "P420-B：补行之后计数与行数对得上（仍是 1 项）"
+assert_eq "P420-B：只 warn 后 return 1 仍然拒绝" "$(cat "$P420B/warn1.rc" 2>/dev/null)" "1"
+assert_not "$P420B/ok.log" "判不了" "P420-B 对照：return 0 不得出现补行"
+assert_eq "P420-B 对照：return 0 不阻塞" "$(cat "$P420B/ok.rc" 2>/dev/null)" "0"
+assert_eq "P420-B：已经有 ✗ 行的守卫不重复补行" "$(grep -c '判不了' "$P420B/err.log" 2>/dev/null)" "0"
+assert_eq "P420-B：库守卫（team_df_run_lib）同样补行" \
+  "$(grep -c 'p420b_lib：判不了（rc=1），没有任何具体原因' "$P420B/lib.log" 2>/dev/null)" "1"
+
 $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/print.log" 2>&1 || bad "dispatch --print 失败"
 assert_has "$TMP/print.log" "--session-id $SESSION-dev" "命令含正确的 session-id"
 assert_has "$TMP/print.log" "team-notify.ts" "命令显式加载 notify 扩展（worktree 不会自动发现）"
@@ -12236,6 +12280,40 @@ if m93_run dispatch m93c M93E "$M93E_BRIEF" --print >"$TMP/m93-f-single.log" 2>&
 else bad "M9.3-⑤：只剩一份任务书仍被拒（见 $TMP/m93-f-single.log）"; fi
 assert_has "$TMP/m93-f-single.log" "=== agent 命令" "控制组真的走到派单计划"
 assert_has "$TMP/m93-f-single.log" "prompt-m93c-M93E.md" "控制组派的就是 M93E 这一次的 scope"
+
+# ⑥ P420 · 派单的身份来自**项目根**，不来自继承的 TEAM_STATE_DIR。
+# 现场（PM 会话里跑选段 6）：沙盒的 dispatch 读了**真实项目**的 state/dev.env（那里记着 P417 在飞 →
+# 拒派），真派单还把 prompt-dev-*.md 与 assignment 记录写进了真实项目。判据 = 「别的项目的状态目录」
+# 形状（team_state_dir_foreign）；临时/替代目录照旧生效（夹具靠它，见 §12b 的 alt-state 断言）。
+M93P_AGENTS="$M93_AGENTS m93p"
+m93p_state() { smoke_assignment "$REPO" m93p "$1" routine "$2" deepseek/deepseek-flash "$SESSION-m93p" policy "$3"; }
+m93_add M93P1 m93p
+m93_add M93P2 m93p
+$TEAM board set M93P1 wip >/dev/null 2>&1 || true
+M93P1_BR="$(m93_wt m93p M93P1)"
+printf 'wip(M93P1)\n' > "$REPO/.worktrees/m93p/wip.txt"
+_git_add_commit "$REPO/.worktrees/m93p" "wip(M93P1): fixture"
+m93p_state M93P1 "$M93P1_BR" "$REPO/docs/team/tasks/M93P1-m93-smoke.md"
+M93P2_BR="$(m93_wt m93p M93P2)"
+M93P2_BRIEF="$REPO/docs/team/tasks/M93P2-m93-smoke.md"
+# ⑥-a 控制组：没有外来 state 目录时，判据就是沙盒自己的座位记录
+if env TEAM_AGENTS="$M93P_AGENTS" $TEAM dispatch m93p M93P2 "$M93P2_BRIEF" --print >"$TMP/p420-own.log" 2>&1; then
+  bad "P420-A 控制组：m93p 手上压着 M93P1，却放行了派单"
+else ok "P420-A 控制组：沙盒自己的座位记录生效（拒绝派单）"; fi
+assert_has "$TMP/p420-own.log" "M93P1" "P420-A 控制组：拒绝点名沙盒里的那个在飞任务"
+# ⑥-b 外来 state 目录里写着「m93p 压着 M93Q9」——必须忽略：判据仍是沙盒的 M93P1，并且明说继承被忽略
+P420_FOREIGN="$TMP/p420-foreign"
+mkdir -p "$P420_FOREIGN/.pi/team/state"
+smoke_assignment "$P420_FOREIGN" m93p M93Q9 routine task/M93Q9-foreign deepseek/deepseek-flash "$SESSION-m93p" policy "$P420_FOREIGN/docs/team/tasks/M93Q9-foreign.md"
+if env TEAM_STATE_DIR="$P420_FOREIGN/.pi/team/state" TEAM_AGENTS="$M93P_AGENTS" \
+     $TEAM dispatch m93p M93P2 "$M93P2_BRIEF" --print >"$TMP/p420-foreign.log" 2>&1; then
+  bad "P420-A：注入外来 TEAM_STATE_DIR 后派单被放行（沙盒记录没生效或外来记录赢过头）"
+else ok "P420-A：注入外来 TEAM_STATE_DIR 后仍然拒绝派单（判据看下三条）"; fi
+assert_has "$TMP/p420-foreign.log" "M93P1" "P420-A：拒绝点名的是沙盒那个任务（不是外来记录）"
+assert_not "$TMP/p420-foreign.log" "M93Q9" "P420-A：外来记录里的任务没有参与判定"
+assert_has "$TMP/p420-foreign.log" "继承值被忽略" "P420-A：继承的 TEAM_STATE_DIR 被忽略（不静默采用）"
+# ⑥-c 写侧同样按本项目：外来 state 目录里不许长出新东西，队列落在本项目自己的 state 里
+# （同一条判据的写侧断言在 §6 的 P420 块；§6 拿不到这条「席位记录里有活」的夹具。）
 
 # ---------------------------------------------------------------- 23. verify 的待复验判据 = 记录绑定的 revision（M9.5）
 # 契约（真实假信号：V2 的 PASS 记录绑着 P2.1 的 398716887，digest 却按复验者自己的 task/V2-… 分支把它标成

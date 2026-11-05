@@ -675,11 +675,24 @@ team_df_raw_err() { _TEAM_DF_ERR="${_TEAM_DF_ERR}${1:-}"$'\n'; }
 team_df_lines_raw_err() { local t="${1:-}" line; [ -n "$t" ] || return 0; while IFS= read -r line; do team_df_raw_err "$line"; done <<< "$t"; }
 team_df_lines_err() { local t="${1:-}" line; [ -n "$t" ] || return 0; while IFS= read -r line; do team_df_err "$line"; done <<< "$t"; }
 team_df_lines_dim() { local t="${1:-}" line; [ -n "$t" ] || return 0; while IFS= read -r line; do team_df_dim "$line"; done <<< "$t"; }
+team_df_has_block() { # <一段输出> → 0 = 里面已经有 ✗ 行（阻塞项有具体原因）
+  case "${1:-}" in *✗*) return 0 ;; esac
+  return 1
+}
+# P420 · 判不了就是阻塞，但不许无声：守卫 rc≠0 却一行 ✗ 都没写时，补一条点名它的阻塞行。
+# 现场：某个守卫只 warn（`!`）后 return 1，report 只重放那条警告，末行却是「共 1 个阻塞项」——
+# 人看得见计数、看不见是哪一项，于是只能猜。守卫名 = 传进来的第一个词（函数名）。
+team_df_block_reason() { # <守卫名> <rc> → 一行 ✗（结尾有换行；由调用方写进自己的缓冲）
+  printf '%s✗%s %s：判不了（rc=%s），没有任何具体原因\n' "$C_RED" "$C_RESET" "${1:-?}" "${2:-?}"
+}
 # 一个守卫跑一趟：_TEAM_DF_RUN_RC = 这次守卫的 rc（driver 据此判「前提缺失 → 判不了」，不冒充查过）。
 team_df_run() { # <守卫函数> [参数…]
   _TEAM_DF_ERR=""; _TEAM_DF_OUT=""
   local rc=0; "$@" || rc=$?
   _TEAM_DF_RUN_RC="$rc"
+  if [ "$rc" -ne 0 ] && ! team_df_has_block "$_TEAM_DF_ERR"; then
+    _TEAM_DF_ERR="${_TEAM_DF_ERR}$(team_df_block_reason "${1:-?}" "$rc")"$'\n'
+  fi
   if [ "$rc" -eq 0 ]; then _TEAM_DF_NOTES+=("$_TEAM_DF_ERR"$'\x1f'"$_TEAM_DF_OUT")
   else _TEAM_DF_BLOCKS+=("$_TEAM_DF_ERR"$'\x1f'"$_TEAM_DF_OUT"); _TEAM_DF_N=$((_TEAM_DF_N + 1)); fi
   return 0
@@ -691,6 +704,10 @@ team_df_run_lib() { # <函数> [参数…]
   local rc=0 out=""
   out="$("$@" 2>&1)" || rc=$?
   _TEAM_DF_RUN_RC="$rc"
+  # P420 · 同上：库守卫非 0 却没有 ✗ 行时补一条，report 里必须点得出是哪一项。
+  if [ "$rc" -ne 0 ] && ! team_df_has_block "$out"; then
+    out="${out}$(team_df_block_reason "${1:-?}" "$rc")"$'\n'
+  fi
   [ -n "$out" ] && out="$out"$'\n'
   if [ "$rc" -eq 0 ]; then _TEAM_DF_NOTES+=("$out"$'\x1f'"")
   else _TEAM_DF_BLOCKS+=("$out"$'\x1f'""); _TEAM_DF_N=$((_TEAM_DF_N + 1)); fi

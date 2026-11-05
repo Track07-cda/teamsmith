@@ -68,6 +68,41 @@ blockers exist they are items of the same one refusal rather than a second round
   reason it is unfinished and the worktree branch
 - **AND** the output carries `team resume --agent dev` and a `dispatch … --force` command as its printed routes
 
+### Requirement: A dispatch reads its own project's state, never an inherited state directory
+
+`team dispatch` SHALL judge the seat records and write its own state from the project it runs in
+(`<root>/.pi/team/state`), not from a `TEAM_STATE_DIR` inherited from the caller's environment. When the inherited
+value has the shape of another project's state directory — `<some root>/.pi/team/state` whose root is not this
+project — teamsmith SHALL ignore it, use this project's own state directory, and say so in one line that names the
+ignored value and this project's path. Adopting it silently is forbidden: the guards would read another project's
+seat records, and the launch would write its prompt and its assignment record into that project.
+
+A directory without that shape (a temporary or fixture directory such as `/tmp/x/altstate`) SHALL remain effective:
+`TEAM_STATE_DIR` may be pointed anywhere on purpose, and only the shape of *another project's* state directory is an
+inheritance accident. `team reload`, whose entire effect is a write into that directory, keeps the stricter rule: it
+refuses and names both directories instead of ignoring the value.
+
+#### Scenario: An inherited state directory of another project does not decide the guards
+
+- **GIVEN** a project whose seat record says `dev` has the unfinished task `T1.0` in flight, and an environment
+  `TEAM_STATE_DIR=/elsewhere/other/.pi/team/state` whose records say `dev` has the unfinished task `T9.9`
+- **WHEN** `team dispatch dev T1.1 <brief>` runs in that project
+- **THEN** the refusal names `T1.0` and never mentions `T9.9`
+- **AND** one line says the inherited `TEAM_STATE_DIR` was ignored, naming it and the project's own state path
+
+#### Scenario: The launch writes into its own project
+
+- **GIVEN** the same inherited `TEAM_STATE_DIR` of another project
+- **WHEN** a dispatch, or a queue write (`team outbox enqueue`), runs in this project
+- **THEN** the files it writes appear under this project's state directory
+- **AND** the other project's state directory gains no file
+
+#### Scenario: A temporary state directory stays effective
+
+- **GIVEN** `TEAM_STATE_DIR=<tmp>/altstate`, a directory without the `<root>/.pi/team/state` shape
+- **WHEN** a command that uses the queue runs
+- **THEN** the queue is written under `<tmp>/altstate` and no "ignored" line is printed
+
 ### Requirement: The capacity floor protects the host
 
 `team dispatch` SHALL refuse to start a worker when the host is below a capacity floor: RAM+swap
@@ -1020,7 +1055,9 @@ shape, unique legal `category:` with mapping membership required for new selecti
 worktree state (more than one brief for the id, an unfinished previous task, a missing worktree, a dirty worktree,
 the branch identity), and the launch preconditions (the capacity floor, model concurrency, the session-vs-window
 check, the agent executable, routing-config validity, assignment identity, required fresh takeover and conflicting extra arguments). Routing and identity blockers are non-overridable; `--force`/`--allow-overflow` never waive them. A proven-live peer with unjudgeable model identity makes positive-limit admission unjudgeable as specified by the concurrency requirement; this is a blocker, not a passed zero-count guard. Resolution-dependent guards SHALL report unjudgeable when category/model/SID cannot resolve, while independent branch/capacity guards still run. A guard that cannot be judged because its precondition is missing SHALL say so in
-the report and MUST NOT be reported as passed.
+the report and MUST NOT be reported as passed. A guard that returns non-zero without stating a reason SHALL still
+produce one blocker item naming it and its exit code (`✗ <guard>：判不了（rc=N），没有任何具体原因`): the count
+line and the blocking items MUST agree, and a refusal MUST never carry a count its items cannot account for.
 
 The refusal opens with the first blocker's own first line (there is no separate banner) and ends with a line
 stating how many blockers were found. Each blocker is one item that names the artifact it is about (brief path,
@@ -1060,7 +1097,6 @@ adapter exiting non-zero) stay governed by `dispatch#A dispatch proves the agent
 - **THEN** it exits non-zero, prints the same three blockers and no `=== 提示词 ===` section
 
 #### Scenario: `--force` keeps the audit contract under several blockers
-
 - **GIVEN** a fixture whose only blockers are overridable (a change-less brief with no anchor, a delta
   single-writer conflict and an unfinished previous task)
 - **WHEN** `team dispatch dev P200 <brief> --force` really starts the worker (the record-only tmux shim the smoke
@@ -1068,6 +1104,14 @@ adapter exiting non-zero) stay governed by `dispatch#A dispatch proves the agent
 - **THEN** it proceeds with one warning per overridden blocker and `state/watchdog.log` gains exactly one line
   per overridden blocker
 - **AND** the same command with `--print --force` writes no audit line
+
+#### Scenario: A guard that blocks without a reason still names itself
+
+- **GIVEN** a pre-launch guard that emits only a warning and returns non-zero
+- **WHEN** `team dispatch dev P200 <brief> --print` reaches that guard
+- **THEN** the refusal carries one item `✗ <guard>：判不了（rc=<N>），没有任何具体原因`
+- **AND** the count line equals the number of blocking items
+- **AND** a guard that returns zero, or one that already printed its own blocker line, adds no such item
 
 #### Scenario: An unjudgeable guard is named, not reported as passed
 

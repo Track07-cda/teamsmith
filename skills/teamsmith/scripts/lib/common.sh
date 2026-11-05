@@ -1147,6 +1147,16 @@ team_load_config() {
   # TEAM_STATE_DIR 可以被显式指定（夹具把它指到临时目录 → 队列/收件箱一点都不写进真仓库；
   # delivery-guard 的 spec 场景「TEAM_STATE_DIR moves the queue」就是这一条）
   TEAM_STATE_DIR="${TEAM_STATE_DIR:-$TEAM_MAIN_ROOT/.pi/team/state}"
+  # P420 · state 目录也是「调用者身份」（与上面的身份四件套同一族）：继承来的 TEAM_STATE_DIR 指向
+  # **别的项目**的 `.pi/team/state` 时不许采用 —— 否则派单会按别人的席位记录判守卫（实测：PM 窗口里跑
+  # 门禁，沙盒派单读到了真实项目的 state/dev.env），还会把派单提示词与 assignment 写进那个项目。
+  # 临时/替代目录形状照旧生效（夹具靠它）。唯一的例外是 reload：它整条命令就是在写这个目录，
+  # 判据更硬（拒绝并点名两个目录，见 team_cmd_reload）—— 所以这里不替它做决定。
+  if [ "${CMD:-}" != reload ] && team_state_dir_foreign; then
+    team_warn "TEAM_STATE_DIR=$TEAM_STATE_DIR 是别的项目的 state 目录（本项目是 $TEAM_MAIN_ROOT/.pi/team/state）：继承值被忽略，本命令按本项目执行"
+    team_dim "  清掉继承变量：env -u TEAM_STATE_DIR …（或 cd 到那个项目再执行）" >&2
+    TEAM_STATE_DIR="$TEAM_MAIN_ROOT/.pi/team/state"
+  fi
   TEAM_CLI="${TEAM_CLI:-team}"
 }
 
@@ -2033,6 +2043,24 @@ team_unique_sid() {
 }
 
 # ---------------------------------------------------------------- 状态（PM 的仪表盘）
+# 项目身份（M40 同族；P417 的 reload 守卫与 P420 的派单身份共用**这一处**判据）：
+# `<某根>/.pi/team/state` 而那个根不是本项目 = 别的项目的 state 目录。临时/替代目录形状（夹具靠它）
+# 不算：`TEAM_STATE_DIR` 允许被显式指到任何地方，只有「另一个项目的 state」才是继承事故的形状。
+team_state_dir_foreign() { # [<目录>]（默认 TEAM_STATE_DIR）→ 0 = 看起来是别的项目的 state 目录
+  local dir="${1:-${TEAM_STATE_DIR:-}}" root
+  case "$dir" in
+    */.pi/team/state) root="${dir%/.pi/team/state}" ;;
+    *) return 1 ;;
+  esac
+  [ -n "$root" ] || return 1
+  root="$(cd "$root" 2>/dev/null && pwd -P)" || return 1   # 留：目录不存在＝解析不出，按“不是我们的”处理
+  [ -n "$root" ] || return 1
+  case "$root" in
+    "$TEAM_MAIN_ROOT"|"$TEAM_MAIN_ROOT"/*) return 1 ;;
+  esac
+  return 0
+}
+
 team_state_dir() { mkdir -p "$TEAM_STATE_DIR"; printf '%s\n' "$TEAM_STATE_DIR"; }
 
 team_state_set() { # <agent> <key> <value>

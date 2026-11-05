@@ -126,22 +126,9 @@ team_update_notice() { # 给 digest/doctor/watch 用的一行（没有 PM 时也
 # P417 退回的第二处：`team reload` 把标记写到了**项目之外**。TEAM_STATE_DIR 允许被显式指定
 # （夹具把它指到临时目录，delivery-guard 的 spec 场景就靠这一条），但一个别的项目的 state 目录
 # （`<别的项目根>/.pi/team/state`）几乎只可能来自继承的外层身份：PM 的启动命令会把 TEAM_STATE_DIR
-# 写进环境，从那个窗口里跑起来的工具于是会读到、写到外层项目。那种形状一律拒绕并点名两个目录。
-team_state_dir_foreign() { # 0 = TEAM_STATE_DIR 看起来是别的项目的 state 目录
-  local dir root
-  case "${TEAM_STATE_DIR:-}" in
-    */.pi/team/state) root="${TEAM_STATE_DIR%/.pi/team/state}" ;;
-    *) return 1 ;;                       # 临时/替代目录（夹具形状）：不是「别的项目的 state」
-  esac
-  [ -n "$root" ] || return 1
-  dir="$(cd "$root" 2>/dev/null && pwd -P)" || return 1   # 留：目录不存在＝解析不出，按“不是我们的”处理
-  [ -n "$dir" ] || return 1
-  case "$dir" in
-    "$TEAM_MAIN_ROOT"|"$TEAM_MAIN_ROOT"/*) return 1 ;;
-  esac
-  return 0
-}
-
+# 写进环境，从那个窗口里跑起来的工具于是会读到、写到外层项目。reload 整条命令就是在写这个目录，
+# 所以它比别的命令更硬：拒绝并点名两个目录。判据本身是 `team_state_dir_foreign`（P420 起在
+# lib/common.sh 里，一处实现两处用；这里只负责 reload 的那条出路）。
 team_cmd_reload() { # 让 PM 自助刷新 skill（写一个请求标记 + 告诉你在会话里怎么真的生效）
   local req="${1:-}"
   if team_state_dir_foreign; then
