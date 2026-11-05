@@ -12,9 +12,12 @@
 #   section-select.sh --table <file> --check    换一张表跑自检（夹具旋钮：造表腐烂的现场）
 #   section-select.sh --out <file>              把 decision=RUN 的过滤副本写进 <file>（写前 bash -n 校验）
 #   section-select.sh --verify-copies           对每个段键生成副本并 bash -n（结构腐烂的守门扫描）
+#   section-select.sh --self-sufficient         对每个段键静态检查「副本自足」：调用的段体函数必须在同一份
+#                                               副本里也有定义（P413：段与段之间的隐式函数依赖 → command not found）
 #
-# 纯逻辑：不调 git、不起 tmux/pi/门禁进程；只读映射表与 smoke.sh（--verify-copies 只写临时副本）。
-# 退出码：0 = 有决定 / 自检全绿；1 = --check 有不成立项 / --verify-copies 有副本不能解析；
+# 纯逻辑：不调 git、不起 tmux/pi/门禁进程；只读映射表与 smoke.sh（--verify-copies 只写临时副本；
+# --self-sufficient 一个临时文件都不写：区间与 emit_copy 用同一份几何，函数/调用由 shell-lex 词法给出）。
+# 退出码：0 = 有决定 / 自检全绿；1 = --check 有不成立项 / --verify-copies 有副本不能解析 / --self-sufficient 有副本不自足；
 #         2 = 用法错误、表畸形、未知 key、路径出界、空地板。
 #
 # 决定语义（保守方向永远是「多跑」）：
@@ -106,6 +109,7 @@ while [ $# -gt 0 ]; do
     --out)     shift; [ $# -gt 0 ] || die "--out 需要文件"; COPY_OUT="$1"; shift ;;
     --out=*)   COPY_OUT="${1#*=}"; shift ;;
     --verify-copies) [ -z "$MODE" ] || die "--verify-copies 不与其它模式同用"; MODE="verify-copies"; shift ;;
+    --self-sufficient|--selfsufficient) [ -z "$MODE" ] || die "--self-sufficient 不与其它模式同用"; MODE="self-sufficient"; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "未知参数 $1（用法见 --help）" ;;
   esac
@@ -172,6 +176,7 @@ load_table() {
   [ -r "$TSV" ] || die "读不到映射表 $TSV"
   local line nf ln=0 _fo _mk _mkey _mwhy
   T_N=0; P_FIRST_KEYS=""; P_FIRST_LNS=(); P_META_KEYS=""; P_META_RK=(); P_META_REASON=(); P_META_LNS=()
+  ROW_OF=()
   while IFS= read -r line || [ -n "$line" ]; do
     ln=$((ln + 1))
     case "$line" in
@@ -201,6 +206,7 @@ load_table() {
     [ -n "${F[0]}" ] && [ -n "${F[1]}" ] && [ -n "${F[2]}" ] && [ -n "${F[3]}" ] && [ -n "${F[4]}" ] \
       || die "映射表行有空列（$(printf '%.60s' "$line")）"
     T_KEY+=("${F[0]}"); T_ID+=("${F[1]}"); T_PAT+=("${F[2]}"); T_NEEDS+=("${F[3]}"); T_BASIS+=("${F[4]}")
+    [ -z "${ROW_OF[${F[0]}]:-}" ] && ROW_OF["${F[0]}"]=$((T_N))    # 同名行取第一个（与老的线性扫描一致）
     T_N=$((T_N + 1))
   done < "$TSV"
   [ "$T_N" -gt 0 ] || die "映射表是空的：$TSV"
@@ -233,30 +239,36 @@ S_KEY=(); S_ID=(); S_LINE=()
 load_suite() {
   [ -r "$SUITE" ] || die "读不到门禁源码 $SUITE"
   local line n=0 id k
-  S_N=0
+  S_N=0; SEC_LINE_OF=(); SEC_IDX_OF=()
   while IFS= read -r line; do
     n=$((n + 1))
     case "$line" in
       *'section "'*)
         if [[ $line =~ ^[[:space:]]*section[[:space:]]+\"([^\"]+)\" ]]; then
           id="${BASH_REMATCH[1]}"; k="${id%% · *}"
-          S_KEY+=("$k"); S_ID+=("$id"); S_LINE+=("$n"); S_N=$((S_N + 1))
+          S_KEY+=("$k"); S_ID+=("$id"); S_LINE+=("$n")
+          # 索引保持与老的线性扫描**同一个答案**（同名段取第一个：重复 key 时后者不覆盖前者）
+          if [ -z "${SEC_LINE_OF[$k]:-}" ]; then SEC_LINE_OF["$k"]="$n"; SEC_IDX_OF["$k"]="$S_N"; fi
+          S_N=$((S_N + 1))
         fi ;;
     esac
   done < "$SUITE"
   [ "$S_N" -gt 0 ] || die "门禁源码里一个 section 都没解析到：$SUITE"
 }
 
+# 两张索引表：段 key → 源码行号 / 表行下标。线性扫描版本在 --self-sufficient（139 个键逐个算几何）
+# 里被调几十万次，实测占掉 8s 里的绝大部分；索引由 load_suite / load_table 建，数组仍是唯一来源。
+declare -A SEC_LINE_OF=() SEC_IDX_OF=() ROW_OF=()
 # <key> → 源码行号（找不到 → 返回 1）
 sec_line() {
-  local k="$1" i
-  for ((i = 0; i < S_N; i++)); do [ "${S_KEY[i]}" = "$k" ] && { printf '%s' "${S_LINE[i]}"; return 0; }; done
+  local k="$1"
+  [ -n "${SEC_LINE_OF[$k]:-}" ] && { printf '%s' "${SEC_LINE_OF[$k]}"; return 0; }
   return 1
 }
 # <key> → 行下标（找不到 → 返回 1）
 row_idx() {
-  local k="$1" i
-  for ((i = 0; i < T_N; i++)); do [ "${T_KEY[i]}" = "$k" ] && { printf '%s' "$i"; return 0; }; done
+  local k="$1"
+  [ -n "${ROW_OF[$k]:-}" ] && { printf '%s' "${ROW_OF[$k]}"; return 0; }
   return 1
 }
 sec_id() {
@@ -292,18 +304,28 @@ normalize_path() {
 #   * 组是原子：选择任一成员 = 整组进运行集（run 清单如实列出全部成员），不选 = 整组不跑。
 # 生成副本后再 `bash -n` 一次（emit_copy）：「副本必须永远可解析」的最后一闸。
 G_N=0; G_START=(); G_END=(); G_KEYS=()
+KEEP=()      # 当前 RUN_* 的组保留位（mark_kept_groups 填；emit_copy / run_src_ranges 共用一份判定）
 KEY_GIDX=()      # 段序号（源序）→ 组号
 TAIL_LINE=""; LAST_LINE=""; groups_ready=0
 
 key_idxs() { # <key> → 段序号（源序）；找不到 → 1
-  local k="$1" i
-  for ((i = 0; i < S_N; i++)); do [ "${S_KEY[i]}" = "$k" ] && { printf '%s' "$i"; return 0; }; done
+  local k="$1"
+  [ -n "${SEC_IDX_OF[$k]:-}" ] && { printf '%s' "${SEC_IDX_OF[$k]}"; return 0; }
   return 1
 }
 key_group() { # <key> → 组号；找不到 → 1
-  local i
-  i="$(key_idxs "$1")" || return 1
-  printf '%s' "${KEY_GIDX[i]}"
+  local k="$1"
+  [ -n "${SEC_IDX_OF[$k]:-}" ] || return 1
+  printf '%s' "${KEY_GIDX[${SEC_IDX_OF[$k]}]}"
+}
+# 同上，但把结果写进全局 KEY_GROUP_OF —— 供 hot loop 用（`$(key_group …)` 每个键一次 fork，139 个键
+# 就是几百次 fork，实测占掉 --self-sufficient 的一半时间）。
+KEY_GROUP_OF=""
+key_group_into() { # <key> → KEY_GROUP_OF；找不到 → 1
+  KEY_GROUP_OF=""
+  [ -n "${SEC_IDX_OF[$1]:-}" ] || return 1
+  KEY_GROUP_OF="${KEY_GIDX[${SEC_IDX_OF[$1]}]}"
+  return 0
 }
 span_parses() { # <起行> <止行（含）>；空区间 = 通过（bash -n 是结构裁判）
   local a="$1" b="$2"
@@ -375,7 +397,7 @@ add_needs_closure() { # 反复扫 needs 直到不再新增（needs 只指向更�
     i=0
     while [ "$i" -lt "$RUN_N" ]; do
       k="${RUN_KEY[i]}"; i=$((i + 1))
-      j="$(row_idx "$k" || true)"
+      j="${ROW_OF[$k]:-}"
       [ -n "$j" ] || continue
       [ "${T_NEEDS[j]}" = "-" ] && continue
       IFS=',' read -r -a NARR <<<"${T_NEEDS[j]}"
@@ -398,8 +420,8 @@ add_coupled() {
     grew=0
     before=$RUN_N; add_needs_closure; [ "$RUN_N" -ne "$before" ] && grew=1
     for ((i = 0; i < RUN_N; i++)); do
-      g="$(key_group "${RUN_KEY[i]}" || true)"
-      [ -n "$g" ] || continue
+      key_group_into "${RUN_KEY[i]}" || continue
+      g="$KEY_GROUP_OF"
       for m in ${G_KEYS[g]}; do
         [ "$m" = "${RUN_KEY[i]}" ] && continue
         before=$RUN_N; add_key "$m" "coupled:${RUN_KEY[i]}"; [ "$RUN_N" -ne "$before" ] && grew=1
@@ -410,16 +432,19 @@ add_coupled() {
 }
 sort_run_by_source() { # 按源码行号把 RUN_KEY/RUN_WHY 插入排序（选择排序，O(n²)，n 很小）
   local i j min lmin li key why
+  local -a LN=()
+  for ((i = 0; i < RUN_N; i++)); do LN[i]="${SEC_LINE_OF[${RUN_KEY[i]}]:-999999999}"; done
   for ((i = 0; i < RUN_N - 1; i++)); do
-    min=$i; lmin="$(sec_line "${RUN_KEY[i]}" || printf '999999999')"
+    min=$i; lmin="${LN[i]}"
     for ((j = i + 1; j < RUN_N; j++)); do
-      li="$(sec_line "${RUN_KEY[j]}" || printf '999999999')"
+      li="${LN[j]}"
       if [ "$li" -lt "$lmin" ]; then min=$j; lmin="$li"; fi
     done
     if [ "$min" -ne "$i" ]; then
       key="${RUN_KEY[i]}"; why="${RUN_WHY[i]}"
       RUN_KEY[i]="${RUN_KEY[min]}"; RUN_WHY[i]="${RUN_WHY[min]}"
       RUN_KEY[min]="$key"; RUN_WHY[min]="$why"
+      li="${LN[i]}"; LN[i]="${LN[min]}"; LN[min]="$li"
     fi
   done
 }
@@ -518,16 +543,39 @@ print_run() {
 
 # 把当前 RUN_* 集过滤成一份可解析的副本写进 <文件>：前导 + 命中的**整组** + 收尾，段正文逐字节原样。
 # 返回 0 = 写好了且 bash -n 通过；1 = 副本不能解析（已点名段与源码行，调用方负责在跑段之前拒绝）。
-emit_copy() { # <out>
-  local out="$1" i g a b spec="" off=0 ranges="" err ln who srcline r ostart oend sstart ks
-  local -a KEEP=() RARR=()
+# 当前 RUN_* 的副本几何：KEEP[g]=1 表示组 g 进副本。emit_copy（真写副本）与 run_src_ranges
+# （--self-sufficient 只算区间）共用**这一份**判定 —— 两处各写一遍会让「被检查的那份副本」与
+# 「真跑的那份副本」悄悄分叉，检查就成了橡皮章。
+mark_kept_groups() {
+  local i g
   build_groups
   for ((i = 0; i < G_N; i++)); do KEEP[i]=0; done
   for ((i = 0; i < RUN_N; i++)); do
-    g="$(key_group "${RUN_KEY[i]}" || true)"
-    [ -n "$g" ] || continue
-    KEEP[g]=1
+    key_group_into "${RUN_KEY[i]}" || continue
+    KEEP[$KEY_GROUP_OF]=1
   done
+}
+# 当前 RUN_* 的副本包含的**源码行区间**（"a-b,c-d"，按源序、含端点）→ 全局 RUN_SPEC
+# 刻意不用 $( )：--self-sufficient 要对 100+ 个键各算一次，一次 fork 一次就是十几秒（实测 9s → 0.6s）。
+RUN_SPEC=""
+run_src_spec() {
+  local i b
+  mark_kept_groups
+  RUN_SPEC=""
+  b=$((S_LINE[0] - 1))
+  [ "$b" -ge 1 ] && RUN_SPEC="1-$b"
+  for ((i = 0; i < G_N; i++)); do
+    [ "${KEEP[i]}" = 1 ] || continue
+    RUN_SPEC="${RUN_SPEC:+$RUN_SPEC,}${G_START[i]}-${G_END[i]}"
+  done
+  if [ "$TAIL_LINE" -gt 0 ]; then RUN_SPEC="${RUN_SPEC:+$RUN_SPEC,}${TAIL_LINE}-${LAST_LINE}"; fi
+  return 0
+}
+
+emit_copy() { # <out>
+  local out="$1" i g a b spec="" off=0 ranges="" err ln who srcline r ostart oend sstart ks
+  local -a RARR=()
+  mark_kept_groups
   b=$((S_LINE[0] - 1))
   if [ "$b" -ge 1 ]; then
     spec="1,${b}p"; ranges="$(printf '%s|%s|%s|%s' "$((off + 1))" "$((off + b))" 1 前导)"; off=$((off + b))
@@ -594,6 +642,27 @@ do_verify_copies() {
   printf '== 段副本 bash -n 扫描 == ok %d bad %d\n' "$((n - bad))" "$bad"
   [ "$bad" -eq 0 ] || return 1
   return 0
+}
+
+# ── --self-sufficient（P413）──────────────────────────────────────────────────────────────
+# 判据：每个键**单独裁出来**的副本必须自足 —— 副本里调用的「段体函数」（定义在某个 section 的段体内
+# 的助手）必须在这份副本里也有定义；否则 `--select <键>` 跑起来就是 `command not found`，随后整段断言
+# 塌掉（P413 现场：11b4 调用 §11b 段体里的 make_pm_idle / pm_state_now）。允许的两种处理：定义搬进
+# tests/lib/（任何选段都 source 带上），或把那段声明进映射表的 needs 列。
+# 它不是「又一轮全量」：只读表与门禁源码，不起任何段、不写任何临时副本。
+do_self_sufficient() {
+  local i k plan="" out rc=0
+  build_groups
+  for ((i = 0; i < T_N; i++)); do
+    k="${T_KEY[i]}"
+    reset_run
+    select_run_set "$k"
+    run_src_spec
+    plan="${plan}${k}"$'\t'"${RUN_SPEC}"$'\n'
+  done
+  out="$(printf '%s' "$plan" | perl "$here/lib/section-calls.pl" --suite "$SUITE" --plan -)" || rc=$?
+  printf '%s\n' "$out"
+  return "$rc"
 }
 
 # ── --paths / --floor 共用：路径 → 归属（RUN_*）─────────────────────────────────────────
@@ -1164,4 +1233,5 @@ case "$MODE" in
   check)          load_table; load_suite; do_check ;;
   meta)           load_table; do_meta ;;
   verify-copies)  load_table; load_suite; do_verify_copies ;;
+  self-sufficient) load_table; load_suite; do_self_sufficient ;;
 esac

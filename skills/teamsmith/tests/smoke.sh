@@ -120,6 +120,11 @@ unset TEAM_TMP_RUN_ID TEAM_TMP_LEDGER 2>/dev/null || true
 # P162（change: - · infra）：破坏性 tmux 调用的隔离前置（证明 → 才动手；头注见 lib/tmux-iso.sh）
 # shellcheck source=tests/lib/tmux-iso.sh
 . "$SKILL_DIR/tests/lib/tmux-iso.sh"
+# P413：PM 窗口现场的共享助手（状态读取 / 有界轮询 / 空窗准备 / 等窗口消失）。
+# 以前它们定义在 §11b 的段体里，单独裁出来的段（11b4/11c）调用它们就是 command not found；
+# 现在由前导段 source —— 任何选段都带上（判据与检查见文件头注）。
+# shellcheck source=tests/lib/pm-window.sh
+. "$SKILL_DIR/tests/lib/pm-window.sh"
 # P148（change: product-checkout-gate）：检出形状判据（纯文件，不看 TEAM_* / git / CI）。
 # 快照必须在**任何夹具之前**做：夹具自己造的账本不许决定分类（源根从脚本自己算）。
 # shellcheck source=tests/lib/checkout-shape.sh
@@ -1846,15 +1851,24 @@ if [ -z "$trap_hits" ]; then
 else
   bad "发现可能让调用方在 set -e 下静默退出的函数："; printf '%s\n' "$trap_hits" | sed 's/^/     /'
 fi
-# 每个用到的 assert_* 都必须有定义：M5.1 遗留了一个没定义的 assert_has_echo，
-# 于是那条断言静默空跑了很久（测试自己「谎报覆盖」）——这里把它钉死。
-UNDEF_ASSERTS="$(grep -oE '\bassert_[a-z_]+' "$SKILL_DIR/tests/smoke.sh" | sort -u | while IFS= read -r fn; do
-  grep -qE "^$fn\\(\\)" "$SKILL_DIR/tests/smoke.sh" || printf '%s\n' "$fn"
-done)"
-if [ -n "$UNDEF_ASSERTS" ]; then
-  bad "smoke 用了没定义的断言函数（会静默空跑）：$(printf '%s' "$UNDEF_ASSERTS" | tr '\n' ' ')"
+# 段副本自足（P413）：`--select <键>` 只把选中的段复制成独立脚本，所以每个键单独裁出来时，
+# 它调用的**段体函数**必须也在那份副本里（否则就是 command not found，整段断言塌掉 —— 公开 CI
+# shard 3 的现场）。选择器的静态扫描同时钉住同一族的另一半：`assert_*` 用了没定义会静默空跑
+# （M5.1 的 assert_has_echo 就这么漏的）——它顶掉了这里原来那条逐词 grep（只看 assert_ 前缀、
+# 连字符串里提到的也算，覆盖不到段与段之间）。判据与实现见 section-select.sh --self-sufficient。
+SEL0C="$SKILL_DIR/tests/section-select.sh"
+if [ ! -r "$SKILL_DIR/tests/section-paths.tsv" ]; then
+  cond_skip "0c 段副本自足" "这棵树没有段映射表（section-paths.tsv）—— 不是完整测试树，静态扫描没有对象"
 else
-  ok "smoke 里的 assert_* 都有定义（没有静默空跑的断言）"
+  SELF_SUFF_OUT="$(bash "$SEL0C" --self-sufficient 2>&1)"; SELF_SUFF_RC=$?
+  SELF_SUFF_SUM="$(printf '%s\n' "$SELF_SUFF_OUT" | sed -n 's/^== 段副本自足 == //p')"
+  if [ "$SELF_SUFF_RC" -eq 0 ] && printf '%s' "$SELF_SUFF_SUM" | grep -q 'bad 0'; then
+    ok "段副本自足：每个键单独裁出来都带着它调用的段体函数（$SELF_SUFF_SUM）"
+  else
+    SELF_SUFF_DETAIL="$(printf '%s\n' "$SELF_SUFF_OUT" | grep -m3 '^bad:')"
+    [ -n "$SELF_SUFF_DETAIL" ] || SELF_SUFF_DETAIL="$(printf '%s\n' "$SELF_SUFF_OUT" | tail -3)"
+    bad "段副本不自足（rc=$SELF_SUFF_RC）：$(printf '%s' "$SELF_SUFF_DETAIL" | tr '\n' ' ')"
+  fi
 fi
 # team_watch_pid_alive 这类故意返回 1 的判定函数只允许出现在条件里
 assert_has "$SKILL_DIR/scripts/team" "set -euo pipefail" "CLI 主脚本仍启用严格模式"
@@ -6254,100 +6268,7 @@ if [ "$FAST" = "1" ]; then
 elif [ "$HAVE_TMUX" = "1" ]; then
   live_mark
   sed -i "s|^TEAM_PI_BIN=.*|TEAM_PI_BIN=\"$FAKE/pi-sleep\"|" "$REPO/.pi/team/config.sh"
-  PMW="$($TEAM paths | sed -n 's/.*"pm_window": "\([^"]*\)".*/\1/p')"
-  [ -n "$PMW" ] || PMW=pm
-  # M9.7：这一段的 fixture 以前是「动作 + 固定 sleep + 采样一次状态」——采样撞上过渡态就假红
-  # （实测：§11b3 ⑤ 的 attempts 行记成 state=unknown 而不是 state=idle；注入 1.2s 的窗口过渡
-  # 1/1 次可复现，见 docs/team/reports/M9.7-dev2/）。改成有界轮询**实际条件**（状态真的变成我们要的
-  # 样子），超时把「最后看到的状态」原样报出来。等待**不是**「把红等成绿」：它带 deadline，超时由
-  # 调用方报红（持续回归只是晚 10s 红），超时信息里带最后看到的状态，下一次发生不必再考古。
-  pm_state_now() { ( . "$SKILL_DIR/scripts/lib/common.sh"; team_load_config; team_pm_state ); }
-  pm_state_until() { # <case 模式…> [最多等秒] → 0=等到了；最后状态留在 PM_STATE_LAST
-    # 多个模式是「或」关系（每个模式单独做 case 匹配：模式里的 | 在变量展开后不会被当成分隔符，
-    # 所以 `pm_state_until 'unknown:tmux' 'idle:*' 10` 而不是 'unknown:tmux|idle:*'）。
-    local secs="${!#:-300}" i=0 ticks p
-    ticks=$(( secs * 4 ))
-    PM_STATE_LAST=""
-    while [ "$i" -lt "$ticks" ]; do
-      PM_STATE_LAST="$(pm_state_now 2>/dev/null || true)"
-      for p in "${@:1:$#-1}"; do
-        case "$PM_STATE_LAST" in $p) return 0 ;; esac
-      done
-      sleep 0.25
-      i=$((i + 1))
-    done
-    return 1
-  }
-  pm_state_until_not() { # <case 模式> [最多等秒] → 0=状态不再是该模式
-    local avoid="$1" secs="${2:-300}" i=0 ticks
-    ticks=$(( secs * 4 ))
-    PM_STATE_LAST=""
-    while [ "$i" -lt "$ticks" ]; do
-      PM_STATE_LAST="$(pm_state_now 2>/dev/null || true)"
-      case "$PM_STATE_LAST" in $avoid) ;; *) return 0 ;; esac
-      sleep 0.25
-      i=$((i + 1))
-    done
-    return 1
-  }
-  wait_session_gone() { # <session> [最多等秒]
-    local s="${1:-}" secs="${2:-300}" i=0 ticks
-    ticks=$(( secs * 20 ))
-    while [ "$i" -lt "$ticks" ]; do
-      tmux has-session -t "$s" 2>/dev/null || return 0
-      sleep 0.05
-      i=$((i + 1))
-    done
-    return 1
-  }
-  wait_window_gone() { # <窗口名> [最多等秒]（沿用本段的 $SESSION）
-    local n="${1:-}" secs="${2:-300}" i=0 ticks
-    ticks=$(( secs * 20 ))
-    while [ "$i" -lt "$ticks" ]; do
-      tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -qx "$n" || return 0
-      sleep 0.05
-      i=$((i + 1))
-    done
-    return 1
-  }
-
-  # 制造“PM 窗口在、里面是空提示符”的现场（pi 退出后的样子），并用占位窗口保住 session
-  make_pm_idle() {   # 让 PM 窗口回到**确定性**的空 shell（等 team_pm_state 真的报 idle:*，不是赌一次 sleep）
-    tmux new-window -t "$SESSION" -n keep -d -c "$REPO" >/dev/null 2>&1 || true
-    tmux list-windows -t "$SESSION" -F '#{window_id} #{window_name}' 2>/dev/null \
-      | awk -v n="$PMW" '$2==n {print $1}' \
-      | while read -r wid; do [ -n "$wid" ] && tmux kill-window -t "$wid" 2>/dev/null || true; done
-    # 窗口里跑**不带 rc 的 bash**（M35）——不是任何 profile 跑完后的登录 zsh。
-    # 实测（M35 注入实验）：登录 zsh 的 profile（/etc/zsh/zprofile → distrobox 的 host-spawn）
-    # 在“提示符已出现”之后仍会间歇性起前台子进程；make_pm_idle 的两次采样可以落在空档里，而紧接着的
-    # 那一拍（§11b3 ⑤ 的 watch）撞上子进程，于是 attempts 行如实记成 state=unknown、断言 state=idle
-    # 假红（P18 B2、M34 复验两条实测）。`bash --noprofile --norc` 让“空提示符”变成**构造性**的：
-    # 没有 rc、没有异步子进程、cwd 由 tmux 的 -c 钉在 $REPO。
-    tmux new-window -t "$SESSION" -n "$PMW" -d -c "$REPO" bash --noprofile --norc >/dev/null 2>&1 || true
-    # 旧实现轮询 pane_current_command + sleep 0.5；只采样一次 team_pm_state 也不够：
-    # 窗口刚建好的一瞬间 pane 还没 exec 出前台命令，team_pm_state 会**假**报 idle（空 cmd），
-    # 紧接着启动命令就把它变成 unknown:*（§11b3 ⑤ 的 attempts 行正是这么记错的；注入 1.2s 的
-    # 启动命令后，在负载下这次假 idle 稳定复现）。判据：连续三次采样（间隔 0.5s，覆盖 ≥1s）都是
-    # idle:*，且每次都看到前台命令是真正的 shell。
-    local i=0 st="" cmd="" n=0
-    while [ "$i" -lt 600 ]; do
-      st="$(pm_state_now 2>/dev/null || true)"
-      cmd="$(tmux display-message -p -t "$SESSION:$PMW" '#{pane_current_command}' 2>/dev/null || true)"
-      case "$st" in idle:*)
-        case "$cmd" in
-          zsh|bash|sh|dash|ash|ksh|fish)
-            n=$((n + 1))
-            [ "$n" -ge 3 ] && { PM_STATE_LAST="$st"; return 0; } ;;
-          *) n=0 ;;
-        esac ;;
-      *) n=0 ;;
-      esac
-      sleep 0.5
-      i=$((i + 1))
-    done
-    PM_STATE_LAST="$st"
-    bad "make_pm_idle：没等到窗口稳定在空提示符（上限 300s；最后状态 ${st:-?}，前台命令 [${cmd:-}]）"
-  }
+  pm_window_name >/dev/null   # 窗口名（P413：这群现场助手在 tests/lib/pm-window.sh，见文件头注）
 
   start_fake_pm() { # 直接模拟“PM 正在跑”，避免依赖 up 的时序
     local p; p="$(tmux list-panes -t "$SESSION:$PMW" -F '#{pane_id}' 2>/dev/null | head -1)"
@@ -6573,7 +6494,9 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   live_mark
   # 注意：teamsmith 自己就是被这个 smoke 拉起来的，所以断言必须通过 `team` CLI 与 state/ 读，
   # 不依赖调用者的 shell、也不读开发者自己的 session。
-  # （pm_state_now 的定义在 §11b 的 helpers 里——M9.7 把它上移，供有界轮询复用。）
+  # 窗口名与状态助手在 tests/lib/pm-window.sh（P413：从前是 §11b 段体里的函数，单独裁出来的段
+  # 调用它们就是 command not found）。这里先解析一次，后面按 $PMW 引用。
+  pm_window_name >/dev/null
   # 造「新建的 session + 空的 pm 窗口」：这就是环境重启后的现场，也是 M6.5 的确定性复现。
   tmux kill-session -t "$SESSION" 2>/dev/null || true
   wait_session_gone "$SESSION" 300 || bad "M6.5 ① 夹具：没等到 session $SESSION 消失（上限 300s）（「session 完全不在」的前提没成立）"
@@ -6717,6 +6640,7 @@ if [ "$FAST" = "1" ]; then
   fast_skip "11b3·启动中的 PM（M7.2）" "要真实 tmux 窗口 + 并发两拍巡检（真进程）"
 elif [ "$HAVE_TMUX" = "1" ]; then
   live_mark
+  pm_window_name >/dev/null   # P413：窗口名来自 tests/lib/pm-window.sh（单跑本段时没人先设过 $PMW）
   start_count() { local n; n="$(grep -c 'pm-prompt.md' "$TMP/pm-args.log" 2>/dev/null || true)"; printf '%s\n' "${n:-0}"; }
   pm_pane_pid() { tmux display-message -p -t "$SESSION:$PMW" '#{pane_pid}' 2>/dev/null || true; }
   mark_file() { printf '%s\n' "$REPO/.pi/team/state/pm.pid.starting"; }
@@ -7120,14 +7044,13 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   # 「PM 在运行」，那句「启动失败」本来就不该出现 —— 旧读数（C4）之所以是 ✓，只是因为那一段跑了 1018s，
   # 600s 的 sleep 早就到期了。也就是说这条断言以前是**靠段落慢**才绿的（实测：快跑时前提断言直接点出
   # `running:<pid>`）。
-  # 所以先按 fixtures 自己的口径把窗口还原成**确定性空 shell**：`make_pm_idle`（§11b 定义）等的是
-  # team_pm_state 真的报 idle:*，不是赌一次 sleep；随后把「此刻确实是 idle」断成自己的前提断言 ——
-  # 前提不成立就红在前提上并点名状态，产品断言一个字不放宽、也不靠加长 sleep。
-  if declare -F make_pm_idle >/dev/null 2>&1; then
-    make_pm_idle
-  else
-    bad "§11c 前提：make_pm_idle 不可用（§11b 没先跑？见 section-paths.tsv 的 needs）—— 最终启动前提没法准备"
-  fi
+  # 所以先按 fixtures 自己的口径把窗口还原成**确定性空 shell**：`make_pm_idle`（P413 起在
+  # tests/lib/pm-window.sh，任何选段都 source 得到）等的是 team_pm_state 真的报 idle:*，不是赌一次
+  # sleep；随后把「此刻确实是 idle」断成自己的前提断言 —— 前提不成立就红在前提上并点名状态，
+  # 产品断言一个字不放宽、也不靠加长 sleep。
+  # （旧写法用 `declare -F make_pm_idle` 兜底：那只会把「lib 没 source」掩盖成一条自造红。
+  # 现在由 §0c 的段副本自足扫描静态守着「单独裁出来的段也带着它调用的助手」。）
+  make_pm_idle
   P11C_STATE="$(pm_state_now 2>/dev/null || true)"
   case "$P11C_STATE" in
     idle:*)
