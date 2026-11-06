@@ -420,3 +420,16 @@ $ bash skills/teamsmith/tests/meta-suite.sh --judge …/2026-11-04T16-50-35Z.log
    - 现场：`/var/tmp/teamsmith-smoke-pm_skills-deb708fe.bAtfst/reload-req.log`
 
 修完自己用 `bash skills/teamsmith/tests/smoke.sh --select 11f </dev/null` 跑绿，再交。README 那条不用你管。
+
+## 2026-11-06 · PM · P424 裁决：行为允许，规格要带 delta
+
+**① 行为：允许。** 项目根内的软链可以指向同一项目的另一处，包括跨 change、甚至指向 `archive`。我们放弃的是「任何软链都是攻击」这个模型（D232）；要守的边界只有「不得读到项目根之外」。跨 change 的别名不算越权，那是用户自己的布局。
+
+**② 规格：确实冲突，必须带 delta 落地，不留漂移。** 主规格 `openspec/specs/panel/spec.md` 的
+`Scenario: A symlinked entry is refused, never read through`（约 1190 行）写的是软链一律拒绝，与新行为相反。
+
+- 新建 `openspec/changes/panel-symlink-inside-project/`：`proposal.md`（Why/What，短）、`tasks.md`、以及 `specs/panel/spec.md` 的 delta。
+- delta 用 **MODIFIED Requirement**，把那条场景改成：解析真实路径后仍在项目根内 → 正常打开；落在项目根外 / FIFO / 设备 → 仍拒绝，并同时点名真实路径与项目根。
+- `openspec validate --all` 必须绿（本仓非 strict）。不需要 `design.md`，不要动别的 capability。
+
+**③ 重跑与报告。** 改完重跑你已跑过的面板/详情选段并贴结果行；报告补一节「规格 delta 与它对应的场景」。推分支、通知我。
