@@ -15,7 +15,7 @@ branch: task/P417-mark-loaded-at-launch
 
 ## 现场
 
-用户在 ai_interview 里升到 0.4.1 并 `team up` 重启 PM，doctor 仍报：
+用户在 <other-project> 里升到 0.4.1 并 `team up` 重启 PM，doctor 仍报：
 
 ```
 迁移指引  ! 本会话加载 0.4.0、磁盘 0.4.1：读 …/references/migration.md
@@ -23,7 +23,7 @@ $ team version
 teamsmith 0.4.1
 ```
 
-erp 里同样：`pm-loaded.env` 停在 `VERSION=0.3.4`、`AT=2026-10-29`。
+<other-project> 里同样：`pm-loaded.env` 停在 `VERSION=0.3.4`、`AT=2026-10-29`。
 
 ## 结论（2026-11-05 改向：不写记录，删掉记录）
 

@@ -13,9 +13,9 @@ branch: task/P415-safe-dir-own-group
 
 # P415 · 关键回复在 0.4.0 里全线不工作
 
-## 现场（用户在 erp 项目实测，PM 复现并定性）
+## 现场（用户在 <other-project> 项目实测，PM 复现并定性）
 
-`erp` 起了 PM、`team-reply.ts` 在 Pi 的扩展列表里（`team-bg.ts, team-inbox-watch.ts, team-reply.ts` 都在），但：
+`<other-project>` 起了 PM、`team-reply.ts` 在 Pi 的扩展列表里（`team-bg.ts, team-inbox-watch.ts, team-reply.ts` 都在），但：
 
 - `.pi/team/state/reply-capture/` **不存在**（扩展没有注册成功）；
 - `team doctor` 只报 `关键回复运行 ! unknown … registration:Error`，**不说是为什么**；
@@ -30,9 +30,9 @@ REFUSED: unsafe directory ancestry
 `reply-capture.mjs:187` 的判据是每个祖先目录都不许 `mode & 0o022`（组/他人可写）除非有 sticky 位。而这台机器上：
 
 ```
-drwxrwxr-x yikdata yikdata  /…/Documents/syncthing/Work/Projects
-drwxrwxr-x yikdata yikdata  /…/Work/Projects/erp
-drwxrwxr-x yikdata yikdata  /…/erp/.pi
+drwxrwxr-x <user> <user>  /…/Documents/syncthing/Work/Projects
+drwxrwxr-x <user> <user>  /…/Work/Projects/<other-project>
+drwxrwxr-x <user> <user>  /…/<other-project>/.pi
 ```
 
 全是 775，组就是用户自己的组（`id -g` = 1000，与目录组一致）。于是**所有位于这个同步目录下的项目全部拒绝注册**——包括 pm-skills 自己（它的 `state/reply-capture/` 同样不存在）。

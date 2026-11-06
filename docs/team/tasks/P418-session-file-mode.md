@@ -11,11 +11,11 @@ deltas: -
 branch: task/P418-session-file-mode
 ---
 
-# P418 · 0.4.1 之后 ai_interview 仍然捕获不了
+# P418 · 0.4.1 之后 <other-project> 仍然捕获不了
 
 ## 现场（PM 在活的 PM 进程上复算，不是推测）
 
-ai_interview（0.4.1、`team up` 重启过）里回复正文仍带着 `[[team-reply]]`、pulse 上没有对应条目、`.pi/team/state/reply-capture/` 不存在。
+<other-project>（0.4.1、`team up` 重启过）里回复正文仍带着 `[[team-reply]]`、pulse 上没有对应条目、`.pi/team/state/reply-capture/` 不存在。
 
 用同一份 `resolvePMIdentity` 对它那个 PM 进程的真实 env/context 复算：
 
@@ -26,7 +26,7 @@ REFUSED: unsafe regular file
 定位到 `reply-capture.mjs` 的 `regular()`：要求 `nlink === 1` 且 `(mode & 0o022) === 0`。而它校验的 `context.sessionFile` 是 **Pi 自己写的会话文件**：
 
 ```
--rw-rw-r-- yikdata yikdata  2026-10-27T01-50-31-807Z_01a17b0d….jsonl
+-rw-rw-r-- <user> <user>  2026-10-27T01-50-31-807Z_01a17b0d….jsonl
 ```
 
 664（组可写）→ 判不安全 → 整个捕获不注册。旧的会话文件都是 664（现在的 umask 是 022，新文件才是 644），所以**任何续用旧会话的 PM 都捕获不到**，pm-skills 自己也一样。
@@ -54,7 +54,7 @@ REFUSED: unsafe regular file
 
 - `node skills/teamsmith/tests/reply-capture.mjs --all`（含你新加的用例）
 - `bash skills/teamsmith/tests/key-replies.sh --select workflow`
-- 真实流程：在 ai_interview 那样「续用旧会话」的形状下（会话文件 664）起一份捕获，`runtime.json` 必须写出来
+- 真实流程：在 <other-project> 那样「续用旧会话」的形状下（会话文件 664）起一份捕获，`runtime.json` 必须写出来
 - `section-select.sh --check`、`ledger-ban.sh --names-file .pi/team/forbidden-names.txt`、`git diff --check`
 - 报告 `docs/team/reports/P418-dev2.md`，提交推分支，通知 PM。**目标 1 小时内**。
 

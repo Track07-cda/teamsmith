@@ -20,11 +20,11 @@ branch: task/P420-dispatch-state-identity
 
 ```
 ✗ 拒绝派单：dev 上还有一个没结束的任务（P417）
-✗   分支：task/P417-mark-loaded-at-launch（工作树 /home/yikdata/…/pm-skills/.worktrees/dev 还停在它上面）
+✗   分支：task/P417-mark-loaded-at-launch（工作树 /home/<user>/…/pm-skills/.worktrees/dev 还停在它上面）
 ```
 
 P417 是**真实项目里在飞的任务**，沙盒里根本没有它。PM 会话的环境里有
-`TEAM_STATE_DIR=/home/yikdata/…/pm-skills/.pi/team/state`，而这几个断言跑 `$TEAM dispatch … --root "$REPO"` 时，
+`TEAM_STATE_DIR=/home/<user>/…/pm-skills/.pi/team/state`，而这几个断言跑 `$TEAM dispatch … --root "$REPO"` 时，
 身份仍按继承的 `TEAM_STATE_DIR` 解析，于是读到真实席位记录。
 
 要做的：派单（以及所有需要项目身份的路径）**按 root 解析状态目录与席位记录**，继承来的 `TEAM_STATE_DIR`

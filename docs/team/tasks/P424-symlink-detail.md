@@ -1,6 +1,6 @@
 ---
 id: P424
-title: 详情面把项目内的软链当攻击拒绝（ai_interview 的 docs/team 是软链）
+title: 详情面把项目内的软链当攻击拒绝（<other-project> 的 docs/team 是软链）
 agent: dev
 category: code
 phase: apply
@@ -15,10 +15,10 @@ branch: task/P424-symlink-detail
 
 ## 现场
 
-ai_interview 的 `docs/team` 是一个**指向项目内部**的软链：
+<other-project> 的 `docs/team` 是一个**指向项目内部**的软链：
 
 ```
-docs/team → ai-interview-algo/docs/team        （同一项目内）
+docs/team → <other-project>-algo/docs/team        （同一项目内）
 ```
 
 pulse 面板上打开任何条目的“详细”，显示 `来源不可用：软链拒绝：…`。原因在 `scripts/lib/cmd-watch.sh` 的详情块：
