@@ -1,5 +1,5 @@
 ---
-id: P421
+id: P422
 title: 待命开关迁移到统一状态（agent-self-reminder 1.3）
 agent: dev
 category: code
@@ -8,10 +8,10 @@ change: agent-self-reminder
 specs: agent-self-reminder
 anchor: openspec/changes/agent-self-reminder/specs/agent-self-reminder/spec.md
 deltas: -
-branch: task/P421-standby-migration
+branch: task/P422-standby-migration
 ---
 
-# P421 · 待命开关只有一个地方能写
+# P422 · 待命开关只有一个地方能写
 
 用户 2026-11-06 授权。做 `openspec/changes/agent-self-reminder/tasks.md` 的 **1.3**。
 
