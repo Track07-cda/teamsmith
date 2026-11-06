@@ -14573,26 +14573,33 @@ assert_eq "28-i2 消毒：围栏可见文本仍在" "$P28I2_VIS" "ok"
 
 # 软链：拒绝并点名，不读穿；同一个 change 的其余 artifact 照常打开；--file 选不到它
 P28I2_READ --source change --id demo-sym >"$TMP/p28i2-sym.json" 2>/dev/null; P28I2_SYM_RC=$?
-P28I2_CHK="$(python3 - "$TMP/p28i2-sym.json" <<'PYL'
+P28I2_CHK="$(python3 - "$TMP/p28i2-sym.json" "$TMP/p28i2-outside.md" "$P27R" <<'PYL'
 import json, sys
 d = json.load(open(sys.argv[1], encoding="utf-8"))
+real_target, root = sys.argv[2], sys.argv[3]
 problems = []
 if [f["tab"] for f in d["files"]] != ["design", "tasks"]:
     problems.append(f"软链之外的 artifact 没有照常打开：{[f['tab'] for f in d['files']]}")
-if "proposal.md" not in (d.get("reason") or ""):
-    problems.append(f"被拒的软链没有被点名：{d.get('reason')!r}")
+reason = d.get("reason") or ""
+if "proposal.md" not in reason:
+    problems.append(f"被拒的软链没有被点名：{reason!r}")
+# P424：根外软链的拒绝要点名**真实落点**与**项目根**（只报「哪一段是软链」不够排错）
+if real_target not in reason or root not in reason:
+    problems.append(f"拒绝没有点名真实落点/项目根：{reason!r}")
 if "绝不能被读穿" in d["text"] or any("proposal.md" in f["path"] for f in d["files"]):
     problems.append("软链的目标正文被读出来了")
 print("ok" if not problems else "；".join(problems))
 PYL
 )"
-assert_eq "28-i2 软链：拒绝并点名、其余 artifact 照常、目标不读穿" "$P28I2_CHK" "ok"
+assert_eq "28-i2 软链：拒绝并点名（真实落点 + 项目根）、其余 artifact 照常、目标不读穿" "$P28I2_CHK" "ok"
 assert_eq "28-i2 软链：带软链的 change 仍退出 0" "$P28I2_SYM_RC" "0"
 P28I2_REFUSE "软链路径不能被 --file 选中" 1 "--file" --source change --id demo-sym --file openspec/changes/demo-sym/proposal.md
 
-# 目录软链（F1 返修）：`changes/<id>` / `specs/<cap>` 这一层本身是软链时，正文的路径段就已经越界了 ——
-# 根外目标（读穿 openspec 根）、根内别名（服务别的 change / 另一个 capability）、指向 archive/ 的别名
-# 都必须逐段判掉并点名。叶节点软链的既有语义在上面，不动。
+# 目录软链（P424 新判据）：只判**解析后的落点**，不再「任一段是软链就拒」。
+#   * 落点在项目根外（根外目录 / 根外 spec 目录）→ 拒绝并点名（真实落点 + 项目根）；
+#   * 落点在项目根内（别名指到同一项目里的另一个 change / archive / capability）→ 照常服务 ——
+#     这是与改动前相反的那一面，新合同就是「落点合规就可读」，`links` 里报出经过的别名段；
+#   * 归档目录里的条目仍不能用**正常路径**被服务（发现面按 id 拼路径，不跨 change）。
 P28I2_OUTDIR="$TMP/p28i2-outside-dir"; P28I2_OUTSPEC="$TMP/p28i2-outside-spec"
 mkdir -p "$P28I2_OUTDIR" "$P28I2_OUTSPEC"
 printf '# OUTSIDE-DIR-SECRET proposal\n' > "$P28I2_OUTDIR/proposal.md"
@@ -14600,7 +14607,7 @@ printf '# OUTSIDE-DIR-SECRET design\n' > "$P28I2_OUTDIR/design.md"
 printf '# OUTSIDE-SPEC-DIR-SECRET\n' > "$P28I2_OUTSPEC/spec.md"
 ln -sfn "$P28I2_OUTDIR"  "$P27R/openspec/changes/symdir"       # 指根外
 ln -sfn "$P28I2_CH"      "$P27R/openspec/changes/alias"        # 指根内另一个 change
-ln -sfn "$P28I2_ARCH"    "$P27R/openspec/changes/archalias"    # 指 archive/
+ln -sfn "$P28I2_ARCH"    "$P27R/openspec/changes/archalias"    # 指项目内 archive/
 ln -sfn "$P28I2_OUTSPEC" "$P27R/openspec/specs/linkspecdir"    # 指根外
 ln -sfn "$P28I2_SPEC"    "$P27R/openspec/specs/aliasspec"      # 指根内另一个 capability
 P28I2_READ --source change --id symdir >"$TMP/p28i2-symdir.json" 2>/dev/null; P28I2_SYMDIR_RC=$?
@@ -14614,23 +14621,32 @@ P28I2_CHK="$(python3 - "$TMP/p28i2-symdir.json" "$TMP/p28i2-alias.json" "$TMP/p2
 import json, sys
 symdir, alias, archalias, linkspec, aliasspec, arch = [json.load(open(p, encoding="utf-8")) for p in sys.argv[1:7]]
 problems = []
-if symdir["count"] != 0 or symdir["files"] or "OUTSIDE-DIR-SECRET" in symdir["text"] or "symdir" not in (symdir.get("reason") or ""):
-    problems.append(f"changes/symdir 指根外没被拒绝并点名：count={symdir['count']} reason={symdir.get('reason')!r} text={symdir['text'][:40]!r}")
-if alias["count"] != 0 or alias["files"] or "alias" not in (alias.get("reason") or ""):
-    problems.append(f"changes/alias 指根内另一个 change 仍被服务：{alias['files']} reason={alias.get('reason')!r}")
-if archalias["count"] != 0 or archalias["files"] or "archived proposal" in archalias["text"] or "archalias" not in (archalias.get("reason") or ""):
-    problems.append(f"changes/archalias 指 archive/ 仍被服务：{archalias['files']} text={archalias['text'][:40]!r}")
-if linkspec["count"] != 0 or linkspec["files"] or "OUTSIDE-SPEC-DIR-SECRET" in linkspec["text"] or "linkspecdir" not in (linkspec.get("reason") or ""):
-    problems.append(f"specs/linkspecdir 指根外没被拒绝并点名：count={linkspec['count']} reason={linkspec.get('reason')!r}")
-if aliasspec["count"] != 0 or aliasspec["files"] or "Requirement: One" in aliasspec["text"] or "aliasspec" not in (aliasspec.get("reason") or ""):
-    problems.append(f"specs/aliasspec 指根内另一个 capability 仍被服务：{aliasspec['files']} reason={aliasspec.get('reason')!r}")
+# 根外：拒绝，且原因里同时有真实落点与边界（`不在` 是那条文案的承重词）
+for name, d, secret in (("changes/symdir", symdir, "OUTSIDE-DIR-SECRET"),
+                        ("specs/linkspecdir", linkspec, "OUTSIDE-SPEC-DIR-SECRET")):
+    r = d.get("reason") or ""
+    if d["count"] or d["files"] or secret in d["text"]:
+        problems.append(f"{name} 指根外仍被服务：{d['files']} text={d['text'][:40]!r}")
+    if "软链拒绝" not in r or "不在" not in r:
+        problems.append(f"{name} 的拒绝没点名落点与边界：{r!r}")
+# 根内：照常服务（新合同）
+if alias["count"] != 3 or [f["tab"] for f in alias["files"]] != ["proposal", "design", "tasks"]:
+    problems.append(f"changes/alias 指根内另一个 change 没被服务：{alias['files']} reason={alias.get('reason')!r}")
+if "demo proposal" not in alias["text"] or alias.get("reason"):
+    problems.append(f"changes/alias 正文/reason 不对：{alias['text'][:40]!r} {alias.get('reason')!r}")
+if "openspec/changes/alias" not in (alias.get("links") or []):
+    problems.append(f"changes/alias 没把经过的别名段报出来：{alias.get('links')!r}")
+if archalias["count"] != 1 or "archived proposal" not in archalias["text"]:
+    problems.append(f"changes/archalias 指项目内 archive/ 没被服务：{archalias['files']} text={archalias['text'][:40]!r}")
+if aliasspec["count"] != 1 or "Requirement: One" not in aliasspec["text"]:
+    problems.append(f"specs/aliasspec 指项目内另一个 capability 没被服务：{aliasspec['files']}")
 if arch["count"] != 0 or arch["files"] or "archived proposal" in arch["text"]:
     problems.append(f"archive/ 用正常路径被服务了：{arch['files']} text={arch['text'][:40]!r}")
 print("ok" if not problems else "；".join(problems))
 PYM
 )"
-assert_eq "28-i2 目录软链：根外目标、根内别名、archive 别名逐段拒绝并点名（正常路径也到不了 archive）" "$P28I2_CHK" "ok"
-assert_eq "28-i2 目录软链：被拒的目录软链仍退出 0（不是错误帧）" "$P28I2_SYMDIR_RC/$P28I2_ALIAS_RC/$P28I2_ARCHALIAS_RC/$P28I2_LINKSPEC_RC/$P28I2_ALIASSPEC_RC/$P28I2_ARCH_RC" "0/0/0/0/0/0"
+assert_eq "28-i2 目录软链：根外拒绝并点名落点与边界、根内别名照常服务且 links 点名（正常路径仍到不了 archive）" "$P28I2_CHK" "ok"
+assert_eq "28-i2 目录软链：两种读都退出 0（不是错误帧）" "$P28I2_SYMDIR_RC/$P28I2_ALIAS_RC/$P28I2_ARCHALIAS_RC/$P28I2_LINKSPEC_RC/$P28I2_ALIASSPEC_RC/$P28I2_ARCH_RC" "0/0/0/0/0/0"
 P28I2_REFUSE "目录软链里的文件不能被 --file 选中（change）" 1 "--file" --source change --id symdir --file openspec/changes/symdir/proposal.md
 P28I2_REFUSE "目录软链里的文件不能被 --file 选中（spec）" 1 "--file" --source spec --id linkspecdir --file openspec/specs/linkspecdir/spec.md
 P28I2_REFUSE "archive 里的文件用正常路径也选不到" 1 "--file" --source change --id archive --file openspec/changes/archive/oldspec/proposal.md
@@ -14719,6 +14735,93 @@ print("ok" if not problems else "；".join(problems))
 PYRC
 )"
 assert_eq "28-i2 项目根软链：还原后 change/decision 照常服务" "$P28I2_RL_CTL" "ok"
+
+# ---- 28-i3 项目内的软链（P424）
+# 现场形状：ai_interview 的 `docs/team → ai-interview-algo/docs/team`（同一项目内）。旧判据按「路径上任
+# 一段是软链」拒绝，详情面整页不可用；新判据只看**解析后的落点**。翻转证据在报告里（判据改回「任一段是
+# 软链就拒」→ 「项目内软链的详情可读」那条必须变红），这里钉正向与反面。
+P28I3="$P27R/ai-interview-algo"
+mkdir -p "$P28I3/docs"
+mv "$P27R/docs/team" "$P28I3/docs/team"
+ln -sfn "$P28I3/docs/team" "$P27R/docs/team"
+P28I2_READ --source entry --id P1 >"$TMP/p28i3-entry.json" 2>/dev/null; P28I3_ENTRY_RC=$?
+P28I2_READ --source decision --id D7 >"$TMP/p28i3-dec.json" 2>/dev/null; P28I3_DEC_RC=$?
+P28I2_READ --block decisions >"$TMP/p28i3-decs.json" 2>/dev/null; P28I3_DECS_RC=$?
+P28I3_CHK="$(python3 - "$TMP/p28i3-entry.json" "$TMP/p28i3-dec.json" "$TMP/p28i3-decs.json" <<'PYA'
+import json, sys
+entry = json.load(open(sys.argv[1], encoding="utf-8"))
+dec = json.load(open(sys.argv[2], encoding="utf-8"))
+decs = json.load(open(sys.argv[3], encoding="utf-8"))
+problems = []
+if entry.get("reason"):
+    problems.append(f"项目内软链的详情仍报错误：{entry['reason']!r}")
+if "P1 · 夹具任务书" not in (entry.get("text") or ""):
+    problems.append(f"项目内软链的详情没有读到正文：{entry.get('file')!r}")
+if "docs/team" not in (entry.get("links") or []):
+    problems.append(f"没有把经过的软链段报出来（links）：{entry.get('links')!r}")
+if "D7 body" not in (dec.get("text") or ""):
+    problems.append(f"项目内软链下的决策条目读不到：{dec.get('text')[:40]!r}")
+if decs.get("count", 0) < 1:
+    problems.append(f"项目内软链下 decisions 块不列条目：{decs}")
+print("ok" if not problems else "；".join(problems))
+PYA
+)"
+assert_eq "28-i3 项目内软链：详情可读、不报来源不可用、links 点名那一段、决策与列表照常" "$P28I3_CHK" "ok"
+assert_eq "28-i3 项目内软链：三类读都退出 0" "$P28I3_ENTRY_RC/$P28I3_DEC_RC/$P28I3_DECS_RC" "0/0/0"
+
+# 反面：同一位置换成指向**项目根外**的软链 → 仍拒绝并点名真实落点 + 项目根，正文一个字节都不读
+P28I3_OUT="$TMP/p28i3-outside-team"
+mkdir -p "$P28I3_OUT/tasks" "$P28I3_OUT/reports"
+printf '# OUTSIDE-TEAM-SECRET brief\n' > "$P28I3_OUT/tasks/P1-a.md"
+printf '# DECISIONS\n\n## D7 · outside\n\nOUTSIDE-TEAM-SECRET\n' > "$P28I3_OUT/DECISIONS.md"
+ln -sfn "$P28I3_OUT" "$P27R/docs/team"
+P28I2_READ --source entry --id P1 >"$TMP/p28i3-out-entry.json" 2>/dev/null; P28I3_OUT_RC=$?
+P28I2_READ --block decisions >"$TMP/p28i3-out-decs.json" 2>/dev/null
+P28I3_CHK="$(python3 - "$TMP/p28i3-out-entry.json" "$TMP/p28i3-out-decs.json" "$P28I3_OUT" "$P27R" <<'PYB'
+import json, sys
+entry = json.load(open(sys.argv[1], encoding="utf-8"))
+decs = json.load(open(sys.argv[2], encoding="utf-8"))
+out, root = sys.argv[3], sys.argv[4]
+problems = []
+r = entry.get("reason") or ""
+if entry["count"] or entry["files"]:
+    problems.append(f"根外软链仍进了发现集：{entry['files']}")
+if entry.get("text"):
+    problems.append(f"根外正文被读了：{(entry.get('text') or '')[:40]!r}")
+if "软链拒绝" not in r or out not in r or root not in r:
+    problems.append(f"根外软链的拒绝没同时点名真实落点与项目根：{r!r}")
+if decs.get("count"):
+    problems.append(f"根外账本仍被列表块画出来：{decs}")
+print("ok" if not problems else "；".join(problems))
+PYB
+)"
+assert_eq "28-i3 根外软链：仍拒绝并点名真实落点 + 项目根、正文/列表都不读" "$P28I3_CHK" "ok"
+assert_eq "28-i3 根外软链：仍退出 0（不是错误帧）" "$P28I3_OUT_RC" "0"
+rm -f "$P27R/docs/team"
+mv "$P28I3/docs/team" "$P27R/docs/team"
+rmdir "$P28I3/docs" "$P28I3" 2>/dev/null || true
+
+# FIFO 冒充详情文件（含「指向 FIFO 的软链」）：仍拒绝且**不阻塞** —— `timeout 10` 是绊线，
+# rc=124 就是读者在 open 上挂住了（bash 没有 O_NONBLOCK 的 open，挡在 open 之前）。
+P28I3_FIFO="$TMP/p28i3-fifo"
+rm -f "$P28I3_FIFO"; mkfifo "$P28I3_FIFO"
+ln -sfn "$P28I3_FIFO" "$P27R/docs/team/reports/P9-dev.md"
+P28I3_FIFO_RC=0
+p27 timeout 10 bash "$P28I2_TEAM" __panel-data --block detail --source entry --id P9 >"$TMP/p28i3-fifo.json" 2>/dev/null || P28I3_FIFO_RC=$?
+P28I3_CHK="$(python3 - "$TMP/p28i3-fifo.json" <<'PYC'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    print("FIFO 的详情输出不是合法 JSON（可能挂住/被 timeout 打断）")
+else:
+    r = d.get("reason") or ""
+    ok = not d["count"] and not d["files"] and not d["text"] and "不是普通文件" in r and "FIFO" in r
+    print("ok" if ok else f"FIFO 的结果不对：{d}")
+PYC
+)"
+assert_eq "28-i3 FIFO：指向 FIFO 的软链不被服务、不阻塞（timeout 10 是绊线）、拒绝时点名是 FIFO" "$P28I3_FIFO_RC/$P28I3_CHK" "0/ok"
+rm -f "$P27R/docs/team/reports/P9-dev.md" "$P28I3_FIFO"
 
 # 读面形状守卫（F2）：detail 的正文只能由 `team_panel_detail_read_nofollow`（open 一次 + fd 身份 + 逐段现查）
 # 产出。承重证据是仓外的对抗 fuzz（V33 的 probe-reader-race.sh：冻结 tip 上 1400 读里 117 次泄漏；
