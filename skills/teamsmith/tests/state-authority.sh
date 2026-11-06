@@ -7,14 +7,19 @@
 #       别的项目的状态根都被拒绝，且拒绝发生在建目录之前。
 #   1.2 版本化快照 + flock 事务：Bash/Node 不同 TMPDIR 并发仍然逐个序号；持锁者被杀后立刻恢复；
 #       损坏 / 不支持版本 / 半个快照是显式失败且一个字节都不改；原子写在被杀写入者下不露半个文件。
+#   1.3 待命：旧 state/standby 只由迁移搬一次（原因/时间保留、代次不加、重复跑不变），读/写全走
+#       统一状态（迁移后旧文件不再是真相），只读路径不写盘，代次每次 on 递增，缺 flock 显式失败。
 #
 # 红侧（各自具名，都用**同一个**判据判定，变异体在 scratch 副本上，产品与工作树不动）：
 #   --flip=unlocked  把事务助手换成不持锁的直写      → 并发序号断言必须红
 #   --flip=version   删掉快照版本检查                → “版本 2 必须被拒”必须红
 #   --flip=foreign   删掉外来项目检查                → “别的项目的 .pi/team 必须被拒”必须红
 #   --flip=manifest  把隔离清单退回“整段跳过 state/” → “state/ 下的杂散文件必须被报”必须红
-# 不带 --flip 时四条臂全跑；带一条时只跑那一条，其余臂跳过（跳过即不计入，不是通过）。
-# 用法：bash tests/state-authority.sh [--flip=unlocked|version|foreign|manifest]
+#   --flip=standby-ignore  迁移不读旧标记            → “迁移保留原因/时间”必须红
+#   --flip=standby-file    读路径退回旧标记文件      → “迁移后旧标记不再是真相”必须红
+#   --flip=standby-write   写待命退回 state/standby  → “写入后统一状态记下 on”必须红
+# 不带 --flip 时七条臂全跑；带一条时只跑那一条，其余臂跳过（跳过即不计入，不是通过）。
+# 用法：bash tests/state-authority.sh [--flip=unlocked|version|foreign|manifest|standby-ignore|standby-file|standby-write]
 # 退出码：0 全绿 / 1 有失败 / 2 参数不认识 / 3 前提缺失（JS 运行时或 flock；可见跳过，不算通过）
 set -uo pipefail
 
@@ -26,15 +31,15 @@ FLIP=""
 flip_err() { printf 'state-authority: %s\n' "$1" >&2; }
 for arg in "$@"; do
   case "$arg" in
-    --flip=unlocked|--flip=version|--flip=foreign|--flip=manifest)
+    --flip=unlocked|--flip=version|--flip=foreign|--flip=manifest|--flip=standby-ignore|--flip=standby-file|--flip=standby-write)
       if [ -n "$FLIP" ] && [ "$FLIP" != "${arg#--flip=}" ]; then
         flip_err "互相冲突的 --flip（$FLIP / ${arg#--flip=}）：一次只跑一条臂"; exit 2
       fi
       FLIP="${arg#--flip=}" ;;
     --flip=*)
-      flip_err "不认识的 --flip 值 [${arg#--flip=}]；只接受 unlocked|version|foreign|manifest"; exit 2 ;;
+      flip_err "不认识的 --flip 值 [${arg#--flip=}]；只接受 unlocked|version|foreign|manifest|standby-ignore|standby-file|standby-write"; exit 2 ;;
     -h|--help)
-      printf 'usage: bash tests/state-authority.sh [--flip=unlocked|version|foreign|manifest]\n'; exit 0 ;;
+      printf 'usage: bash tests/state-authority.sh [--flip=unlocked|version|foreign|manifest|standby-ignore|standby-file|standby-write]\n'; exit 0 ;;
     *)
       flip_err "不认识的参数 [$arg]（只接受 --flip=<unlocked|version|foreign|manifest>）"; exit 2 ;;
   esac
@@ -439,22 +444,145 @@ else
   note "（有残留 .tmp，但它们被忽略；上面已验证读者不受影响）"
 fi
 
-# ---------------------------------------------------------------- 9. 1.3 边界：本片不动活的 standby
-MARKER="$E/.pi/team/state/standby"
-mkdir -p "$E/.pi/team/state"
-printf '2026-10-29T10:00:00+00:00 waiting for human\n' >"$MARKER"
-marker_before="$(sha256sum "$MARKER" | cut -d' ' -f1)"
-runchild "$E" -- "$PREP; team_authority_init; team_authority_allocate batch" >/dev/null
-marker_after="$(sha256sum "$MARKER" | cut -d' ' -f1)"
-assert_eq_local "本片（1.1/1.2）不读不动旧的 standby 标记" "$marker_after" "$marker_before"
-generation="$(jget "$(runchild "$E" -- "$PREP; team_authority_read" 2>&1)" standby.generation 2>/dev/null)"
-assert_eq_local "新快照的 Standby 槽位是 generation 0（迁移留给 1.3）" "$generation" "0"
+# ---------------------------------------------------------------- 9. 待命：唯一写点 + 一次性迁移（1.3）
+# 旧标记的形状：`<时间戳> <原因>`（旧写入者没有原因时写 `-`）。现场由夹具自己造（不碰真项目）。
+sb() { runchild "$1" -- "$PREP; $2"; }   # <仓库> <bash 片段（在 PREP 之后）>
+E_STATE="$E/.pi/team/state"
+mkdir -p "$E_STATE"
+MARKER="$E_STATE/standby"
+printf '2026-10-29T10:00:00Z waiting for human\n' >"$MARKER"
+pi_tree() { ( cd "$1" && find .pi -type f 2>/dev/null | sort | while IFS= read -r f; do printf '%s %s\n' "$f" "$(sha256sum "$f" | cut -d' ' -f1)"; done ); }
+
+# ① 只读路径认旧标记（升级中的团队不许被读成「没有待命」），且不写盘
+E_BEFORE="$(pi_tree "$E")"
+out="$(sb "$E" 'team_standby_status')"; rc=$?
+assert_eq_local "①a 旧标记还在时 status 读出 on 与原时间/原因（不是「没有待命」）" \
+  "$(printf '%s\n' "$out" | sed -n 1p)" "standby: on（自 2026-10-29T10:00:00Z，原因：waiting for human）"
+assert_eq_local "①b status 读 rc" "$rc" "0"
+assert_eq_local "①c 未迁移时如实提示迁移" "$(printf '%s\n' "$out" | sed -n 2p)" \
+  "（旧标记还没并入统一状态：跑 team standby migrate 完成迁移）"
+out="$(sb "$E" 'team_in_standby; printf "rc=%s" "$?"')"
+assert_eq_local "①d 巡检/面板读到同一个 on" "$out" "rc=0"
+assert_eq_local "①e 原因原样读出" "$(sb "$E" 'team_standby_reason')" "waiting for human"
+E_AFTER="$(pi_tree "$E")"
+assert_eq_local "①f 只读路径不建定位器、不发布快照（展示路径不写盘）" "$E_AFTER" "$E_BEFORE"
+[ -e "$E/.pi/team/reminder-locator.json" ] && bad "①g 只读路径建出了定位器（展示路径写盘了）" || ok "①g 只读路径没有建定位器"
+
+# ② 写待命：旧标记在同一个事务里并被导入，快照发布后才退役（一次搬完）
+out="$(sb "$E" 'team_standby_on "after the upgrade"')"; rc=$?
+E_SNAP="$E_STATE/reminders/state.json"
+assert_eq_local "②a 首次写待命 rc" "$rc" "0"
+[ ! -e "$MARKER" ] && ok "②b 旧标记不再是真相（state/standby 已不在）" || bad "②b 旧标记还立在 state/standby"
+[ -f "$E_STATE/standby.migrated" ] && ok "②c 旧标记改名为 standby.migrated（留证据、不删）" || bad "②c 退役时没有留下 standby.migrated"
+assert_eq_local "②d 写入后统一状态：on" "$(jget "$(cat "$E_SNAP")" standby.on)" "true"
+assert_eq_local "②e 写入后统一状态：代次 1（迁移不占代，on 加一代）" "$(jget "$(cat "$E_SNAP")" standby.generation)" "1"
+assert_eq_local "②f 写入后统一状态：原因就是新给的" "$(jget "$(cat "$E_SNAP")" standby.reason)" "after the upgrade"
+assert_eq_local "②g 统一状态记下迁移已完成" "$(jget "$(cat "$E_SNAP")" standby.migrated)" "true"
+
+# ③ 显式迁移：原因/时间保留，代次不加（gen 仍 0）
+I="$(make_repo I)" || { bad "夹具建不出仓库 I"; result; exit 1; }
+I_STATE="$I/.pi/team/state"; I_SNAP="$I_STATE/reminders/state.json"
+mkdir -p "$I_STATE"
+printf '2026-10-30T08:30:00Z human is deciding\n' >"$I_STATE/standby"
+out="$(sb "$I" 'team_standby_migrate')"; rc=$?
+assert_eq_local "③a 显式迁移 rc" "$rc" "0"
+assert_eq_local "③b 迁移后仍是 on，原因与时间都保留" "$(printf '%s\n' "$out" | sed -n 1p)" \
+  "standby: on（自 2026-10-30T08:30:00Z，原因：human is deciding）"
+assert_eq_local "③c 迁移不加代次（仍 0）" "$(jget "$(cat "$I_SNAP")" standby.generation)" "0"
+assert_eq_local "③d 迁移后的原因" "$(jget "$(cat "$I_SNAP")" standby.reason)" "human is deciding"
+assert_eq_local "③e 迁移后的时间" "$(jget "$(cat "$I_SNAP")" standby.since)" "2026-10-30T08:30:00Z"
+[ ! -e "$I_STATE/standby" ] && [ -f "$I_STATE/standby.migrated" ] && ok "③f 旧标记已退役" || bad "③f 迁移后旧标记仍立着"
+
+# ④ 重复迁移：状态不变、代次不变、不多出第二份证据
+I_H1="$(sha256sum "$I_SNAP" | cut -d' ' -f1)"
+out="$(sb "$I" 'team_standby_migrate')"; rc=$?
+I_H2="$(sha256sum "$I_SNAP" | cut -d' ' -f1)"
+assert_eq_local "④a 重复迁移 rc" "$rc" "0"
+assert_eq_local "④b 重复迁移一个字节都不写（快照哈希不变）" "$I_H2" "$I_H1"
+assert_eq_local "④c 重复迁移提示无需迁移" "$(printf '%s\n' "$out" | sed -n 2p)" "迁移：无需迁移（统一状态已记录待命开启）"
+assert_eq_local "④d 重复迁移没有多出第二份旧标记" "$(find "$I_STATE" -maxdepth 1 -name 'standby.migrated*' | wc -l | tr -d ' ')" "1"
+assert_eq_local "④e 代次仍是 0" "$(jget "$(cat "$I_SNAP")" standby.generation)" "0"
+
+# ⑤ 迁移之后：旧文件不再被当成真相（手写一个旧标记，读到的仍是统一状态）
+sb "$I" 'team_standby_off' >/dev/null
+assert_eq_local "⑤a off 之后 status 是 off" "$(sb "$I" 'team_standby_status')" "standby: off"
+printf '2026-11-02T00:00:00Z stale marker from an old writer\n' >"$I_STATE/standby"
+assert_eq_local "⑤b 手写旧标记改不动真相（仍 off）" "$(sb "$I" 'team_standby_status')" "standby: off"
+assert_eq_local "⑤c 巡检也不会被旧标记叫错" "$(sb "$I" 'team_in_standby; printf "rc=%s" "$?"')" "rc=1"
+out="$(sb "$I" 'team_standby_migrate')"
+[ -f "$I_STATE/standby.migrated.1" ] && [ ! -e "$I_STATE/standby" ] && ok "⑤d 残留的旧标记被清掉（改名为 standby.migrated.1，不删）" \
+  || bad "⑤d 残留的旧标记没有被清掉"
+assert_eq_local "⑤e 清残留不改待命状态（仍 off）" "$(sb "$I" 'team_standby_status')" "standby: off"
+assert_eq_local "⑤f 清残留不加代次" "$(jget "$(cat "$I_SNAP")" standby.generation)" "0"
+
+# ⑥ 代次语义：每次 on 都是新的一代，off 不动代次、重复 off 不写盘
+J="$(make_repo J)" || { bad "夹具建不出仓库 J"; result; exit 1; }
+J_SNAP="$J/.pi/team/state/reminders/state.json"
+sb "$J" 'team_standby_on "first"' >/dev/null
+assert_eq_local "⑥a 第一次 on：代次 1" "$(jget "$(cat "$J_SNAP")" standby.generation)" "1"
+sb "$J" 'team_standby_on "second"' >/dev/null
+assert_eq_local "⑥b 已在待命时再 on：代次 2（代次不重用）" "$(jget "$(cat "$J_SNAP")" standby.generation)" "2"
+assert_eq_local "⑥c 再 on 之后原因是新的" "$(jget "$(cat "$J_SNAP")" standby.reason)" "second"
+sb "$J" 'team_standby_off' >/dev/null
+assert_eq_local "⑥d off 不动代次" "$(jget "$(cat "$J_SNAP")" standby.generation)" "2"
+J_H1="$(sha256sum "$J_SNAP" | cut -d' ' -f1)"
+sb "$J" 'team_standby_off' >/dev/null
+J_H2="$(sha256sum "$J_SNAP" | cut -d' ' -f1)"
+assert_eq_local "⑥e 重复 off 不改状态（快照一字不动）" "$J_H2" "$J_H1"
+sb "$J" 'team_standby_on "third"' >/dev/null
+assert_eq_local "⑥f off 之后 on：代次 3" "$(jget "$(cat "$J_SNAP")" standby.generation)" "3"
+
+# ⑦ 没有 flock：显式失败，不静默成功（也不留下半个旧标记）
+L="$(make_repo L)" || { bad "夹具建不出仓库 L"; result; exit 1; }
+L_STATE="$L/.pi/team/state"
+mkdir -p "$L_STATE"
+printf '2026-11-03T00:00:00Z no flock here\n' >"$L_STATE/standby"
+NOFLOCK="$ROOT/flip/noflock-bin"
+if mkdir -p "$NOFLOCK" && for f in /usr/bin/*; do b="${f##*/}"; [ "$b" = flock ] && continue; [ -e "$NOFLOCK/$b" ] || ln -s "$f" "$NOFLOCK/$b"; done; then
+  out="$(runchild "$L" NOFLOCK="$NOFLOCK" TEAM_JS_BIN="$RUNNER" -- "$PREP; PATH=\"\$NOFLOCK\" team_standby_on x >/dev/null 2>&1; printf 'rc=%s' \"\$?\"" 2>&1)"
+  if [ "$out" = "rc=1" ]; then
+    ok "⑦a 缺 flock：写待命退出码是 1（不是静默成功）"
+  else
+    bad "⑦a 缺 flock 时退出码不对（[$out]）"
+  fi
+  out="$(runchild "$L" NOFLOCK="$NOFLOCK" TEAM_JS_BIN="$RUNNER" -- "$PREP; PATH=\"\$NOFLOCK\" team_standby_on x 2>&1; printf ' rc=%s' \"\$?\"" 2>&1)"
+  if case "$out" in *"flock unavailable"*) true ;; *) false ;; esac; then
+    ok "⑦b 缺 flock：报错点名 flock（安装一个可用的，不落回无锁写）"
+  else
+    bad "⑦b 缺 flock 的报错没有点名 flock（输出：$(printf '%s' "$out" | tr '\n' '|')）"
+  fi
+  out="$(runchild "$J" NOFLOCK="$NOFLOCK" TEAM_JS_BIN="$RUNNER" -- "$PREP; PATH=\"\$NOFLOCK\" team_standby_status 2>&1; printf ' rc=%s' \"\$?\"" 2>&1)"
+  # 已钉住权威的项目：读要走事务锁，没有 flock 就不能算读过（不静默降级成 off）。
+  if case "$out" in *"flock unavailable"*) true ;; *) false ;; esac; then
+    ok "⑦c 缺 flock：已钉住的项目读也不静默降级成 off"
+  else
+    bad "⑦c 缺 flock 时读静默给了个结果（输出：$(printf '%s' "$out" | tr '\n' '|')）"
+  fi
+  # 未钉住的项目还没有权威快照可读：读只答旧标记（不需要锁），而且不能答成 off。
+  out="$(runchild "$L" NOFLOCK="$NOFLOCK" TEAM_JS_BIN="$RUNNER" -- "$PREP; PATH=\"\$NOFLOCK\" team_standby_status 2>&1; printf ' rc=%s' \"\$?\"" 2>&1)"
+  if case "$out" in *"standby: on（自 2026-11-03T00:00:00Z，原因：no flock here）"*) true ;; *) false ;; esac; then
+    ok "⑦d 缺 flock：未钉住的项目仍从旧标记读出 on（不需要锁，也不答成 off）"
+  else
+    bad "⑦d 缺 flock 时旧标记没被如实读出（输出：$(printf '%s' "$out" | tr '\n' '|')）"
+  fi
+  assert_eq_local "⑦e 缺 flock 时旧标记原样未动" "$(cat "$L_STATE/standby")" "2026-11-03T00:00:00Z no flock here"
+  [ ! -e "$L/.pi/team/reminder-locator.json" ] && [ ! -e "$L_STATE/reminders" ] && ok "⑦f 缺 flock 时没有建出定位器或快照" \
+    || bad "⑦f 缺 flock 时留下了定位器/快照"
+else
+  note "跳过 ⑦（这台机器上造不出没有 flock 的 PATH）"
+fi
 
 # ---------------------------------------------------------------- 10. 红侧：同一个判据，改坏实现必须红
 flip_copy() { # <名字> <sed 表达式> —— 变异必须真的改到（否则红侧就是橡皮章）
   authority_helper_copy "$ROOT/flip/$1.mjs"
   sed -i "$2" "$ROOT/flip/$1.mjs" || return 1
   ! cmp -s "$SKILL/scripts/state-authority.mjs" "$ROOT/flip/$1.mjs"
+}
+# 直接跑 scratch 助手（不经 bash 入口）：输出与退出码原样拿来比对。
+flip_helper() { # <helper> <repo> <state> <op> [args…] → 打印输出
+  local helper="$1" repo="$2" state="$3"; shift 3
+  ( cd "$repo" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION HOME="$ROOT/home" \
+      "$RUNNER" "$helper" --cli "$repo" "$state" "$@" 2>&1 )
 }
 # 10a. 不持锁的直写：只把生产代码里那条 flock 调用换成直接事务（一行之差，不放大任何窗口）
 if arm_selected unlocked; then
@@ -506,10 +634,6 @@ if flip_copy version 's/if (snapshot.version !== SNAPSHOT_VERSION) fail/if (fals
 else
   bad "flip 变异没落地（源码形状变了，夹具需要更新）"
 fi
-flip_helper() { # <helper> <repo> <state> <op> → 打印输出
-  ( cd "$2" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION HOME="$ROOT/home" \
-      "$RUNNER" "$1" --cli "$2" "$3" "$4" 2>&1 )
-}
 cp "$A_STATE/reminders/state.json" "$ROOT/state-good.json"
 sed 's/"version":1/"version":2/' "$ROOT/state-good.json" >"$SNAP"
 out="$(flip_helper "$NODE_HELPER" "$A" "$A_STATE" read)"; rc=$?
@@ -548,6 +672,96 @@ else
   note "跳过红侧臂 foreign（本次 --flip=${FLIP}）"
 fi
 
+# 10e. 待命迁移的三条红臂：迁移必须真的读旧标记、读/写必须真的走统一状态
+if arm_selected standby-ignore; then
+FLIPS_RUN="${FLIPS_RUN:+$FLIPS_RUN,}standby-ignore"
+if flip_copy standby-ignore 's/^function legacyMarker(state) {/function legacyMarker(state) { return null;/'; then
+  ok "flip 变异已落地：迁移不再读旧标记"
+else
+  bad "flip 变异没落地（源码形状变了，夹具需要更新）"
+fi
+O="$(make_repo O)" || { bad "夹具建不出仓库 O"; result; exit 1; }
+P="$(make_repo P)" || { bad "夹具建不出仓库 P"; result; exit 1; }
+O_STATE="$O/.pi/team/state"; P_STATE="$P/.pi/team/state"
+mkdir -p "$O_STATE" "$P_STATE"
+printf '2026-10-30T08:30:00Z human is deciding\n' >"$O_STATE/standby"
+printf '2026-10-30T08:30:00Z human is deciding\n' >"$P_STATE/standby"
+flip_helper "$NODE_HELPER" "$P" "$P_STATE" standby-import >/dev/null
+mut_out="$(flip_helper "$ROOT/flip/standby-ignore.mjs" "$O" "$O_STATE" standby-import)"
+orig_reason="$(jget "$(cat "$P_STATE/reminders/state.json")" standby.reason)"
+mut_on="$(jget "$(cat "$O_STATE/reminders/state.json")" standby.on)"
+if [ "$orig_reason" = "human is deciding" ] && [ "$mut_on" = "false" ]; then
+  ok "flip（忽略旧标记）：原实现保留 on+原因，变异体成了 off、原因也没搬进来 —— ③b/③d 会红"
+else
+  bad "flip（忽略旧标记）没被咬住（原 reason=[$orig_reason]，变异 on=[$mut_on]，输出：$(printf '%s' "$mut_out" | tr '\n' '|')）"
+fi
+else
+  note "跳过红侧臂 standby-ignore（本次 --flip=${FLIP}）"
+fi
+
+if arm_selected standby-file; then
+FLIPS_RUN="${FLIPS_RUN:+$FLIPS_RUN,}standby-file"
+if flip_copy standby-file 's/^  if (snapshot.standby.migrated) return { ...snapshot.standby, legacy: false };/  if (false) return { ...snapshot.standby, legacy: false };/'; then
+  ok "flip 变异已落地：读路径退回「旧标记总是算数」"
+else
+  bad "flip 变异没落地（源码形状变了，夹具需要更新）"
+fi
+Q="$(make_repo Q)" || { bad "夹具建不出仓库 Q"; result; exit 1; }
+Q_STATE="$Q/.pi/team/state"
+runchild "$Q" -- "$PREP; team_standby_on 'x'; team_standby_off" >/dev/null
+printf '2026-11-02T00:00:00Z stale marker\n' >"$Q_STATE/standby"
+orig_on="$(flip_helper "$NODE_HELPER" "$Q" "$Q_STATE" standby-read --print on)"
+mut_on_file="$(flip_helper "$ROOT/flip/standby-file.mjs" "$Q" "$Q_STATE" standby-read --print on)"
+if [ "$orig_on" = "false" ] && [ "$mut_on_file" = "true" ]; then
+  ok "flip（读回文件）：原实现仍 off，变异体被旧标记改回 on —— ⑤b 会红"
+else
+  bad "flip（读回文件）没被咬住（原 [$orig_on]，变异 [$mut_on_file]）"
+fi
+rm -f "$Q_STATE/standby"
+else
+  note "跳过红侧臂 standby-file（本次 --flip=${FLIP}）"
+fi
+
+if arm_selected standby-write; then
+FLIPS_RUN="${FLIPS_RUN:+$FLIPS_RUN,}standby-write"
+authority_helper_copy "$ROOT/flip/standby-write.mjs"
+python3 - "$ROOT/flip/standby-write.mjs" <<'PYEOF'
+import sys
+path = sys.argv[1]
+text = open(path).read()
+try:
+    start = text.index("    case 'standby-on': {")
+    end = text.index("    case 'standby-off': {")
+except ValueError:
+    sys.stderr.write('state-authority: standby-write 变异没落地（源码形状变了）\n')
+    sys.exit(1)
+replacement = """    case 'standby-on': {
+      fs.writeFileSync(legacyMarkerFile(state), `${isoSeconds(nowMs)} ${typeof request.reason === 'string' ? request.reason : '-'}\\n`);
+      return standbyResult(snapshot, state);
+    }
+"""
+open(path, 'w').write(text[:start] + replacement + text[end:])
+PYEOF
+if [ "$?" -eq 0 ] && ! cmp -s "$SKILL/scripts/state-authority.mjs" "$ROOT/flip/standby-write.mjs"; then
+  ok "flip 变异已落地：写待命退回写 state/standby"
+else
+  bad "flip 变异没落地（源码形状变了，夹具需要更新）"
+fi
+S="$(make_repo S)" || { bad "夹具建不出仓库 S"; result; exit 1; }
+T="$(make_repo T)" || { bad "夹具建不出仓库 T"; result; exit 1; }
+flip_helper "$NODE_HELPER" "$S" "$S/.pi/team/state" standby-on --reason proof >/dev/null
+flip_helper "$ROOT/flip/standby-write.mjs" "$T" "$T/.pi/team/state" standby-on --reason proof >/dev/null
+orig_snap="$(jget "$(cat "$S/.pi/team/state/reminders/state.json" 2>/dev/null)" standby.on 2>/dev/null)"
+mut_snap="$(jget "$(cat "$T/.pi/team/state/reminders/state.json" 2>/dev/null)" standby.on 2>/dev/null)"
+if [ "$orig_snap" = "true" ] && [ "$mut_snap" != "true" ] && [ -f "$T/.pi/team/state/standby" ]; then
+  ok "flip（写回文件）：原实现的快照记 on，变异体只写了 state/standby（快照里没有 on）—— ②d 会红"
+else
+  bad "flip（写回文件）没被咬住（原快照 on=[$orig_snap]，变异快照 on=[$mut_snap]，旧标记：$( [ -f "$T/.pi/team/state/standby" ] && echo 有 || echo 无)）"
+fi
+else
+  note "跳过红侧臂 standby-write（本次 --flip=${FLIP}）"
+fi
+
 # ---------------------------------------------------------------- 11. 事故形状的证明：主项目 .pi/team 没被碰过
 main_team_snapshot "${REAL_MAIN:-/nonexistent}/.pi/team" >"$REAL_AFTER"
 violations="$(main_team_violations "$REAL_BEFORE" "$REAL_AFTER")"
@@ -559,14 +773,17 @@ else
   bad "主项目 .pi/team 出现了非白名单变化（$(printf '%s' "$violations" | tr '\n' ' ')）"
   printf '%s\n' "$violations" | head -12 | sed 's/^/      /'
 fi
-# 事故形状（2026-10-31：往主项目写了提醒与 Standby 状态）：这些路径在真实项目里必须**不存在**
-for leaked in "$REAL_MAIN/.pi/team/reminder-locator.json" "$REAL_MAIN/.pi/team/state/reminders" \
-              "$REAL_MAIN/.pi/team/state/standby" "$REAL_MAIN/reminder-locator.json"; do
+# 事故形状（2026-10-31：夹具往主项目写了提醒与 Standby 状态）：这次运行不许在建这些路径上留下任何动作。
+# 判据是「本夹具没动过它」而不是「它不存在」—— 真实团队的 state/standby 在 PM 迁移前本来就在，
+# 迁移之后 .pi/team/reminder-locator.json 与 state/reminders/ 也会是合法的。
+for leaked in ./.pi/team/reminder-locator.json ./.pi/team/reminder-locator.lock ./.pi/team/state/reminders \
+              ./.pi/team/state/standby ./.pi/team/state/standby.migrated ./reminder-locator.json; do
   [ -n "$REAL_MAIN" ] || break
-  if [ ! -e "$leaked" ]; then
-    ok "事故形状：主项目里没有出现 ${leaked#"$REAL_MAIN"/}"
+  touched="$(main_team_touched "$REAL_BEFORE" "$REAL_AFTER" "$leaked")"
+  if [ -z "$touched" ]; then
+    ok "事故形状：这次运行没动主项目的 ${leaked#./}"
   else
-    bad "事故形状：夹具在主项目里留下了 ${leaked#"$REAL_MAIN"/}"
+    bad "事故形状：夹具写了主项目的 ${leaked#./}（$(printf '%s' "$touched" | tr '\n' ' ')）"
   fi
 done
 note "证明对象：${REAL_MAIN:-（本检出没有主工作树）}/.pi/team（非白名单路径逐字节；白名单形状按名字放行）"

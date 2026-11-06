@@ -16,6 +16,10 @@
 #   main_team_volatile <./relpath>        → 0 = the shape is allowed to move
 #   main_team_violations <before> <after> → one path per non-whitelisted change
 #   main_team_volatile_changes <b> <a>    → count of whitelisted changes (proves the check sees motion)
+#   main_team_touched <b> <a> <./prefix>  → one path per file under the prefix that appeared, vanished
+#                                           or changed (the accident-shape probe: "this run must not
+#                                           have written it", which stays true when the path is a
+#                                           legitimate runtime file the real team owns)
 #
 # MAIN_TEAM_BREAK=skip-state is the fixtures' own red side: it restores the old "skip state/" shape so
 # a stray file there stops being reported. Product code never reads it.
@@ -92,6 +96,18 @@ main_team_volatile_changes() { # <before> <after> → number of whitelisted path
     main_team_volatile "$path" && n=$((n + 1))
   done < <(join -t "$(printf '\t')" -a1 -a2 -e MISSING -o '0,1.2,2.2' "$before" "$after")
   printf '%s\n' "$n"
+}
+
+# The accident-shape probe. "This path must not exist" is the wrong judgement for a live project: the
+# team legitimately owns e.g. state/standby until it migrates. The judgement that stays true is "this
+# run did not create, change or remove it", which covers a file that was never there and one that was.
+main_team_touched() { # <before> <after> <./prefix> → one path per file under the prefix that moved
+  local before="$1" after="$2" prefix="$3" path b a
+  join -t "$(printf '\t')" -a1 -a2 -e MISSING -o '0,1.2,2.2' "$before" "$after" |
+    while IFS="$(printf '\t')" read -r path b a; do
+      [ "$b" = "$a" ] && continue
+      case "$path" in "$prefix"|"$prefix"/*) printf '%s\n' "$path" ;; esac
+    done
 }
 
 # The proof target is this project's **main checkout**, never this worktree: the fixture runs from a

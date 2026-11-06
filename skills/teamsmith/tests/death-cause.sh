@@ -61,8 +61,13 @@ td_not_has() { # <名字> <文本> <子串>
 }
 
 # ---------------------------------------------------------------- 夹具仓库（只写 $TMP 里）
+# 夹具的“主工作树”必须是个**真 git 仓库**，而且脚本要在它里面跑：待命自 1.3 起住在项目状态
+# 权威的快照里，权威按“当前目录所属项目”钉住状态根（继承的 TEAM_MAIN_ROOT 与目录不一致会被拒）。
 T="$TMP/repo"
 mkdir -p "$T/state" "$T/worktrees/dev" "$T/worktrees/dev2" "$T/docs/team" "$T/pi"
+git -C "$T" init -q -b main &&
+  git -C "$T" -c user.email=td@fixture -c user.name=td commit -q --allow-empty -m init || exit 3
+cd "$T" || exit 3
 for _a in dev dev2; do
   git -C "$T/worktrees/$_a" init -q -b "task/TD-$_a" 2>/dev/null || true
   git -C "$T/worktrees/$_a" -c user.email=td@fixture -c user.name=td commit -q --allow-empty -m init 2>/dev/null || true

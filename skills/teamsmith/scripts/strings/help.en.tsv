@@ -349,7 +349,7 @@ cmd.watch.arg.--once	run a single tick and exit.
 cmd.watch.arg.--interval	repeat every this many seconds instead of running once.
 cmd.watch.arg.--ui	show the interactive panel instead of the text output.
 cmd.standby.title	tell the patrol that no one is needed
-cmd.standby.what	Records that the PM stands down: the patrol stops waking it, while everything that arrives is still written to the patrol log. A human turns it back on, so an agent cannot silently wake itself up again.
+cmd.standby.what	Records that the PM stands down: the patrol stops waking it, while everything that arrives is still written to the patrol log. A human turns it back on, so an agent cannot silently wake itself up again. `standby migrate` carries a stand-down recorded by an older version into the current record; running it twice changes nothing.
 cmd.standby.when	Use it when the work is blocked on a person, or when the backlog should wait for a human rather than for the PM.
 cmd.standby.example	team standby on --reason "waiting for the user to pick an interface"
 cmd.standby.read	the state directory and the patrol log

@@ -16,8 +16,14 @@
 //
 // A missing flock, a lock timeout, a corrupt/unsupported snapshot, a torn file or an identity mismatch
 // is a visible error. There is no unlocked fallback and an unreadable snapshot is never replaced by an
-// empty store. This slice (1.1/1.2) deliberately does NOT import or touch the legacy `standby` marker:
-// migration is task 1.3. `init` therefore only ever writes a fresh snapshot with Standby generation 0.
+// empty store. Task 1.3 moved every Standby reader/writer here: the snapshot's `standby` slot is the only
+// truth, and the legacy `<state>/standby` marker is read once by the migration (see importLegacy) and then
+// retired to `<state>/standby.migrated` -- the snapshot is published before the marker is retired, so a
+// crash in between replays only the retirement (`migrated` makes the import exactly-once).
+//
+// Reads are pure: they never publish a snapshot and never take part in the migration (the panel and the
+// monitor are display paths and must not write). Until the first write, a read answers from the legacy
+// marker exactly as the old readers did, so an upgrading team is never mistaken for "not on standby".
 
 import * as fs from 'node:fs';
 import path from 'node:path';
@@ -34,6 +40,10 @@ const LOCK_WAIT_SECONDS = 5;
 const LOCK_CONFLICT_EXIT = 75;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const SEQUENCE_KINDS = new Set(['reminder', 'batch', 'queue']);
+// Standby operations. A read is answered from the snapshot and never publishes one; the other three are
+// mutations and run the legacy import first, in the same locked transaction.
+const STANDBY_OPS = new Set(['standby-read', 'standby-on', 'standby-off', 'standby-import']);
+const STANDBY_READ_OPS = new Set(['read', 'standby-read']);
 
 const fail = message => { throw new Error(message); };
 
@@ -201,13 +211,91 @@ function initial(locator) {
     project: { id: locator.projectId, mainRoot: locator.mainRoot, stateRoot: locator.stateRoot },
     sequences: { reminder: 1, batch: 1, queue: 1 },
     pruned: 0,
-    // Present from version 1 so task 1.3 can migrate into the same snapshot. This slice never reads or
-    // writes the legacy marker: generation 0 means "no authority-observed Standby yet", not "off".
-    standby: { on: false, generation: 0, reason: null, since: null },
+    // `migrated` records that the legacy marker has been imported (or proven absent): an old snapshot
+    // without the key is unmigrated, and the next mutation imports the marker before it does anything.
+    standby: { on: false, generation: 0, reason: null, since: null, migrated: false },
     reminders: [],
     batches: [],
     audit: [],
   };
+}
+
+// ---------------------------------------------------------------- 待命（PM 主动停工）
+// The legacy marker is one line: `<timestamp> <reason>` (the old writer printed `-` when it had no reason).
+// It is only consulted while the snapshot says `migrated: false`, i.e. before the import has run.
+const legacyMarkerFile = state => path.join(state, 'standby');
+
+function legacyMarker(state) {
+  const file = legacyMarkerFile(state);
+  let stat;
+  try { stat = fs.lstatSync(file); } catch (e) { if (e.code === 'ENOENT') return null; throw e; }
+  // A symlink or a directory here is not the old format: refuse it instead of importing a guess.
+  if (!stat.isFile()) fail(`legacy Standby marker is not a regular file: ${file}; move it aside and retry`);
+  const line = fs.readFileSync(file, 'utf8').split('\n', 1)[0];
+  const cut = line.indexOf(' ');
+  const since = cut === -1 ? line : line.slice(0, cut);
+  if (!since) fail(`legacy Standby marker is empty: ${file}; delete it if the team was not on standby`);
+  const reason = cut === -1 ? '-' : line.slice(cut + 1);
+  return { reason: reason === '' ? '-' : reason, since };
+}
+
+// Import once, inside the caller's transaction: the reason and the start time survive, and the generation
+// is kept as it is -- the import is not a new on generation (a later `standby on` is). A marker that is
+// still there after a completed import is leftover evidence, not truth: it is only retired, never adopted.
+function importLegacy(snapshot, state) {
+  const marker = legacyMarker(state);
+  let imported = false;
+  if (!snapshot.standby.migrated) {
+    snapshot.standby = {
+      on: marker ? true : snapshot.standby.on,
+      generation: snapshot.standby.generation,
+      reason: marker ? marker.reason : snapshot.standby.reason,
+      since: marker ? marker.since : snapshot.standby.since,
+      migrated: true,
+    };
+    imported = Boolean(marker);
+  }
+  return { imported, marker: Boolean(marker) };
+}
+
+// The snapshot is already durable when this runs, so a failure here cannot lose the state: the marker is
+// inert from now on. Say so instead of reporting the whole write as failed (the caller would retry, and a
+// retried `standby on` is a new generation).
+function retireLegacy(state) {
+  const file = legacyMarkerFile(state);
+  if (!regular_exists(file)) return null;
+  let target = path.join(state, 'standby.migrated');
+  for (let n = 1; exists(target); n++) target = path.join(state, `standby.migrated.${n}`);
+  try {
+    fs.renameSync(file, target);
+    fsyncDir(state);
+    return target;
+  } catch (e) {
+    process.stderr.write(`state-authority: imported ${file} but could not retire it (${e.code ?? e.message}); ` +
+      'it is no longer read, remove it by hand\n');
+    return null;
+  }
+}
+
+// What readers see. While the import has not run, the marker is still the record (an upgrading team must
+// not read as "off"); afterwards only the snapshot counts, even if a stale marker is still on disk.
+function standbyView(snapshot, state) {
+  if (snapshot.standby.migrated) return { ...snapshot.standby, legacy: false };
+  const marker = legacyMarker(state);
+  if (!marker) return { ...snapshot.standby, legacy: false };
+  return { on: true, generation: snapshot.standby.generation, reason: marker.reason, since: marker.since, legacy: true };
+}
+
+function standbyResult(snapshot, state, extra) {
+  const view = standbyView(snapshot, state);
+  return {
+    ok: true, on: view.on, generation: view.generation, reason: view.reason, since: view.since,
+    migrated: Boolean(snapshot.standby.migrated), legacy: Boolean(view.legacy), ...extra,
+  };
+}
+
+function isoSeconds(ms) {
+  return new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
 function validate(snapshot, main, state) {
@@ -230,6 +318,8 @@ function validate(snapshot, main, state) {
   }
   if (standby.reason !== null && typeof standby.reason !== 'string') fail(`invalid state snapshot ${where}: invalid Standby reason`);
   if (standby.since !== null && typeof standby.since !== 'string') fail(`invalid state snapshot ${where}: invalid Standby timestamp`);
+  // Absent means "not imported yet" (a snapshot written by 1.1/1.2); anything but a boolean is corrupt.
+  if (standby.migrated !== undefined && typeof standby.migrated !== 'boolean') fail(`invalid state snapshot ${where}: invalid Standby migration flag`);
   for (const key of ['reminders', 'batches', 'audit']) {
     if (!Array.isArray(snapshot[key])) fail(`invalid state snapshot ${where}: ${key} is not an array`);
   }
@@ -253,19 +343,43 @@ function summary(snapshot, created) {
     stateRoot: snapshot.project.stateRoot,
     sequences: { ...snapshot.sequences },
     pruned: snapshot.pruned,
-    standby: { ...snapshot.standby },
+    standby: { ...snapshot.standby, migrated: Boolean(snapshot.standby.migrated) },
     counts: { reminders: snapshot.reminders.length, batches: snapshot.batches.length, audit: snapshot.audit.length },
     snapshot: snapshotFile(snapshot.project.stateRoot),
   };
 }
 
-function apply(snapshot, request, nowMs) {
+function apply(snapshot, request, nowMs, state) {
   if (REMIND_OPS.has(request.op)) return applyReminder(snapshot, request, nowMs);
   switch (request.op) {
     case 'init':
       return summary(snapshot, true);
     case 'read':
       return summary(snapshot, false);
+    case 'standby-read':
+      return standbyResult(snapshot, state);
+    case 'standby-import':
+      return standbyResult(snapshot, state);
+    case 'standby-on': {
+      // Every `on` is a new, never-reused generation (an already-on team that is told to stand down again
+      // gets one too): a wake binds a generation, and reusing one would let a stale binding turn off a
+      // newer stand-down.
+      snapshot.standby = {
+        on: true,
+        generation: snapshot.standby.generation + 1,
+        reason: typeof request.reason === 'string' ? request.reason : '-',
+        since: isoSeconds(nowMs),
+        migrated: true,
+      };
+      return standbyResult(snapshot, state);
+    }
+    case 'standby-off': {
+      // Already off is not an error and not a transition: nothing changes, so nothing is written.
+      if (snapshot.standby.on) {
+        snapshot.standby = { on: false, generation: snapshot.standby.generation, reason: null, since: isoSeconds(nowMs), migrated: true };
+      }
+      return standbyResult(snapshot, state);
+    }
     case 'allocate': {
       const kind = request.kind;
       if (!SEQUENCE_KINDS.has(kind)) fail(`unknown state sequence kind: ${kind}`);
@@ -297,16 +411,26 @@ function transaction(main, state, request) {
     if (request.op === 'read') fail(`state authority is not initialized: ${file}`);
     snapshot = initial(locator);
     validate(snapshot, main, state);
+    // A display path (panel banner, monitor, `standby status`) must not create anything: answer from the
+    // legacy marker -- or "off" -- and let the first write publish the snapshot.
+    if (STANDBY_READ_OPS.has(request.op)) return apply(snapshot, request, Date.now(), state);
   }
   const before = JSON.stringify(snapshot);
-  const result = apply(snapshot, request, Date.now());
+  // Every mutation imports the legacy marker first, inside this same transaction, so no write can land on
+  // a half-upgraded team. Reads never import: they only *view* the marker (see standbyView).
+  const migration = STANDBY_READ_OPS.has(request.op) ? { imported: false, marker: false } : importLegacy(snapshot, state);
+  const result = apply(snapshot, request, Date.now(), state);
   // A reminder result reports its own `created` (an idempotent key hit is created:false); every other
   // operation keeps the authority-level meaning: was this the first snapshot?
-  if (!REMIND_OPS.has(request.op)) result.created = !hasSnapshot;
+  if (!REMIND_OPS.has(request.op) && !STANDBY_OPS.has(request.op)) result.created = !hasSnapshot;
   const changed = JSON.stringify(snapshot) !== before;
   // A first `init` does not mutate the object, but the fresh snapshot must still be published. A read
   // (list/show, a refused cancel) never publishes one: reading an empty authority stays a read.
   if (changed || (!hasSnapshot && request.op === 'init')) writeAtomic(file, snapshot);
+  // Publish first, retire second: the snapshot already records `migrated`, so a crash in between only
+  // replays the retirement instead of importing a second time.
+  const retired = migration.marker ? retireLegacy(state) : null;
+  if (request.op === 'standby-import') { result.imported = migration.imported; result.retired = retired; }
   return result;
 }
 
@@ -353,11 +477,41 @@ async function resolveAuthority(context) {
 
 // The single Node-facing entry point (the CLI below is a thin wrapper around it).
 export async function request(context, requestData) {
+  if (requestData.op === 'standby-read') return readStandby(context);
   const located = await resolveAuthority(context);
   const state = located.stateRoot;
   try { fs.mkdirSync(remindersDir(state), { recursive: true, mode: 0o700 }); }
   catch (e) { fail(`cannot create the authority directory under ${state}: ${e.code ?? e.message}`); }
   return flock(authorityLock(state), ['--transaction', located.mainRoot, state], JSON.stringify(requestData));
+}
+
+// A read must establish nothing: it never creates the locator and never publishes a snapshot. Two reasons:
+// the panel and the monitor are display paths (they must not write), and a caller that merely names another
+// TEAM_STATE_DIR must not capture the project's pin from under it. Which record answers the read is the
+// same decision the migration makes: an unpinned project is still described by the legacy marker.
+function unfiledStandby(state) {
+  const marker = legacyMarker(state);
+  return marker
+    ? { ok: true, on: true, generation: 0, reason: marker.reason, since: marker.since, migrated: false, legacy: true }
+    : { ok: true, on: false, generation: 0, reason: null, since: null, migrated: false, legacy: false };
+}
+
+async function readStandby(context) {
+  const main = authorityIdentity(context);
+  const state = canonical(context.stateRoot);
+  const pinned = readLocator(main);
+  if (!pinned) {
+    if (snapshotPresence(snapshotFile(state))) {
+      fail(`state authority is not pinned for ${main} (${locatorFile(main)} is missing) but ${snapshotFile(state)} exists; ` +
+        'refusing to answer from an unpinned snapshot');
+    }
+    return unfiledStandby(state);
+  }
+  if (pinned.stateRoot !== state) {
+    fail(`canonical state-root mismatch: pinned ${pinned.stateRoot}, requested ${state}; ` +
+      'quiesce the writers and migrate the locator explicitly (never pick a second authority)');
+  }
+  return flock(authorityLock(state), ['--transaction', main, state], JSON.stringify({ op: 'standby-read' }));
 }
 
 export async function resolve(context) {
@@ -368,7 +522,8 @@ function parseCli(argv) {
   const [main, state, op, ...rest] = argv;
   if (!main || !state || !op) {
     fail('usage: state-authority.mjs --cli <project-root> <state-root> ' +
-      '<resolve|init|read|allocate <kind>|remind-add|remind-list|remind-show|remind-cancel> ' +
+      '<resolve|init|read|allocate <kind>|standby-read|standby-on|standby-off|standby-import|' +
+      'remind-add|remind-list|remind-show|remind-cancel> ' +
       '[--print <field>] [--json]');
   }
   let print = null;
@@ -393,9 +548,24 @@ function parseCli(argv) {
       flags[name] = value;
       continue;
     }
+    // Standby takes exactly one flag (`--reason` on `standby-on`); anything else is refused by name, so a
+    // typo cannot pass for a successful stand-down.
+    if (STANDBY_OPS.has(op) && token.startsWith('--')) {
+      const name = token.slice(2);
+      if (name === 'json') { json = true; continue; }
+      if (op === 'standby-on' && name === 'reason') {
+        const value = rest.shift();
+        if (value === undefined) fail('--reason needs a value');
+        flags.reason = value;
+        continue;
+      }
+      fail(`${op} does not accept --${name}`);
+    }
     args.push(token);
   }
-  const requestData = REMIND_OPS.has(op) ? parseRemindFlags(op, flags) : { op };
+  const requestData = REMIND_OPS.has(op) ? parseRemindFlags(op, flags)
+    : STANDBY_OPS.has(op) ? (op === 'standby-on' ? { op, reason: flags.reason ?? '-' } : { op })
+      : { op };
   if (op === 'allocate') {
     requestData.kind = args.shift();
     if (!requestData.kind) fail('allocate needs a sequence kind (reminder|batch|queue)');
@@ -440,6 +610,24 @@ async function readMessageFromStdin() {
   return { message: text };
 }
 
+// Standby is rendered here (not in the shell) so a reason keeps every byte it was given: the shell only
+// prints these lines, and `--print <field>` stays the machine interface.
+function renderStandby(op, result) {
+  const status = result.on
+    ? `standby: on（自 ${result.since ?? '-'}，原因：${result.reason ?? '-'}）`
+    : 'standby: off';
+  if (op !== 'standby-import') {
+    // Until the import runs, the marker is still the record: say so once, where a human reads it.
+    return result.legacy ? `${status}\n（旧标记还没并入统一状态：跑 team standby migrate 完成迁移）` : status;
+  }
+  if (result.imported) {
+    return `${status}\n迁移：state/standby 已并入统一状态（原因与时间保留，代次仍是 ${result.generation}：迁移不加代）；` +
+      `旧标记改名为 ${result.retired ?? '（改名失败，已不再被读取）'}`;
+  }
+  if (result.retired) return `${status}\n迁移：统一状态早已并入；这次清掉了残留的旧标记（改名为 ${result.retired}）`;
+  return `${status}\n迁移：无需迁移（统一状态已记录待命${result.on ? '开启' : '关闭'}）`;
+}
+
 async function main(argv) {
   const [mode, ...rest] = argv;
   if (mode === '--locator') {
@@ -482,13 +670,16 @@ async function main(argv) {
       if (!Object.hasOwn(result, print)) fail(`unknown output field: ${print}`);
       if (result[print] === null || typeof result[print] === 'object') fail(`output field ${print} is not scalar`);
       process.stdout.write(String(result[print]) + '\n');
+    } else if (STANDBY_OPS.has(requestData.op) && !json) {
+      process.stdout.write(renderStandby(requestData.op, result) + '\n');
     } else {
       process.stdout.write(JSON.stringify(result, null, 2) + '\n');
     }
     return;
   }
   fail('usage: state-authority.mjs --cli <project-root> <state-root> ' +
-    '<resolve|init|read|allocate <kind>|remind-add|remind-list|remind-show|remind-cancel> [--print <field>] [--json]');
+    '<resolve|init|read|allocate <kind>|standby-read|standby-on|standby-off|standby-import|' +
+    'remind-add|remind-list|remind-show|remind-cancel> [--print <field>] [--json]');
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === SELF) {

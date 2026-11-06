@@ -975,8 +975,9 @@ team_panel_pm_json() { # PM 状态用**闭集**词表：running|starting|absent|
 }
 
 team_panel_standby_json() {
-  if team_in_standby; then
-    printf '{"on": true, "reason": %s}' "$(team_panel_json_str "$(team_standby_reason || echo '-')")"
+  # 全屏面板吞不下诊断（stderr 会弄花整帧）：读不到权威时按 off 显示，诊断留给 `team standby status`。
+  if team_in_standby 2>/dev/null; then
+    printf '{"on": true, "reason": %s}' "$(team_panel_json_str "$(team_standby_reason 2>/dev/null || echo '-')")"
   else
     printf '{"on": false, "reason": ""}'
   fi
@@ -2238,7 +2239,7 @@ team_cmd_standby() {
   local action="status" reason="-"
   while [ $# -gt 0 ]; do
     case "$1" in
-      on|off|status) action="$1"; shift ;;
+      on|off|status|migrate) action="$1"; shift ;;
       --reason) reason="${2:?}"; shift 2 ;;
       -*) team_usage_die "standby: 未知参数 $1" ;;
       *) team_usage_die "standby: 多余参数 $1" ;;
@@ -2246,23 +2247,23 @@ team_cmd_standby() {
   done
   case "$action" in
     on)
-      team_standby_on "$reason"
+      # 写失败就停住：一个报错的 `standby on` 之后团队到底是不是待命，不能靠猜。
+      team_standby_on "$reason" || team_die "待命没有写进去（上面是权威层的原因）；状态未变，修好后重跑"
       team_wlog "standby on（原因：$reason）"
       team_ok "已进入待命：pulse 不会再叫醒 PM（原因：$reason）"
       team_dim "  待办不会丢：积压会记进 ${TEAM_STATE_DIR#"$TEAM_MAIN_ROOT"/}/watchdog.log；恢复用 $TEAM_CLI standby off"
       ;;
     off)
-      team_standby_off
+      team_standby_off || team_die "待命没有关掉（上面是权威层的原因）；状态未变，修好后重跑"
       team_wlog "standby off"
       team_ok "已退出待命：下个巡检周期起，有待办就会叫醒/拉起 PM"
       ;;
+    migrate)
+      # 旧 state/standby 一次性并入统一状态（保留原因/时间，不加代次）；重复跑不变。
+      team_standby_migrate || team_die "待命迁移失败（上面是权威层的原因）；统一状态未有改动"
+      ;;
     *)
-      if team_in_standby; then
-        local since; since="$(awk '{print $1}' "$(team_standby_file)" 2>/dev/null)"
-        printf 'standby: on（自 %s，原因：%s）\n' "${since:--}" "$(team_standby_reason || echo -)"
-      else
-        printf 'standby: off\n'
-      fi
+      team_standby_status || team_die "读不到待命状态（上面是权威层的原因）"
       local pend; pend="$(team_pending_text "$(team_panel_pending_counts_fast || true)")"
       printf '待办：%s\n' "${pend:-无}"
       ;;

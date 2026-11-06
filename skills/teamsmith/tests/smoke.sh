@@ -13534,7 +13534,10 @@ if [ "$FAST" = "1" ]; then
   fast_skip "26-m·真 pane" "要真实 tmux 窗口（120x29 / 60x8 / 重绘周期 / tick 节奏 / pulse up 不建窗）"
 elif [ "$HAVE_TMUX" = "1" ]; then
   live_mark
-  P10_TRUE_STATE="$TMP/p10-true-state"; mkdir -p "$P10_TRUE_STATE"
+  # 26-m 的面板与被测的“面板外改动”共用**项目自己的** state 目录：待命从 1.3 起住在项目权威快照里，
+  # 而权威按项目钉住一个状态根（另指一个 TEAM_STATE_DIR 会被显式拒绕，那是 P406/1.1 的约定：
+  # 不挑第二个权威）。以前待命只是“调用方点的目录里的一个文件”，所以这里曾用另一个临时目录。
+  P10_PANEL_STATE="$P10STATE"
   P10_LEFT_LOG="$TMP/p10-left-{agent}.log"
   printf 'LEFT-MARKER\n' > "$TMP/p10-left-dev.log"
   printf 'FOREIGN-MARKER\n' > "$TMP/p10-left-verify.log"
@@ -13548,7 +13551,7 @@ elif [ "$HAVE_TMUX" = "1" ]; then
     local p10_glob="" p10_extra="${3:+$3 }"
     [ "$1" != "-" ] && p10_glob="TEAM_AGENT_LOG_GLOB='$1' "
     printf "cd '%s' && HOME='%s' TEAM_PI_AGENT_DIR='%s/.pi/agent' TEAM_STATE_DIR='%s' %s%s bash '%s/scripts/team' monitor --no-pulse --interval %s" \
-      "$P10R" "$P10_HOME" "$P10_HOME" "$P10_TRUE_STATE" "$p10_glob" "$p10_extra" "$SKILL_DIR" "$2"
+      "$P10R" "$P10_HOME" "$P10_HOME" "$P10_PANEL_STATE" "$p10_glob" "$p10_extra" "$SKILL_DIR" "$2"
   }
   # M20（同族复查）：26-m 的「首帧 / 重绘 / 动作回响 / 节拍 / tick 节奏」都是**实现速度**断言，
   # 不是契约超时 —— 负载下单次固定 sleep 会假红（F-V16-10 的同族形状；26-m 回响实测红过一次：
@@ -13679,7 +13682,7 @@ elif [ "$HAVE_TMUX" = "1" ]; then
     bad "26-m 回响：按 s 后 ${P10_POLL_SECS}s 内面板没打开待命理由输入（现在的标题行：$P10_TITLE_ACT）"
   fi
   # ② 面板外的改动：只能靠节拍（frame 块 TTL 0.5s < 1s 节拍）。M20：同样等条件（有界轮询）。
-  ( cd "$P10R" && TEAM_STATE_DIR="$P10_TRUE_STATE" bash "$SKILL_DIR/scripts/team" --root "$P10R" standby off ) >/dev/null 2>&1 || true
+  ( cd "$P10R" && TEAM_STATE_DIR="$P10_PANEL_STATE" bash "$SKILL_DIR/scripts/team" --root "$P10R" standby off ) >/dev/null 2>&1 || true
   if P10_TITLE_EXT="$(p10_wait_title "$P10_SCOPE:$P10_W1" '待命 off')"; then
     ok "26-m 节拍：面板外的 standby off 在有界轮询内落到标题带（每拍重建一次缓存；实际 $(p10_wait_ms)ms）"
   else

@@ -4718,18 +4718,18 @@ team_pending_nudge_empty() { # <counts|空=现读> → 0 = 没有正类别（空
 }
 
 # ---------------------------------------------------------------- 待命（PM 主动停工）
-team_standby_file() { printf '%s\n' "$TEAM_STATE_DIR/standby"; }
+# 读写都走项目状态权威（scripts/state-authority.mjs 的事务） —— 统一状态里的 standby 槽位是唯一真相，
+# 旧的 state/standby 标记只由迁移读一次，之后就不再被当成真相。这里没有第二个文件、第二把锁；
+# 缺 flock / 等锁超时 / 快照读不懂都由权威层显式失败（不落回写文件，也不冒充「已关掉」）。
+# 读（status / in_standby / 面板）不建定位器、不发布快照：展示路径不写盘。
 team_standby_on() { # <reason>
-  mkdir -p "$TEAM_STATE_DIR"
-  printf '%s %s\n' "$(team_timestamp)" "${1:--}" > "$(team_standby_file)"
+  team_authority_cli standby-on --reason "${1:--}" >/dev/null
 }
-team_standby_off() { rm -f "$(team_standby_file)"; }
-team_standby_reason() {
-  local f; f="$(team_standby_file)"
-  [ -f "$f" ] || return 1
-  sed -n '1p' "$f" | cut -d' ' -f2-
-}
-team_in_standby() { [ -f "$(team_standby_file)" ]; }
+team_standby_off() { team_authority_cli standby-off >/dev/null; }
+team_standby_reason() { team_authority_cli standby-read --print reason; }
+team_standby_status() { team_authority_cli standby-read; }        # 已渲染好的一行：standby: on（自 …，原因：…）
+team_standby_migrate() { team_authority_cli standby-import; }
+team_in_standby() { [ "$(team_authority_cli standby-read --print on)" = "true" ]; }
 
 # 提醒（叫醒）PM：只写记录 + 尽力敲一下窗口，不靠它保证送达
 # P174：第二个参数是**叫醒键**（类别集合，省略时按当前快照现算）——watchdog.nudge 与

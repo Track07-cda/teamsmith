@@ -335,7 +335,7 @@ cmd.watch.arg.--once	只跑一拍就退出。
 cmd.watch.arg.--interval	每隔这么多秒跑一次，而不是只跑一次。
 cmd.watch.arg.--ui	显示可交互面板，而不是文本输出。
 cmd.standby.title	告诉巡检"暂时不需要人"
-cmd.standby.what	记下"PM 停工"这件事：巡检不再叫醒它，期间到达的一切照旧写进巡检日志。只有人能把它关掉，所以 agent 不能自己悄悄醒来。
+cmd.standby.what	记下"PM 停工"这件事：巡检不再叫醒它，期间到达的一切照旧写进巡检日志。只有人能把它关掉，所以 agent 不能自己悄悄醒来。`standby migrate` 把旧版本记下的停工搬进现在的记录；重跑一遍不会改变什么。
 cmd.standby.when	工作卡在一个人身上时用它，或者你希望积压等一个人而不是等 PM 时用它。
 cmd.standby.example	team standby on --reason "等用户定接口"
 cmd.standby.read	状态目录与巡检日志

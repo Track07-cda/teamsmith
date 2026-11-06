@@ -63,6 +63,11 @@ PK_COUNTS_MODE='stub'          # stub | real（policy 档用真读者）
 PK_PM_STATE='running:fixture'
 PK_NOW=100000
 mkdir -p "$PK_STATE" "$PK_PROJ/docs/team" "$PK_PROJ/worktrees"
+# 夹具的“项目主工作树”得是真 git 仓库，而且脚本要在它里面跑：待命自 1.3 起住在项目状态权威的
+# 快照里，权威按“当前目录所属项目”钉住状态根（继承的 TEAM_MAIN_ROOT 与目录不一致会被拒）。
+git -C "$PK_PROJ" init -q -b main &&
+  git -C "$PK_PROJ" -c user.email=pk@fixture -c user.name=pk commit -q --allow-empty -m init || exit 3
+cd "$PK_PROJ" || exit 3
 
 export TEAM_ROOT="$PK_PURE" TEAM_MAIN_ROOT="$PK_PROJ" TEAM_STATE_DIR="$PK_STATE" \
        TEAM_DOCS_ABS="$PK_PROJ/docs/team" TEAM_DOCS_DIR="docs/team" TEAM_SESSION="pk-fixture-session" \
