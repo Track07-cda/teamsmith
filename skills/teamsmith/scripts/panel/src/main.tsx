@@ -41,6 +41,7 @@ import {
   findTeamCli,
   loadPanelData,
   panelDirOf,
+  runRemindTick,
   runTick,
   type BlockName,
 } from './data.js'
@@ -287,6 +288,30 @@ async function runTickIfDue(): Promise<void> {
   await runTick(teamCli, root, tickLog)
 }
 
+// ---------------------------------------------------------------- the lightweight Reminder due tick
+// agent-self-reminder 4.1: apart from (and much more often than) the full patrol, both pulse shapes own a
+// ~10s due check. It reads one bounded snapshot and only takes the authority lock when something is due;
+// it never scans the project, never starts the patrol and never calls a model.
+const remindEvery = Math.max(1, Number(process.env.TEAM_REMIND_TICK_SECS ?? 10) || 10)
+const remindStartedAt = new Date().toISOString()
+const remindScript = teamCli ? join(dirname(teamCli), 'remind-tick.mjs') : ''
+let lastRemind = 0
+
+function remindDue(): boolean {
+  if (noPulse || !remindScript) return false
+  const now = Date.now()
+  if (lastRemind === 0 || now - lastRemind >= remindEvery * 1000) {
+    lastRemind = now
+    return true
+  }
+  return false
+}
+
+async function runRemindIfDue(): Promise<void> {
+  if (!remindDue()) return
+  await runRemindTick(remindScript, root, stateDir, remindStartedAt, tickLog)
+}
+
 function frameOf(res: DataResult, activity: boolean, scroll?: number): FrameInput {
   return {
     panel: res.data ?? { project: '', timestamp: '', interval: 0 },
@@ -396,6 +421,7 @@ async function main(): Promise<void> {
     // reexec); this branch serves a direct bundle invocation and keeps the same cadence.
     for (;;) {
       await runTickIfDue()
+      await runRemindIfDue()
       sleepSync(Math.max(1, tickEvery || refresh) * 1000)
     }
   }
@@ -485,6 +511,7 @@ async function main(): Promise<void> {
 
   const reload = (): FrameInput => {
     void runTickIfDue()
+    void runRemindIfDue()
     void cache.refresh().then(adopt)
     return current
   }

@@ -10,13 +10,23 @@
 // transitions. What a person sees is *derived* from that truth on every read -- `scheduled` gains the
 // clock-derived `derived-due` view, and no counter is stored a second time, so a hand-corrected snapshot
 // or a later Pulse admission is visible without a migration.
+
+import { randomUUID } from 'node:crypto';
 //
-// Scope of this slice: the durable create/list/show/cancel lifecycle and the derived views. Batching,
-// intent, delivery, observation, Standby and Pulse admission belong to 3.x/4.x; their phases are
-// validated and derived here already so a snapshot written by those slices reads correctly, but nothing
-// in this file produces them.
+// Scopes: 2.x is the durable create/list/show/cancel lifecycle and the derived views (P409); 4.1/3.1/3.2
+// add the delivery path here (P423): due admission (`queued`), the one frozen batch intent, the correlated
+// observation that closes it, the explicit unknown outcome and the operator's acknowledgment. Everything
+// still happens inside state-authority.mjs's single flock transaction; this file stays filesystem-free and
+// the Pi call itself is *not* here (the caller sends after intent and reports the matching event back).
 
 const PHASES = new Set(['scheduled', 'queued', 'intent', 'observed', 'unknown', 'cancelled', 'resolved']);
+// A batch is the one durable delivery decision: at most one is outstanding until it is observed or an
+// operator acknowledges it, and its single right is what may clear one Standby generation.
+const BATCH_PHASES = new Set(['intent', 'observed', 'unknown', 'resolved']);
+const BATCH_LIMIT = 8;                 // design: at most eight Reminders in one message
+const BATCH_SPACING_MS = 5000;         // design: at most one batch submission per five seconds
+const OBSERVE_DEADLINE_MS = 60000;     // after intent, no correlated event within 60s = unknown, never a resend
+const OVERDUE_LAG_MS = 30000;          // normal polling delay is not overdue; 30s of admission lag is
 // Terminal = the outcome is known and the reminder can no longer fire. A key survives `unknown` (a
 // delivery attempt is outstanding, so the logical reminder is still "in play") and is released by any
 // terminal phase (design: "A key remains reserved for scheduled, queued, intent and unknown records").
@@ -135,6 +145,274 @@ function normSource(source) {
   return { source: value };
 }
 
+// ---------------------------------------------------------------- delivery (P423 · 3.1/3.2/4.1)
+// `peek` is the only classification a caller may do without the lock: it answers "is there anything to
+// commit right now" from a whole snapshot read (rename is atomic, so an unlocked read never sees half a
+// file). Every decision that changes the snapshot still runs inside the transaction below.
+export function peekReminders(snapshot, nowMs) {
+  if (!snapshot || !Array.isArray(snapshot.reminders)) return { due: [], queued: [], staleIntent: [] };
+  const due = [];
+  const queued = [];
+  const staleIntent = [];
+  for (const record of snapshot.reminders) {
+    if (record.phase === 'scheduled' && Number.isFinite(msOf(record.dueAt)) && msOf(record.dueAt) <= nowMs) due.push(record.id);
+    if (record.phase === 'queued') queued.push(record.id);
+  }
+  for (const batch of Array.isArray(snapshot.batches) ? snapshot.batches : []) {
+    if (batch.phase === 'intent' && Number.isFinite(msOf(batch.intentAt)) && nowMs - msOf(batch.intentAt) >= OBSERVE_DEADLINE_MS) staleIntent.push(batch.id);
+  }
+  return { due, queued, staleIntent };
+}
+
+function findBatch(snapshot, id) {
+  return snapshot.batches.find(batch => batch.id === id) ?? null;
+}
+
+function parseBatchId(id, projectId) {
+  const prefix = `bat-${projectId}-`;
+  if (typeof id !== 'string' || !id.startsWith(prefix)) return null;
+  const tail = id.slice(prefix.length);
+  if (!/^[1-9][0-9]*$/.test(tail)) return null;
+  const seq = Number(tail);
+  return Number.isSafeInteger(seq) ? { seq } : null;
+}
+
+// The single outstanding delivery, if any. `unknown` is still outstanding: an operator has to inspect the
+// batch before the next one may be frozen (design: "Only one batch is outstanding until observed or
+// explicitly acknowledged"). A late correlated observation closes it too -- that is not a resend.
+function outstandingBatch(snapshot) {
+  return snapshot.batches.find(batch => batch.phase === 'intent' || batch.phase === 'unknown') ?? null;
+}
+
+// After the deadline, an intent without a correlated event is `unknown`: absence of an event is not proof
+// that nothing entered the session, so the members stop being independently sendable and nothing resends.
+function sweepStaleIntents(snapshot, nowMs) {
+  const swept = [];
+  for (const batch of snapshot.batches) {
+    if (batch.phase !== 'intent' || !Number.isFinite(msOf(batch.intentAt))) continue;
+    if (nowMs - msOf(batch.intentAt) < OBSERVE_DEADLINE_MS) continue;
+    batch.phase = 'unknown';
+    batch.unknownAt = iso(nowMs);
+    for (const id of batch.members) {
+      const record = snapshot.reminders.find(item => item.id === id);
+      if (record && record.phase === 'intent') { record.phase = 'unknown'; record.unknownAt = batch.unknownAt; }
+    }
+    note(snapshot, nowMs, 'remind-unknown', { batch: batch.id, ids: batch.members.slice(), detail: 'no correlated wake within 60s; no automatic resend' });
+    swept.push(batch.id);
+  }
+  return swept;
+}
+
+// 4.1: commit each due Reminder's queue identity, order and enqueue time. Runs for both Pulse shapes and
+// is independent of PM availability and Standby; a repeated scan never creates a second queue entry.
+function admitReminders(snapshot, request, nowMs) {
+  const pulseStartedAt = typeof request.pulseStartedAt === 'string' ? request.pulseStartedAt : '';
+  const startedMs = Number.isFinite(msOf(pulseStartedAt)) ? msOf(pulseStartedAt) : null;
+  const swept = sweepStaleIntents(snapshot, nowMs);
+  const due = snapshot.reminders
+    .filter(record => record.phase === 'scheduled' && Number.isFinite(msOf(record.dueAt)) && msOf(record.dueAt) <= nowMs)
+    .sort((a, b) => (msOf(a.dueAt) - msOf(b.dueAt)) || (a.seq - b.seq));
+  const admitted = [];
+  const overdue = [];
+  for (const record of due) {
+    const dueMs = msOf(record.dueAt);
+    record.phase = 'queued';
+    record.queuedAt = iso(nowMs);
+    record.queueSeq = snapshot.sequences.queue;
+    snapshot.sequences.queue += 1;
+    record.overdue = (startedMs !== null && dueMs < startedMs) || nowMs - dueMs > OVERDUE_LAG_MS;
+    if (record.overdue) overdue.push(record.id);
+    admitted.push(record.id);
+  }
+  if (pulseStartedAt && (admitted.length || swept.length)) {
+    snapshot.pulse = { startedAt: pulseStartedAt, lastAdmitAt: iso(nowMs) };
+  }
+  if (admitted.length) {
+    note(snapshot, nowMs, 'remind-admit', { ids: admitted, detail: `due <= ${iso(nowMs)}; overdue ${overdue.length}` });
+  }
+  return {
+    ok: true, now: iso(nowMs),
+    admitted, overdue, swept,
+    queue: snapshot.reminders.filter(record => record.phase === 'queued').length,
+    outstanding: outstandingBatch(snapshot)?.id ?? null,
+  };
+}
+
+// 3.1: freeze up to eight queued Reminders into ONE batch and bind the current Standby generation, before
+// any Pi call. Returns the whole payload so the caller sends exactly what was frozen (full text, byte for
+// byte) and nothing else.
+function intentBatch(snapshot, request, nowMs) {
+  const swept = sweepStaleIntents(snapshot, nowMs);
+  const outstanding = outstandingBatch(snapshot);
+  if (outstanding) {
+    return {
+      ok: true, action: 'wait', now: iso(nowMs), batch: outstanding.id, swept,
+      reason: outstanding.phase === 'unknown'
+        ? `batch ${outstanding.id} is unknown: inspect it and run \`team remind resolve ${outstanding.id} --ack-unknown\`; nothing is resent`
+        : `batch ${outstanding.id} is already in flight (intent at ${outstanding.intentAt})`,
+    };
+  }
+  const last = snapshot.batches[snapshot.batches.length - 1];
+  if (last && Number.isFinite(msOf(last.intentAt)) && nowMs - msOf(last.intentAt) < BATCH_SPACING_MS) {
+    return { ok: true, action: 'spacing', now: iso(nowMs), retryAt: iso(msOf(last.intentAt) + BATCH_SPACING_MS), swept };
+  }
+  const queued = snapshot.reminders
+    .filter(record => record.phase === 'queued')
+    .sort((a, b) => ((a.queueSeq ?? 0) - (b.queueSeq ?? 0)) || (a.seq - b.seq))
+    .slice(0, BATCH_LIMIT);
+  if (!queued.length) return { ok: true, action: 'idle', now: iso(nowMs), swept };
+  const session = typeof request.session === 'string' ? request.session.trim() : '';
+  if (!session) return { ok: false, refusal: 'bad-session', reason: 'the batch intent needs the verified PM session id (which session may observe the wake)' };
+  const seq = snapshot.sequences.batch;
+  snapshot.sequences.batch = seq + 1;
+  const batch = {
+    id: `bat-${snapshot.project.id}-${seq}`,
+    seq,
+    nonce: randomUUID(),
+    phase: 'intent',
+    intentAt: iso(nowMs),
+    // Bound before the call: whatever the snapshot says now is the only generation this wake may clear.
+    generation: snapshot.standby.on ? snapshot.standby.generation : 'off',
+    target: { session, pid: Number.isSafeInteger(request.pid) ? request.pid : null },
+    members: queued.map(record => record.id),
+    right: 'unspent',
+    rightSpentBy: null,
+    attempts: 1,
+    lastError: null,
+    observedAt: null,
+    unknownAt: null,
+    resolvedAt: null,
+    outcome: null,
+  };
+  for (const record of queued) {
+    record.phase = 'intent';
+    record.batchId = batch.id;
+    record.intentAt = batch.intentAt;
+  }
+  snapshot.batches.push(batch);
+  note(snapshot, nowMs, 'remind-intent', {
+    batch: batch.id, ids: batch.members.slice(), detail: `standby generation ${batch.generation}; session ${session}`,
+  });
+  return {
+    ok: true, action: 'send', now: iso(nowMs), swept,
+    batch: {
+      id: batch.id, nonce: batch.nonce, generation: batch.generation, intentAt: batch.intentAt, session,
+      members: queued.map(record => ({
+        id: record.id, dueAt: record.dueAt, enqueuedAt: record.queuedAt, overdue: Boolean(record.overdue),
+        source: record.source, task: record.task, key: record.key, message: record.message,
+      })),
+    },
+  };
+}
+
+// 3.2: the one atomic outcome. Observation, the consumed right, the generation-checked automatic off and
+// the audit all commit in this same snapshot, so a replay is a no-op and a newer generation always wins.
+function observeBatch(snapshot, request, nowMs) {
+  const id = String(request.id ?? '');
+  const batch = findBatch(snapshot, id);
+  if (!batch) {
+    const parsed = parseBatchId(id, snapshot.project.id);
+    return { ok: false, refusal: parsed ? 'history-pruned' : 'unknown-batch', reason: `'${id}' is not a batch of this project` };
+  }
+  if (typeof request.nonce !== 'string' || request.nonce !== batch.nonce) {
+    return { ok: false, refusal: 'nonce-mismatch', reason: `the observed message does not carry the nonce of ${batch.id} (identity unknown; no right consumed)` };
+  }
+  const session = typeof request.session === 'string' ? request.session.trim() : '';
+  if (!session || batch.target?.session !== session) {
+    return { ok: false, refusal: 'session-mismatch', reason: `${batch.id} was frozen for session ${batch.target?.session ?? '(none)'}, not '${session || '(none)'}'` };
+  }
+  if (batch.phase === 'resolved') return { ok: false, refusal: 'already-resolved', reason: `${batch.id} was acknowledged as unknown; it cannot be reopened` };
+  if (batch.right === 'spent' || batch.phase === 'observed') {
+    return { ok: true, outcome: 'duplicate', now: iso(nowMs), batch: batch.id, right: batch.right, reason: 'this batch already spent its one right; no second off' };
+  }
+  if (batch.phase !== 'intent' && batch.phase !== 'unknown') {
+    return { ok: false, refusal: `bad-phase`, reason: `${batch.id} is ${batch.phase}; only an intent or an unknown batch can be observed` };
+  }
+  let standby = 'already-off';
+  if (batch.generation === 'off') standby = 'already-off';
+  else if (!snapshot.standby.on) standby = 'already-off';
+  else if (snapshot.standby.generation === batch.generation) {
+    snapshot.standby = { on: false, generation: snapshot.standby.generation, reason: null, since: iso(nowMs), migrated: true };
+    standby = 'auto-off';
+  } else standby = 'generation-ambiguous';
+  batch.phase = 'observed';
+  batch.observedAt = iso(nowMs);
+  batch.right = 'spent';
+  batch.rightSpentBy = 'wake';
+  batch.outcome = { standby };
+  for (const mid of batch.members) {
+    const record = snapshot.reminders.find(item => item.id === mid);
+    if (!record) continue;
+    record.phase = 'observed';
+    record.observedAt = batch.observedAt;
+    record.endedAt = batch.observedAt;
+  }
+  note(snapshot, nowMs, 'remind-observed', {
+    batch: batch.id, ids: batch.members.slice(),
+    sources: batch.members.map(mid => snapshot.reminders.find(item => item.id === mid)?.source ?? '?'),
+    detail: `standby ${standby} (bound generation ${batch.generation})`,
+  });
+  return { ok: true, outcome: 'observed', now: iso(nowMs), batch: batch.id, standby, generation: batch.generation, ids: batch.members.slice() };
+}
+
+// A synchronous refusal from the session API is not a receipt: the batch becomes unknown (visible, no
+// automatic resend) so the next delivery waits for an operator instead of blindly sending it twice.
+function failBatch(snapshot, request, nowMs) {
+  const id = String(request.id ?? '');
+  const batch = findBatch(snapshot, id);
+  if (!batch) return { ok: false, refusal: 'unknown-batch', reason: `'${id}' is not a batch of this project` };
+  if (typeof request.nonce !== 'string' || request.nonce !== batch.nonce) {
+    return { ok: false, refusal: 'nonce-mismatch', reason: `the failed attempt does not carry the nonce of ${batch.id}` };
+  }
+  if (batch.right === 'spent') {
+    return { ok: true, outcome: 'already-observed', now: iso(nowMs), batch: batch.id, reason: 'a wake was already observed; the failure is recorded but nothing is reopened' };
+  }
+  if (batch.phase !== 'intent') {
+    return { ok: true, outcome: 'already-unknown', now: iso(nowMs), batch: batch.id, reason: `${batch.id} is already ${batch.phase}` };
+  }
+  const reason = String(request.reason ?? '').slice(0, 400) || 'the session API refused the message';
+  batch.phase = 'unknown';
+  batch.unknownAt = iso(nowMs);
+  batch.attempts = (batch.attempts ?? 1) + 1;
+  batch.lastError = reason;
+  for (const mid of batch.members) {
+    const record = snapshot.reminders.find(item => item.id === mid);
+    if (record && record.phase === 'intent') { record.phase = 'unknown'; record.unknownAt = batch.unknownAt; }
+  }
+  note(snapshot, nowMs, 'remind-send-failed', { batch: batch.id, ids: batch.members.slice(), detail: reason });
+  return { ok: true, outcome: 'unknown', now: iso(nowMs), batch: batch.id, ids: batch.members.slice(), reason };
+}
+
+// The operator's explicit acknowledgment of an inspected unknown batch: close every member, burn the one
+// remaining right and do not resend. It does not assert whether delivery happened.
+function resolveBatch(snapshot, request, nowMs) {
+  const id = String(request.id ?? '');
+  const batch = findBatch(snapshot, id);
+  if (!batch) return { ok: false, refusal: 'unknown-batch', reason: `'${id}' is not a batch of this project` };
+  if (batch.phase === 'resolved') {
+    return { ok: true, outcome: 'already-resolved', now: iso(nowMs), batch: batch.id, ids: batch.members.slice() };
+  }
+  if (batch.phase === 'intent') {
+    return { ok: false, refusal: 'in-flight', reason: `${batch.id} is still an intent (no observation yet); wait for the 60s deadline or check ${snapshot.project.stateRoot}/reminders/state.json` };
+  }
+  if (batch.phase === 'observed') {
+    return { ok: false, refusal: 'already-observed', reason: `${batch.id} was observed at ${batch.observedAt}; there is nothing uncertain to acknowledge` };
+  }
+  batch.phase = 'resolved';
+  batch.resolvedAt = iso(nowMs);
+  batch.right = 'spent';
+  batch.rightSpentBy = 'resolve';
+  for (const mid of batch.members) {
+    const record = snapshot.reminders.find(item => item.id === mid);
+    if (!record) continue;
+    record.phase = 'resolved';
+    record.resolvedAt = batch.resolvedAt;
+    record.endedAt = batch.resolvedAt;
+  }
+  note(snapshot, nowMs, 'remind-resolved', { batch: batch.id, ids: batch.members.slice(), detail: 'operator acknowledged an unknown batch; nothing resent' });
+  return { ok: true, outcome: 'resolved', now: iso(nowMs), batch: batch.id, ids: batch.members.slice(), right: 'spent' };
+}
+
 // ---------------------------------------------------------------- views (derived, never stored)
 function viewOf(record, nowMs) {
   if (record.phase === 'scheduled') return msOf(record.dueAt) <= nowMs ? 'derived-due' : 'scheduled';
@@ -158,6 +436,9 @@ function viewOfRecord(record, nowMs) {
     message: record.message,
     endedAt: record.endedAt ?? null,
     batchId: record.batchId ?? null,
+    queuedAt: record.queuedAt ?? null,
+    intentAt: record.intentAt ?? null,
+    overdue: record.overdue === undefined ? null : Boolean(record.overdue),
   };
 }
 
@@ -209,6 +490,48 @@ export function validateReminders(snapshot, failWith) {
     if (isTerminal(record.phase) && (typeof record.endedAt !== 'string' || !Number.isFinite(msOf(record.endedAt)))) {
       bad(`terminal Reminder ${record.id} has no ended time`);
     }
+    if (record.batchId !== null && record.batchId !== undefined && typeof record.batchId !== 'string') {
+      bad(`Reminder ${record.id} has an unreadable batch id`);
+    }
+    for (const field of ['queuedAt', 'intentAt', 'unknownAt']) {
+      if (record[field] !== undefined && record[field] !== null && !Number.isFinite(msOf(record[field]))) {
+        bad(`Reminder ${record.id} has an unreadable ${field}`);
+      }
+    }
+  }
+  // The batches are the delivery truth, so they are validated with the same care: a batch that names a
+  // member it does not own, a right that is neither spent nor unspent, or a sequence at the high-water
+  // would let a resend decision be made from a contradiction.
+  const batchWater = snapshot.sequences.batch;
+  const batchIds = new Set();
+  for (const batch of snapshot.batches) {
+    if (typeof batch.id !== 'string') bad('a batch record has no id');
+    const parsed = parseBatchId(batch.id, snapshot.project.id);
+    if (!parsed) bad(`invalid batch id: ${batch.id}`);
+    if (parsed.seq >= batchWater) bad(`batch ${batch.id} claims sequence ${parsed.seq} at or above the issued high-water ${batchWater - 1}`);
+    if (batch.seq !== parsed.seq) bad(`batch ${batch.id} carries seq ${batch.seq}, its id says ${parsed.seq}`);
+    if (batchIds.has(batch.id)) bad(`duplicate batch id: ${batch.id}`);
+    batchIds.add(batch.id);
+    if (!BATCH_PHASES.has(batch.phase)) bad(`batch ${batch.id} has an unknown phase: ${batch.phase}`);
+    if (typeof batch.nonce !== 'string' || !batch.nonce) bad(`batch ${batch.id} has no correlation nonce`);
+    if (typeof batch.intentAt !== 'string' || !Number.isFinite(msOf(batch.intentAt))) bad(`batch ${batch.id} has an unreadable intent time`);
+    if (!Number.isSafeInteger(batch.generation) && batch.generation !== 'off') bad(`batch ${batch.id} has an unreadable Standby binding`);
+    if (batch.right !== 'unspent' && batch.right !== 'spent') bad(`batch ${batch.id} has an unreadable right: ${batch.right}`);
+    if (batch.rightSpentBy !== null && !['wake', 'resolve'].includes(batch.rightSpentBy)) bad(`batch ${batch.id} has an unreadable right holder: ${batch.rightSpentBy}`);
+    if (!Number.isSafeInteger(batch.attempts) || batch.attempts < 1) bad(`batch ${batch.id} has an unreadable attempt count`);
+    if (!Array.isArray(batch.members) || !batch.members.length) bad(`batch ${batch.id} has no members`);
+    if (batch.members.length > BATCH_LIMIT) bad(`batch ${batch.id} carries more than ${BATCH_LIMIT} members`);
+    for (const mid of batch.members) {
+      const record = snapshot.reminders.find(item => item.id === mid);
+      if (!record) bad(`batch ${batch.id} names a member that is not in the snapshot: ${mid}`);
+      else if (record.batchId !== batch.id) bad(`batch ${batch.id} names ${mid}, whose record says ${record.batchId}`);
+    }
+  }
+  for (const record of snapshot.reminders) {
+    if (record.batchId === null || record.batchId === undefined) continue;
+    const batch = snapshot.batches.find(item => item.id === record.batchId);
+    if (!batch) bad(`Reminder ${record.id} names a batch that is not in the snapshot: ${record.batchId}`);
+    else if (!batch.members.includes(record.id)) bad(`Reminder ${record.id} claims ${record.batchId}, which does not list it`);
   }
   if (snapshot.audit.some(entry => !entry || typeof entry !== 'object' || typeof entry.op !== 'string' ||
       typeof entry.at !== 'string' || !Number.isFinite(msOf(entry.at)))) {
@@ -400,6 +723,9 @@ function listReminders(snapshot, request, nowMs) {
   const terminal = snapshot.reminders.filter(record => isTerminal(record.phase))
     .sort((a, b) => (endedMs(b) - endedMs(a)) || (b.seq - a.seq))
     .map(record => viewOfRecord(record, nowMs));
+  const batchCounts = { intent: 0, observed: 0, unknown: 0, resolved: 0 };
+  for (const batch of snapshot.batches) batchCounts[batch.phase] = (batchCounts[batch.phase] ?? 0) + 1;
+  const outstanding = outstandingBatch(snapshot);
   return {
     ok: true,
     now: iso(nowMs),
@@ -412,6 +738,8 @@ function listReminders(snapshot, request, nowMs) {
     terminal: all ? terminal : [],
     terminalTotal: terminal.length,
     terminalShown: all,
+    outstanding: outstanding ? { id: outstanding.id, phase: outstanding.phase, intentAt: outstanding.intentAt, members: outstanding.members.slice() } : null,
+    batchCounts,
   };
 }
 
@@ -421,11 +749,19 @@ export function applyReminder(snapshot, request, nowMs) {
     case 'remind-list': return listReminders(snapshot, request, nowMs);
     case 'remind-show': return showReminder(snapshot, request, nowMs);
     case 'remind-cancel': return cancelReminder(snapshot, request, nowMs);
+    case 'remind-admit': return admitReminders(snapshot, request, nowMs);
+    case 'remind-intent': return intentBatch(snapshot, request, nowMs);
+    case 'remind-observe': return observeBatch(snapshot, request, nowMs);
+    case 'remind-fail': return failBatch(snapshot, request, nowMs);
+    case 'remind-resolve': return resolveBatch(snapshot, request, nowMs);
     default: fail(`unknown reminder operation: ${request.op}`);
   }
 }
 
-export const REMIND_OPS = new Set(['remind-add', 'remind-list', 'remind-show', 'remind-cancel']);
+export const REMIND_OPS = new Set([
+  'remind-add', 'remind-list', 'remind-show', 'remind-cancel',
+  'remind-admit', 'remind-intent', 'remind-observe', 'remind-fail', 'remind-resolve',
+]);
 
 // ---------------------------------------------------------------- presentation
 // Tokens (id, phase/view names, source, times) stay machine-shaped: they are the same words the spec and
@@ -470,6 +806,12 @@ function renderList(result) {
     `提醒 · ${activeN} 条活跃 · 已签发 ${result.highWater} · 已修剪 ${result.pruned} · 现在 ${result.now}`,
     `视图 ${VIEWS.map(view => `${view}=${c[view] ?? 0}`).join(' ')}`,
   ];
+  if (result.outstanding) {
+    const ob = result.outstanding;
+    lines.push(ob.phase === 'unknown'
+      ? `批次 ${ob.id} · unknown（未确认送达：检查后 team remind resolve ${ob.id} --ack-unknown；不会自动重发）`
+      : `批次 ${ob.id} · intent（已冻结，等唤醒回执；冻结于 ${ob.intentAt}）`);
+  }
   if (!activeN && !result.terminalTotal) {
     lines.push('（还没有提醒：team remind add --after 20m --message "…"）');
     return lines.join('\n') + '\n';
@@ -495,16 +837,29 @@ function renderShow(result) {
   if (!result.ok) return `team remind show：${result.reason}\n`;
   const record = result.reminder;
   const ended = record.endedAt ? `\n  结束     ${record.endedAt}` : '';
+  const queued = record.queuedAt ? `\n  入队     ${record.queuedAt}${record.overdue ? '（补发：到期时巡检没在看）' : ''}` : '';
+  const batch = record.batchId ? `\n  批次     ${record.batchId}` : '';
   return [
     `${record.id} · ${record.view}（phase ${record.phase}）`,
     `  到期     ${record.dueAt}`,
     `  创建     ${record.createdAt}${ended}`,
     `  视图     ${record.view}`,
     `  归属     owner ${record.owner}${record.key ? ` · key ${record.key}` : ''} · 来源 ${record.source}${record.task ? ` · task ${record.task}` : ''}`,
+    `${queued}${batch}`.replace(/^\n/, ''),
     '  正文（逐字，未截断）：',
     record.message,
     '',
-  ].join('\n');
+  ].filter(line => line !== '').join('\n');
+}
+
+function renderResolve(result) {
+  if (result.outcome === 'resolved') {
+    return `已确认未知批次 ${result.batch}（${result.ids.length} 条：${result.ids.join(' ')}）：已关闭、不再重发，也不声称送达过\n`;
+  }
+  if (result.outcome === 'already-resolved') {
+    return `批次 ${result.batch} 早已确认过（${result.ids.length} 条）；这次没有改动\n`;
+  }
+  return `team remind resolve：${result.reason}\n`;
 }
 
 function renderCancel(result) {
@@ -524,6 +879,7 @@ export function renderRemind(op, result) {
     case 'remind-list': return renderList(result);
     case 'remind-show': return renderShow(result);
     case 'remind-cancel': return renderCancel(result);
+    case 'remind-resolve': return renderResolve(result);
     default: return JSON.stringify(result) + '\n';
   }
 }

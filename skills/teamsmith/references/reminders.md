@@ -4,18 +4,26 @@ A reminder is a durable one-shot note the project PM leaves for itself: "come ba
 time". It is stored in the same versioned project state as the rest of teamsmith, so it survives a
 restart, a lost session and a new checkout, and it is the only copy of that decision.
 
-This page is the operator's manual for the part that exists today: recording, reading and cancelling
-a reminder. It does not describe delivery, because this build does not deliver.
+This page is the operator's manual: recording, reading, cancelling, and what happens when a reminder
+comes due.
 
 ## What this build does and does not do
 
 - Records a reminder with its full text, its due instant, its source and an optional key and task.
 - Lists what is waiting, when it is due, and whether it is due *now*; shows one record in full;
-  cancels a reminder that has not been frozen for delivery.
-- Does **not** wake the PM, does not queue anything for delivery, and does not touch Standby. A due
-  reminder is shown as `derived-due` and stays there until the delivery part of the change reads it.
+  cancels a reminder that has not been frozen into a batch.
+- Queues a reminder when it comes due (the pulse's own ten-second due check) and delivers it — as one
+  complete message, one batch at a time — into the verified PM session through the inbox watcher. The
+  message is a Pi custom message: nothing is typed into the editor and a draft is never touched.
+- Leaves Standby once, and only after the wake is actually observed. Being due, queued, frozen or
+  refused does **not** leave Standby, and a newer Standby generation is never cleared by an older
+  batch.
+- Does **not** resend a batch whose delivery cannot be proven: it becomes `unknown` and waits for an
+  operator (`team remind resolve <batch> --ack-unknown`).
 - Does **not** accept a project, an owner or a recipient from the caller: those come from the
   checkout the command runs in and from the authority itself.
+- Does **not** start a stopped PM for a reminder, and does not expose a PM model tool: the CLI is the
+  way this build creates reminders, and a queued reminder waits for the session that comes back.
 
 ## Where the state lives
 
@@ -98,10 +106,44 @@ and the clock:
 | `cancelled` | withdrawn before delivery was frozen |
 | `resolved` | an operator acknowledged an unknown batch |
 
-`due` is not `queued`: a reminder can be overdue for a long time and still never have been sent. This
-build produces only `scheduled`, `cancelled` and, from the clock, `derived-due`; the other phases are
-written by the delivery and Pulse tasks of the same change, and this reader already shows them
-because it derives from the snapshot rather than from a second copy.
+`due` is not `queued`: a reminder can be overdue for a long time and still never have been sent.
+All of these phases are produced by this build; the reader derives the view from the snapshot rather
+than from a second copy, so a record written by any process shows up the same way in every reader.
+
+## Delivery
+
+The delivery path has four separate facts, and each one is durable before the next step:
+
+1. **Due admission.** Both pulse shapes (the console and the headless tick loop) run a lightweight
+   check about every ten seconds, apart from the full patrol. A due reminder is committed as `queued`
+   with a queue order and its enqueue time; a repeated scan never creates a second queue entry. An
+   item is marked `overdue` when its due instant predates the pulse instance that admitted it (a
+   catch-up after a restart) or when admission lagged due by more than 30 seconds — an ordinary
+   polling delay is not labelled overdue. A reminder still arriving 5 seconds late is normal; one
+   that arrives 5 minutes late says so.
+2. **One frozen batch.** The PM session's inbox watcher freezes at most eight queued reminders into
+   one batch, records the intent — every member, the full text, the correlation nonce and the current
+   Standby generation — and only then calls Pi. One batch is outstanding at a time; at most one
+   submission per five seconds. Nothing is written into the editor and the input draft is untouched.
+3. **Observation.** Pi's own `message_start` for that custom message, carrying the batch id and the
+   nonce, is the only thing that counts as a wake. A return value, a thrown error, a deferred action
+   or an unrelated run is not. The observation, the consumed right and the Standby exit commit in one
+   atomic snapshot with an audit line naming the batch and every reminder id and source.
+4. **Standby.** A reminder may wake a PM that is on standby (this is the one wake that Standby does
+   not suppress). If the generation bound at intent is still the current one, the same observation
+   transaction switches standby off — once per batch, never twice. If a newer generation exists, it
+   is preserved and the outcome is reported as `generation-ambiguous`. If standby was already
+   manually off, the audit says `already-off` rather than inventing an automatic exit.
+
+If the session API refuses the message, the batch becomes `unknown` (visible in `team remind list`),
+its members stop being independently sendable and nothing resends automatically: a call returning or
+throwing is not a receipt. `team remind resolve <batch-id> --ack-unknown` is the operator's explicit
+acknowledgment — it closes every member of that batch, burns its remaining right and reports the ids
+without claiming delivery.
+
+After a restart, `queued` reminders are still queued and are delivered by the next watcher; an intent
+that never saw an observation past its 60-second deadline becomes `unknown` instead of being resent;
+`observed` and `resolved` reminders are never queued again.
 
 ## Retention and the issued high-water
 
@@ -126,6 +168,7 @@ revived or sent.
 
 ## Not in this build
 
-Pulse admission, the PM wake-up and its message, Standby interaction, the configurable limits (active
-count, message bytes, create rate) and the PM-only tool are later tasks of the same change. Until
-they land, a reminder is a durable note that a person reads — it does not summon anyone.
+The PM-only model tool, starting a stopped PM for a reminder (the prompt-free handoff), and the
+configurable limits (active count, message bytes, create rate) are later tasks of the same change.
+Until they land, the CLI is how a reminder is created and a queued reminder waits for a PM session
+that is running.

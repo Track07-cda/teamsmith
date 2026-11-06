@@ -741,11 +741,22 @@ team_cmd_watch() {
   team_hdr "teamsmith pulse · $TEAM_PROJECT（每 ${interval}s 一次；Ctrl-C 退出）"
   team_dim "  只做两件事：记录容量趋势 ｜ PM 没在跑就在它的窗口里把 $(team_pm_cli_name) 拉起来"
   team_dim "  不管 tmux 布局，不管 agent（agent 归 PM 管：team resume）"
+  # agent-self-reminder 4.1：巡检节拍之外再加一个**轻量**的到期检查（默认 I10s）。它不是第二个后端、
+  # 不重扫项目、不调用模型：remind-tick.mjs 读一份有界快照，只在真到点时拿一次权威锁。完整巡检的
+  # 周期不变（下一个巡检点按 duration 从本次结束算，不会因为切片而变密）。
+  local slice="${TEAM_REMIND_TICK_SECS:-10}" next_patrol=0 now pulse_started
+  case "$slice" in ''|*[!0-9]*|0) slice=10 ;; esac
+  pulse_started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   while :; do
-    # M9.8：判定必须用磁盘上的代码（漂移就重启本进程）—— 否则唤醒理由可能比 digest 旧
-    team_watch_reexec_if_stale "$fp0" watch ${argv[@]+"${argv[@]}"}
-    team_watch_once
-    sleep "$interval" & wait $!
+    now="$(date +%s)"
+    team_remind_due_tick "$pulse_started"
+    if [ "$now" -ge "$next_patrol" ]; then
+      # M9.8：判定必须用磁盘上的代码（漂移就重启本进程）—— 否则唤醒理由可能比 digest 旧
+      team_watch_reexec_if_stale "$fp0" watch ${argv[@]+"${argv[@]}"}
+      team_watch_once
+      next_patrol=$(( $(date +%s) + interval ))
+    fi
+    sleep "$slice" & wait $!
   done
 }
 

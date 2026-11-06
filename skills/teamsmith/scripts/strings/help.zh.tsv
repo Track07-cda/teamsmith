@@ -343,7 +343,7 @@ cmd.standby.write	状态目录
 cmd.standby.see	`team pulse`、`team digest`
 cmd.standby.arg.--reason	PM 为什么停工；写下来，下一个会话才知道。
 cmd.remind.title	给本项目记一条定时提醒
-cmd.remind.what	把一条提醒记进 teamsmith 的项目状态：完整正文、什么时候到期、谁创建的。`list` 打印还在等的提醒和它们的到期时间，`show` 打印一条的全部内容，`cancel` 取消一条还没被送去投递的提醒。你看到的状态都是每次读取时从那条记录派生出来的，不另存一份。这一版只负责记录、查看和取消：到期的提醒显示为 derived-due，但还不会叫醒 PM。
+cmd.remind.what	把一条提醒记进 teamsmith 的项目状态：完整正文、什么时候到期、谁创建的。`list` 打印还在等的提醒和它们的到期时间，`show` 打印一条的全部内容，`cancel` 取消一条还没被冻结成批次的提醒，`resolve` 确认一整批无法证实送达的提醒（必须显式给 `--ack-unknown`；它不重发）。巡检到点把提醒入队，PM 会话把它作为一条完整消息收到；真的被叫醒时才退出待命一次。你看到的状态都是每次读取时从那条记录派生出来的，不另存一份。
 cmd.remind.when	要把一件事留到以后再处理、又不想一直挂着会话或靠记性重来时用它。
 cmd.remind.example	team remind add --after 20m --message "看一下构建"
 cmd.remind.read	项目状态快照与状态根定位器
@@ -357,6 +357,7 @@ cmd.remind.arg.--key	这条逻辑提醒的名字。只要还有一条未结束�
 cmd.remind.arg.--task	这条提醒属于哪个任务或任务书，记录里因此能看出它是关于什么的。
 cmd.remind.arg.--all	连已经结束的提醒（保留的历史）一起打印，最新的在前。
 cmd.remind.arg.--json	把记录按 JSON 打印，不打印表格。
+cmd.remind.arg.--ack-unknown	确认这一批提醒无法证实是否送达：关闭整批、烧掉它那一次自动退出待命的权利，并且不重发。没有这个参数 `resolve` 一律拒绝。
 cmd.up.title	搭好台子并把 PM 拉起来
 cmd.up.what	缺什么就建什么：项目的 session 与窗口，然后在它自己的窗口里启动 PM，默认接着这个项目上一场会话，除非你要一场新的。它只负责 PM，不动席位。
 cmd.up.when	重启之后用它，或者在 session 丢了、团队该在同一个项目里继续干活时用它。

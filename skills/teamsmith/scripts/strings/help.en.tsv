@@ -357,7 +357,7 @@ cmd.standby.write	the state directory
 cmd.standby.see	`team pulse`, `team digest`
 cmd.standby.arg.--reason	why the PM is standing down; it is written down so the next session knows.
 cmd.remind.title	record a one-shot reminder for this project
-cmd.remind.what	Records a reminder for the project PM in the same versioned project state as the rest of teamsmith: its full text, when it is due and who created it. `list` prints what is waiting and when it is due, `show` prints one record in full, `cancel` stops a reminder that has not been frozen for delivery. Every status you see is derived from that one record on each read, never a second copy. This build records, lists and cancels them: a due reminder shows as derived-due, and nothing wakes the PM yet.
+cmd.remind.what	Records a reminder for the project PM in the same versioned project state as the rest of teamsmith: its full text, when it is due and who created it. `list` prints what is waiting and when it is due, `show` prints one record in full, `cancel` stops a reminder that has not been frozen into a batch, and `resolve` acknowledges a whole batch whose delivery cannot be proven (it needs an explicit `--ack-unknown` and never resends). The patrol queues a reminder when it comes due and the PM session receives it as one complete message; Standby is left once, and only by an actual wake. Every status you see is derived from that one record on each read, never a second copy.
 cmd.remind.when	Use it to park something for a later time instead of holding a session open or retrying from memory.
 cmd.remind.example	team remind add --after 20m --message "check the build"
 cmd.remind.read	the project state snapshot and the state-root locator
@@ -371,6 +371,7 @@ cmd.remind.arg.--key	a name for this logical reminder. While a live reminder hol
 cmd.remind.arg.--task	the task or brief this reminder belongs to, so the record says what it is about.
 cmd.remind.arg.--all	also print the reminders that already ended (the retained history), newest first.
 cmd.remind.arg.--json	print the record(s) as JSON instead of the table.
+cmd.remind.arg.--ack-unknown	acknowledge that this batch cannot be proven delivered: close every member, burn its one automatic Standby exit and do not resend. Without it `resolve` is refused.
 cmd.up.title	build the stage and start the PM
 cmd.up.what	Creates the project's session and windows if they are missing and starts the PM in its own window, continuing the project's previous conversation unless a fresh one is asked for. It starts the PM only; the seats are not touched.
 cmd.up.when	Use it after a restart, or when the session was lost and the team should keep working in the same project.

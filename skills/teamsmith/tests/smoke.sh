@@ -24675,7 +24675,7 @@ fi
 # 覆盖 CLI 面（add/list/show/cancel）/ 输入拒绝 / key 幂等与释放 / 派生视图（手工改快照后计数跟着变）/
 # 有界终结历史与已签发高水位 / 主项目隔离；五条翻转臂在 scratch 副本上把实现逐条改坏，要求具名断言变红。
 # 纯逻辑：不建 tmux、不起 pi，FAST 与全量都跑。
-section "67 · 提醒 CLI：add/list/show/cancel 与派生视图（P409 · agent-self-reminder 2.1/2.3）"
+section "67 · 提醒：CLI / 派生视图 / 到期入队与投递（P409+P423 · agent-self-reminder 2.1/2.3·3.1/3.2·4.1）"
 P409_FIX="$SKILL_DIR/tests/remind-cli.sh"
 if [ ! -f "$P409_FIX" ]; then
   bad "P409 缺 tests/remind-cli.sh（提醒 CLI 夹具）"
@@ -24695,6 +24695,31 @@ else
   else
     bad "P409 提醒 CLI 夹具红（rc=$P409_RC）"
     grep -a '✗' "$TMP/p409-remind.log" | head -10 | sed 's/^/      /'
+  fi
+fi
+
+# P423：叫醒这条线的另一半（到期入队 / 批次 / 观察与待命 / 失败与确认 / 重启恢复 / 投递面 / 隔离）。
+# 它同样只在自己的临时根里（每个仓库 git init、显式主根/状态根、独立 HOME/TMPDIR），五条翻转臂在
+# scratch 副本上逐条改坏实现并要具名断言变红；不建 tmux、不起模型。
+P423_FIX="$SKILL_DIR/tests/remind-delivery.sh"
+if [ ! -f "$P423_FIX" ]; then
+  bad "P423 缺 tests/remind-delivery.sh（投递夹具）"
+else
+  bash "$P423_FIX" >"$TMP/p423-remind-delivery.log" 2>&1; P423_RC=$?
+  if [ "$P423_RC" -eq 0 ]; then
+    P423_SUM="$(smoke_inner_summary "$TMP/p423-remind-delivery.log" remind-delivery)" || P423_SUM=""
+    if [ -n "$P423_SUM" ]; then
+      ok "P423 投递夹具全绿（$P423_SUM：到期入队 / 批次 / 观察与待命 / 失败与确认 / 重启恢复 / 投递面 / 隔离 / 五条翻转臂）"
+    else
+      bad "P423 投递夹具绿了但读不到它自己的结果行（夹具契约破了）"
+    fi
+    assert_has "$TMP/p423-remind-delivery.log" "主项目 .pi/team：非白名单路径零变化" "P423 隔离证明：主项目的非白名单路径零变化"
+    assert_has "$TMP/p423-remind-delivery.log" "flip（观察不核对代次）" "P423 红侧真的跑了（代次那条：不核对代次必须红）"
+  elif [ "$P423_RC" -eq 3 ]; then
+    cond_skip "P423 投递夹具" "$(grep -a '前提缺失' "$TMP/p423-remind-delivery.log" | tail -1 | sed 's/^remind-delivery：//')"
+  else
+    bad "P423 投递夹具红（rc=$P423_RC）"
+    grep -a '✗' "$TMP/p423-remind-delivery.log" | head -10 | sed 's/^/      /'
   fi
 fi
 

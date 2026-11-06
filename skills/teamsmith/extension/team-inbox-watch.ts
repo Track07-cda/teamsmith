@@ -77,6 +77,7 @@ import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, watch, writeFileSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const DEFAULT_PREVIEW = 160          // 预览截断（字符）：唤醒消息只带一行指针，不带全文
 const DEFAULT_MAX_BYTES = 128 * 1024 // spool 上限
@@ -856,6 +857,7 @@ export default function (pi: ExtensionAPI) {
   let pollTimer: ReturnType<typeof setInterval> | null = null
   let beatTimer: ReturnType<typeof setInterval> | null = null
   let mergeTimer: ReturnType<typeof setTimeout> | null = null
+  let remindTimer: ReturnType<typeof setInterval> | null = null
 
   const stopAll = (): void => {
     try { watcher?.close?.() } catch { /* ignore */ }
@@ -865,6 +867,7 @@ export default function (pi: ExtensionAPI) {
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
     if (beatTimer) { clearInterval(beatTimer); beatTimer = null }
     if (mergeTimer) { clearTimeout(mergeTimer); mergeTimer = null }
+    if (remindTimer) { clearInterval(remindTimer); remindTimer = null }
   }
 
   let headBytes: Buffer | null = null   // 上次建立 offset 时的头部前缀（B2 的回退证据）
@@ -1318,6 +1321,121 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+  // ---------------------------------------------------------------- Reminder wake (P423 · 3.1/3.2)
+  // The PM's self-Reminders are delivered here and only here. The authority freezes one batch as an intent
+  // (full text + the Standby generation bound before the call); this watcher submits it as ONE
+  // non-interrupting custom message, and the public message_start of that very message -- matched by batch
+  // id, nonce and member set -- is what records the wake and may switch Standby off once. Nothing is typed
+  // into the editor, and nothing is resent because a call returned, threw or was deferred.
+  let remindRoot = ''
+  let remindState = ''
+  let remindSession = ''
+  let remindAuthority: any = null
+  let remindModule: any = null
+  let remindBusy = false
+  let remindWarned = ''
+
+  const reminderPollMs = (): number => {
+    const n = Number(process.env.TEAM_REMIND_POLL_MS ?? NaN)
+    return Number.isFinite(n) && n >= 200 ? n : 2000
+  }
+
+  const defaultStateRoot = (): string => join(remindRoot, '.pi/team/state')
+
+  const reminderPoll = async (): Promise<void> => {
+    if (remindBusy || !remindRoot || !remindAuthority || !remindModule) return
+    remindBusy = true
+    try {
+      const seen = await remindAuthority.peek({ cwd: remindRoot, mainRoot: remindRoot, stateRoot: defaultStateRoot() })
+      if (!seen.pinned) return
+      remindState = String(seen.stateRoot ?? '')
+      const pending = seen.reminders ?? { due: [], queued: [], staleIntent: [] }
+      // Nothing to freeze: no queued item and no intent past its observation deadline. A batch in flight is
+      // closed by the observation handler, not by polling the authority every couple of seconds.
+      if (!pending.queued.length && !pending.staleIntent.length) return
+      const res = await remindAuthority.request({ cwd: remindRoot, mainRoot: remindRoot, stateRoot: remindState }, {
+        op: 'remind-intent', session: remindSession, pid: process.pid,
+      })
+      if (!res || res.action !== 'send') {
+        // An unknown batch (or one still in flight) blocks the next freeze. Say it once per batch, not per tick.
+        if (res?.action === 'wait' && res.batch && remindWarned !== res.batch) {
+          remindWarned = res.batch
+          appendLedger(root, `reminder waiting batch=${res.batch} phase=${res.phase ?? 'intent'}（${oneLine(String(res.reason ?? ''), 160)}）`)
+        }
+        return
+      }
+      const batch = res.batch
+      const mod = remindModule
+      try {
+        pi.sendMessage({
+          customType: mod.REMINDER_CUSTOM_TYPE, content: mod.reminderContent(batch), display: true,
+          details: mod.reminderDetails(batch),
+        }, { triggerTurn: true, deliverAs: 'followUp' })
+        appendLedger(root, mod.deliveryLogLine(batch, 'intent-sent'))
+      } catch (error) {
+        // A throw is not a receipt: the batch becomes unknown (visible, no automatic resend).
+        try {
+          await remindAuthority.request({ cwd: remindRoot, mainRoot: remindRoot, stateRoot: remindState }, {
+            op: 'remind-fail', id: batch.id, nonce: batch.nonce, reason: oneLine(shortError(error), 300),
+          })
+        } catch (second) {
+          appendLedger(root, `reminder fail-record blocked batch=${batch.id}（${oneLine(shortError(second), 160)}）`)
+        }
+        appendLedger(root, `reminder send-failed batch=${batch.id}（会话 API 拒绝；批次保持 unknown，不自动重发）`)
+      }
+    } catch (error) {
+      appendLedger(root, `reminder tick failed: ${oneLine(shortError(error), 200)}`)
+    } finally {
+      remindBusy = false
+    }
+  }
+
+  const startReminderWatch = async (ctx: any): Promise<void> => {
+    try {
+      const skill = dirname(dirname(fileURLToPath(import.meta.url)))
+      remindAuthority = await import(pathToFileURL(join(skill, 'scripts/state-authority.mjs')).href)
+      remindModule = await import(pathToFileURL(join(skill, 'scripts/reminder-delivery.mjs')).href)
+      if (typeof remindAuthority.peek !== 'function' || typeof remindAuthority.request !== 'function' ||
+          typeof remindModule.reminderContent !== 'function' || typeof remindModule.matchesObservation !== 'function') {
+        throw new Error('the reminder modules did not export the expected entry points')
+      }
+      remindRoot = root
+      remindSession = String(ctx?.sessionManager?.getSessionId?.() ?? '')
+      if (!remindSession) throw new Error('this session has no id: a batch intent must bind the session that may observe it')
+      remindTimer = setInterval(() => { void reminderPoll() }, reminderPollMs())
+      appendLedger(root, `reminder watch on session=${remindSession} poll=${reminderPollMs()}ms`)
+      void reminderPoll()   // restart recovery: a queued item from before this process is delivered now
+    } catch (error) {
+      remindAuthority = null
+      remindModule = null
+      if (remindTimer) { clearInterval(remindTimer); remindTimer = null }
+      appendLedger(root, `reminder watch disabled: ${oneLine(shortError(error), 200)}`)
+    }
+  }
+
+  // The observation. `sendMessage` returning, a thrown error or a deferred action never reach this path;
+  // only Pi's own message_start for our custom message, with the frozen batch's identity, does.
+  pi.on('message_start', async (event: any) => {
+    if (!remindAuthority || !remindRoot) return
+    const message = event?.message
+    const details = message?.details
+    if (message?.role !== 'custom' || message?.customType !== 'team-reminder' || !details?.batchId) return
+    try {
+      const res = await remindAuthority.request({ cwd: remindRoot, mainRoot: remindRoot, stateRoot: remindState || defaultStateRoot() }, {
+        op: 'remind-observe', id: String(details.batchId), nonce: String(details.nonce ?? ''), session: remindSession,
+      })
+      if (!res?.ok) {
+        appendLedger(root, `reminder observation refused (${res?.refusal ?? 'unknown'}): ${oneLine(String(res?.reason ?? ''), 200)}`)
+      } else if (res.outcome === 'duplicate') {
+        appendLedger(root, `reminder duplicate event batch=${res.batch}（right 已花掉；未再退待命）`)
+      } else {
+        appendLedger(root, `reminder observed batch=${res.batch} standby=${res.standby} generation=${res.generation} ids=${(res.ids ?? []).join('|')}`)
+      }
+    } catch (error) {
+      appendLedger(root, `reminder observation failed: ${oneLine(shortError(error), 200)}`)
+    }
+  })
+
   pi.on('session_start', async (_event: any, ctx: any) => {
     stopAll()
     root = findRoot(String(ctx?.cwd ?? process.cwd()))
@@ -1436,6 +1554,8 @@ export default function (pi: ExtensionAPI) {
     armFileWatcher()   // spool 可能早已存在（上一任会话留下的）：文件级 watcher 现在就 arm 上
     pollTimer = setInterval(() => { try { flush() } catch { /* ignore */ } }, pollMs())
     beatTimer = setInterval(() => { try { writeReg('ready') } catch { /* ignore */ } }, heartbeatMs())
+    // Reminder delivery is the PM's path: a worker window never binds a batch or observes a wake.
+    if (inbox === 'pm') await startReminderWatch(ctx)
   })
 
   pi.on('session_shutdown', async () => {
@@ -1450,5 +1570,7 @@ export default function (pi: ExtensionAPI) {
     headBytes = null; lastShrink = null
     journalPath = ''; journalEntries = new Map(); retryQueue = new Map(); recoveryQueue = new Map()
     delivered = new Set(); floorTs = null; floorId = ''; journalRecords = 0; abortAt = ''
+    remindRoot = ''; remindState = ''; remindSession = ''; remindAuthority = null; remindModule = null
+    remindBusy = false; remindWarned = ''
   })
 }

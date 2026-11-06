@@ -30,7 +30,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { REMIND_OPS, applyReminder, renderRemind, validateReminders } from './remind-store.mjs';
+import { REMIND_OPS, applyReminder, peekReminders, renderRemind, validateReminders } from './remind-store.mjs';
 
 const SELF = fileURLToPath(import.meta.url);
 const SNAPSHOT_VERSION = 1;
@@ -214,6 +214,7 @@ function initial(locator) {
     // `migrated` records that the legacy marker has been imported (or proven absent): an old snapshot
     // without the key is unmigrated, and the next mutation imports the marker before it does anything.
     standby: { on: false, generation: 0, reason: null, since: null, migrated: false },
+    pulse: null,
     reminders: [],
     batches: [],
     audit: [],
@@ -463,6 +464,34 @@ function flock(lock, args, input) {
   });
 }
 
+// A whole-snapshot read WITHOUT the lock (the caller's "is there anything to commit right now" probe).
+// Renames are atomic, so an unlocked reader sees either the previous or the next snapshot, never half of
+// one; nothing here writes, publishes or decides -- every decision still runs inside `request()`.
+export async function peek(context) {
+  const main = authorityIdentity(context);
+  const want = canonical(context.stateRoot);
+  const pinned = readLocator(main);
+  if (!pinned) {
+    return { pinned: false, mainRoot: main, stateRoot: want, reminders: { due: [], queued: [], staleIntent: [] }, outstanding: null };
+  }
+  if (pinned.stateRoot !== want) {
+    fail(`canonical state-root mismatch: pinned ${pinned.stateRoot}, requested ${want}; ` +
+      'quiesce the writers and migrate the locator explicitly (never pick a second authority)');
+  }
+  const file = snapshotFile(pinned.stateRoot);
+  if (!snapshotPresence(file)) {
+    return { pinned: true, mainRoot: main, stateRoot: pinned.stateRoot, reminders: { due: [], queued: [], staleIntent: [] }, outstanding: null };
+  }
+  const snapshot = readJSON(file);
+  validate(snapshot, main, pinned.stateRoot);
+  const pending = snapshot.batches.find(batch => batch.phase === 'intent' || batch.phase === 'unknown') ?? null;
+  return {
+    pinned: true, mainRoot: main, stateRoot: pinned.stateRoot, projectId: snapshot.project.id,
+    reminders: peekReminders(snapshot, Date.now()),
+    outstanding: pending ? { id: pending.id, phase: pending.phase } : null,
+  };
+}
+
 async function resolveAuthority(context) {
   const main = authorityIdentity(context);
   const want = canonical(context.stateRoot);
@@ -523,7 +552,8 @@ function parseCli(argv) {
   if (!main || !state || !op) {
     fail('usage: state-authority.mjs --cli <project-root> <state-root> ' +
       '<resolve|init|read|allocate <kind>|standby-read|standby-on|standby-off|standby-import|' +
-      'remind-add|remind-list|remind-show|remind-cancel> ' +
+      'remind-add|remind-list|remind-show|remind-cancel|remind-admit|remind-intent|' +
+      'remind-observe|remind-fail|remind-resolve> ' +
       '[--print <field>] [--json]');
   }
   let print = null;
@@ -575,15 +605,30 @@ function parseCli(argv) {
 }
 
 // Boolean reminder flags (everything else takes a value).
-const REMIND_BOOL_FLAGS = { 'remind-list': new Set(['all']) };
+const REMIND_BOOL_FLAGS = { 'remind-list': new Set(['all']), 'remind-resolve': new Set(['ack-unknown']) };
 
 // Exactly the flags each reminder operation accepts: an unknown flag is refused here rather than silently
-// ignored, so a typo cannot look like a successful create.
+// ignored, so a typo cannot look like a successful create or a successful delivery step.
 const REMIND_FLAGS = {
   'remind-add': new Set(['at', 'after', 'key', 'task', 'source']),
   'remind-list': new Set(['all']),
   'remind-show': new Set(['id']),
   'remind-cancel': new Set(['id']),
+  'remind-admit': new Set(['pulse-started']),
+  'remind-intent': new Set(['session', 'pid']),
+  'remind-observe': new Set(['id', 'nonce', 'session']),
+  'remind-fail': new Set(['id', 'nonce', 'reason']),
+  'remind-resolve': new Set(['id', 'ack-unknown']),
+};
+
+// The kebab-case command line is mapped to the transaction's field names in one place: the transaction
+// never sees a flag it did not ask for, and a missing required field is refused by name.
+const REMIND_FIELD = { 'pulse-started': 'pulseStartedAt', 'ack-unknown': 'ack' };
+const REMIND_REQUIRED = {
+  'remind-intent': ['session'],
+  'remind-observe': ['id', 'nonce', 'session'],
+  'remind-fail': ['id', 'nonce'],
+  'remind-resolve': ['id'],
 };
 
 function parseRemindFlags(op, flags) {
@@ -591,9 +636,20 @@ function parseRemindFlags(op, flags) {
   const request = { op };
   for (const name of Object.keys(flags)) {
     if (!allowed.has(name)) fail(`${op} does not accept --${name}`);
-    request[name] = flags[name];
+    request[REMIND_FIELD[name] ?? name] = flags[name];
   }
-  if ((op === 'remind-show' || op === 'remind-cancel') && !request.id) fail(`${op} needs --id <reminder-id>`);
+  for (const name of REMIND_REQUIRED[op] ?? []) {
+    const field = REMIND_FIELD[name] ?? name;
+    if (request[field] === undefined || request[field] === '') fail(`${op} needs --${name}`);
+  }
+  if (op === 'remind-intent' && request.pid !== undefined) {
+    const pid = Number(request.pid);
+    if (!Number.isSafeInteger(pid) || pid < 1) fail('remind-intent --pid must be a process id');
+    request.pid = pid;
+  }
+  if (op === 'remind-resolve' && request.ack !== true) {
+    fail('remind-resolve requires --ack-unknown: acknowledging an unknown batch closes it and burns its one automatic-off right');
+  }
   return request;
 }
 
@@ -679,7 +735,8 @@ async function main(argv) {
   }
   fail('usage: state-authority.mjs --cli <project-root> <state-root> ' +
     '<resolve|init|read|allocate <kind>|standby-read|standby-on|standby-off|standby-import|' +
-    'remind-add|remind-list|remind-show|remind-cancel> [--print <field>] [--json]');
+    'remind-add|remind-list|remind-show|remind-cancel|remind-admit|remind-intent|' +
+    'remind-observe|remind-fail|remind-resolve> [--print <field>] [--json]');
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === SELF) {

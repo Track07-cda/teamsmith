@@ -679,3 +679,54 @@ export function runTick(
     child.on('close', (code) => done(code === 0))
   })
 }
+
+/**
+ * One lightweight Reminder due tick (agent-self-reminder 4.1). It is NOT a patrol: `remind-tick.mjs`
+ * reads one bounded snapshot, commits due queue entries under the authority lock only when something is
+ * actually due, and never runs the project scan. One child per interval, asynchronous for the same
+ * reason the patrol tick is: a due tick must not freeze the console's input line.
+ */
+export function runRemindTick(
+  script: string,
+  root: string,
+  stateDir: string,
+  pulseStartedAt: string,
+  tickLog: string,
+  timeoutMs = 30000,
+): Promise<{ ok: boolean; output: string }> {
+  return new Promise((resolve) => {
+    let child: ReturnType<typeof spawn>
+    try {
+      child = spawn(process.execPath, [
+        script, '--root', root, '--state-dir', stateDir, '--pulse-started', pulseStartedAt, '--quiet',
+      ], { cwd: root, env: cleanIdentityEnv(), stdio: ['ignore', 'pipe', 'pipe'] })
+    } catch (e) {
+      resolve({ ok: false, output: (e as Error).message })
+      return
+    }
+    let out = ''
+    let settled = false
+    const done = (ok: boolean): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      // Successful quiet ticks say nothing: only a failure (or an admission line) earns a log line.
+      if (out.trim()) {
+        try { appendFileSync(tickLog, `${new Date().toISOString()} remind-tick: ${out}`) } catch { /* a log that cannot be written must not kill the panel */ }
+      }
+      resolve({ ok, output: out })
+    }
+    const timer = setTimeout(() => {
+      try {
+        child.kill('SIGKILL')
+      } catch {
+        /* already gone */
+      }
+      done(false)
+    }, timeoutMs)
+    child.stdout?.on('data', (d: Buffer) => { out += String(d) })
+    child.stderr?.on('data', (d: Buffer) => { out += String(d) })
+    child.on('error', () => done(false))
+    child.on('close', (code) => done(code === 0))
+  })
+}
