@@ -3,17 +3,7 @@
 > 版本号单一来源：`scripts/lib/common.sh` 的 `TEAM_VERSION`（`SKILL.md` 的 `metadata.version` 必须一致，
 > `team version --check` 会检查）。**更新怎么拿到**：`scripts/**` 每次调用现读盘（零操作）；
 > `SKILL.md`/`references/**`/`templates/**`/`extension/**` 在 Pi 里输入 `/reload`（或 `/pi-team-reload`）即生效；
-> 判断自己是不是旧的：`team mark-loaded`（开局记一次）→ `team version --check`。
-
-## v0.4.6（2026-11-06）
-
-`team say` 会在对方下一次调用模型之前插入，不再等整轮结束。
-
-- 指令类消息（`say`）用 `steer` 投递；通知类消息（`notify`、巡检 knock）仍按原节奏送达。只能插在两次工具调用之间，对方正卡在一个长工具调用里时仍要等它返回。
-- 提示词里不再教“两分钟可以就地等”，统一为“长命令后台跑，结束回合等唤醒”。
-- 状态目录按项目解析：调用方显式指定另一个项目的状态根时会被拒绝，不再被继承值悄悄改写。
-
-升级方式：`npm i -g teamsmith@0.4.6`，重启 PM。
+> 判断自己是不是旧的：`team version --check`（按 PM 启动时刻与 skill 文件时间推导）。
 
 ## v0.4.6（2026-11-06）
 
