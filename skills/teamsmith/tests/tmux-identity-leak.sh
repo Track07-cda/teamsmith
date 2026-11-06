@@ -69,6 +69,7 @@ SKILL_DIR="$(cd -P "$SELF_DIR/.." && pwd)"
 REPO_ROOT="$(cd -P "$SKILL_DIR/../.." && pwd)"
 # shellcheck source=lib/tmp-root.sh
 . "$SELF_DIR/lib/tmp-root.sh"
+. "$SELF_DIR/lib/main-team-fingerprint.sh"
 
 SELECT=""; BREAK=""; KEEP=0
 while [ $# -gt 0 ]; do
@@ -150,19 +151,14 @@ seg_ran() { TMUX_RAN=$((TMUX_RAN + 1)); }
 # ── 反向守卫（只看夹具 cwd）：真项目 state 里不许出现带本夹具根的日志行 ─────────────────────────
 REAL_LOG="$REPO_ROOT/.pi/team/state/tmux-calls.log"
 
-# ── 隔离断言（任务书 3.1）：真实仓库的账本面（inbox / state）跑前跑后逐文件 sha256 对比 ──────
-# 位置在这一行之前：任何夹具动作都不许在这些面上留痕；泄漏（新建/修改/删除）必红。
-# （夹具只在自己的检出里跑 —— 活团队的主检出里 PM/pulse 自己就在写这些文件，那是另一条车道；
-#   本 worktree 连 .pi/team/ 都没有时，这条退化成「仍然不存在」，报告里如实写明。）
+# ── 隔离断言：本检出的 inbox / state；活团队的具名运行日志允许变化（P426）──────────────────
+# 复用主项目指纹的路径规则，不自建排除表；inbox 与未登记的 state 子目录仍逐文件判变。
+# 本 worktree 没有 state 时，真实现场只证明它仍未出现；非空运行中的对照由 isolation-ledger.sh 覆盖。
 REAL_INBOX="$REPO_ROOT/docs/team/inbox"; REAL_STATE="$REPO_ROOT/.pi/team/state"
-ledger_manifest() { # <目录…> → 每行 "<相对路径>\t<sha256>"；目录不存在 → 无输出
-  local d f
-  for d in "$@"; do
-    [ -d "$d" ] || continue
-    while IFS= read -r -d '' f; do
-      printf '%s\t%s\n' "${f#"$REPO_ROOT"/}" "$(sha256sum "$f" 2>/dev/null | awk '{print $1}')"
-    done < <(find "$d" -type f -print0 2>/dev/null | LC_ALL=C sort -z)
-  done
+ledger_manifest() { # <inbox 目录> <state 目录> → 共用指纹所用的 ./inbox、./state 路径空间
+  { main_team_snapshot "$1" | awk '{sub(/^\.\//, "./inbox/"); print}'
+    main_team_snapshot "$2" | awk '{sub(/^\.\//, "./state/"); print}'
+  } | sort -t "$(printf '\t')" -k1,1
 }
 LEDGER_BEFORE="$(ledger_manifest "$REAL_INBOX" "$REAL_STATE")"
 LEDGER_N=$(printf '%s' "$LEDGER_BEFORE" | grep -c . || true)
@@ -743,11 +739,11 @@ tmp_root_reap_all 2>/dev/null || true
 
 # ── 隔离断言（任务书 3.1）：真实仓库账本面 hash + 本轮临时根 ─────────────────────────────────
 LEDGER_AFTER="$(ledger_manifest "$REAL_INBOX" "$REAL_STATE")"
-if [ "$LEDGER_BEFORE" = "$LEDGER_AFTER" ]; then
-  ok "隔离：真实仓库账本面未被改动（docs/team/inbox + .pi/team/state，$LEDGER_N 个文件逐一 sha256 相同）"
+LEDGER_CHANGES="$(main_team_violations <(printf '%s\n' "$LEDGER_BEFORE") <(printf '%s\n' "$LEDGER_AFTER"))"
+if [ -z "$LEDGER_CHANGES" ]; then
+  ok "隔离：真实仓库 inbox 与非遥测 state 未被改动（快照 $LEDGER_N 个文件；显式排除共用白名单中的运行日志）"
 else
-  bad "隔离：真实仓库账本面被改动（夹具漏钉了目标？）—— 差异："
-  diff <(printf '%s\n' "$LEDGER_BEFORE") <(printf '%s\n' "$LEDGER_AFTER") 2>/dev/null | sed 's/^/       /' || true
+  bad "隔离：真实仓库 inbox 或非遥测 state 被改动：$(printf '%s' "$LEDGER_CHANGES" | tr '\n' ' ')"
 fi
 ROOTS_AFTER="$(ls -d "$(tmp_root_base)"/teamsmith-tmux-identity-leak-* 2>/dev/null | wc -l | tr -d ' ')"
 if [ "${TEAM_TMP_KEEP:-0}" = "1" ]; then

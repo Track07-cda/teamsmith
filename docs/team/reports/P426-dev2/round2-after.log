@@ -1,0 +1,29 @@
+ok: scanner [teamsmith-smoke-3577758]: historical messages and old aliases are not this run's leakage
+current-session hits: /var/tmp/p426-isolation.WHHYG4/scan/docs/team/inbox/current.md
+ok: scanner [teamsmith-smoke-3577758]: this run's session written into inbox must be caught
+ok: scanner [teamsmith-smoke-3577758]: this run's temp root in state and notify must be caught
+ok: scanner [teamsmith-smoke-p10-3577758]: historical messages and old aliases are not this run's leakage
+current-session hits: /var/tmp/p426-isolation.WHHYG4/scan/docs/team/inbox/current.md
+ok: scanner [teamsmith-smoke-p10-3577758]: this run's session written into inbox must be caught
+ok: scanner [teamsmith-smoke-p10-3577758]: this run's temp root in state and notify must be caught
+ok: scanner [teamsmith-smoke-m16-3577758]: historical messages and old aliases are not this run's leakage
+current-session hits: /var/tmp/p426-isolation.WHHYG4/scan/docs/team/inbox/current.md
+ok: scanner [teamsmith-smoke-m16-3577758]: this run's session written into inbox must be caught
+ok: scanner [teamsmith-smoke-m16-3577758]: this run's temp root in state and notify must be caught
+ok: scanner [teamsmith-smoke-m98-3577758]: historical messages and old aliases are not this run's leakage
+current-session hits: /var/tmp/p426-isolation.WHHYG4/scan/docs/team/inbox/current.md
+ok: scanner [teamsmith-smoke-m98-3577758]: this run's session written into inbox must be caught
+ok: scanner [teamsmith-smoke-m98-3577758]: this run's temp root in state and notify must be caught
+ok: 隔离：真实仓库 inbox 与非遥测 state 未被改动（快照 3 个文件；显式排除共用白名单中的运行日志）
+
+rejected=0
+ok: identity ledger: telemetry
+bad: 隔离：真实仓库 inbox 或非遥测 state 被改动：./inbox/dev.md
+
+rejected=1
+ok: identity ledger: inbox
+bad: 隔离：真实仓库 inbox 或非遥测 state 被改动：./state/unregistered/new.log
+
+rejected=1
+ok: identity ledger: unknown-state
+isolation-ledger: pass=15 fail=0

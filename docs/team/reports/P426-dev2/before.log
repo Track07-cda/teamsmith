@@ -1,0 +1,37 @@
+bad: scanner [never lands|held body|OB-EXT-KNOCK]: delivery quoting the vocabulary is not leakage (expected=0 actual=2)
+bad: scanner [P10 夹具阻塞行|P10Z]: delivery quoting the vocabulary is not leakage (expected=0 actual=2)
+bad: scanner [M16[.A-E]]: delivery quoting the vocabulary is not leakage (expected=0 actual=2)
+bad: scanner [M98[.A-G]]: delivery quoting the vocabulary is not leakage (expected=0 actual=2)
+bad: scanner [never lands|held body|OB-EXT-KNOCK]: concrete old session in inbox and notify is leakage (expected=2 actual=0)
+bad: scanner [P10 夹具阻塞行|P10Z]: concrete old session in inbox and notify is leakage (expected=2 actual=0)
+bad: scanner [M16[.A-E]]: concrete old session in inbox and notify is leakage (expected=2 actual=0)
+bad: scanner [M98[.A-G]]: concrete old session in inbox and notify is leakage (expected=2 actual=0)
+ok: scanner [OB-EXT-KNOCK]: machine state still checks fixture markers
+ok: scanner [P10Z]: machine state still checks fixture markers
+ok: scanner [M16[.A-E]]: machine state still checks fixture markers
+ok: scanner [M98[.A-G]]: machine state still checks fixture markers
+bad: 隔离：真实仓库账本面被改动（夹具漏钉了目标？）—— 差异：
+       2,3c2,3
+       < .pi/team/state/notify.log	b5177b533fe07ef6ca819a0369563ca4abdac4171ef60fc9b787b6e8dbd0d453
+       < .pi/team/state/watchdog.log	1b482239066a8e2baf24a03a0570a39e837d09c77ac19dfeb88578605bcbdf5f
+       ---
+       > .pi/team/state/notify.log	224179da13597698dad378c8427db8c05dc200d527dad79c50fd489135e1b204
+       > .pi/team/state/watchdog.log	c03054de7b2f6d15694feaf10881b059e841f941f16c3e960ef0bb068c4565e0
+
+rejected=1
+bad: identity ledger: telemetry (expected=0 actual=1)
+bad: 隔离：真实仓库账本面被改动（夹具漏钉了目标？）—— 差异：
+       1c1
+       < docs/team/inbox/dev.md	25718360e05d3c2d0963d1381e9dd4dae5fca789244ee4b9f861adcc0cc96218
+       ---
+       > docs/team/inbox/dev.md	ba25f275eab66ac7dee1b32e93666bf228db1ef6cb2acfa5fa7d1b68f50f879a
+
+rejected=1
+ok: identity ledger: inbox
+bad: 隔离：真实仓库账本面被改动（夹具漏钉了目标？）—— 差异：
+       2a3
+       > .pi/team/state/unregistered/new.log	9b080cd62a4eac88c4d26897df76b245abb8c12290a93c2419069f041645dcd6
+
+rejected=1
+ok: identity ledger: unknown-state
+isolation-ledger: pass=6 fail=9

@@ -1188,11 +1188,13 @@ fi
 # （M16 的边界腿钉住）。
 # 残余风险点名：真往 `meta-suite/` 里写夹具痕迹，这条判据不会再抓它——由「那个目录里只该有元套件记录」
 # 这条评审纪律兜（与 release-*/ 的先例同形）。
-real_ledger_hits() { # <grep -E 模式> <root> → 命中的文件（排序去重）
+real_ledger_hits() { # <本轮精确标识，一行一个> <root> → 命中的文件（排序去重）
   local pats="$1" root="${2%/}" d
+  # P426 返修：只匹配本轮完整会话名 / 临时根名，不把历史事故记录当作本轮写入。
+  # 固定字符串匹配保留临时根里的句点含义，不把它当作正则通配符。
   { for d in "$root/docs/team/inbox" "$root/.pi/team/state"; do
       [ -d "$d" ] || continue
-      grep -rlE "$pats" "$d" 2>/dev/null || true
+      grep -rlF "$pats" "$d" 2>/dev/null || true
     done; } \
     | awk -v audit="$root/.pi/team/state/tmux-calls.log" \
           -v forensics="$root/.pi/team/state/tmux-calls.log.forensics" \
@@ -8870,9 +8872,9 @@ ob_hash_real() { # 调用方项目（+ 它的主工作树）的 docs/team/inbox 
 }
 # 真项目的 state/inbox **本来就在被真团队写**（capacity.log/nudges.log 每一拍都动），所以「整目录哈希不变」
 # 在真项目活着时必然为假。承重的判据因此是「**夹具的痕迹**有没有出现在真项目里」：夹具的 payload 与 target
-# 都带得出自己的名字（沙盒 session 名 + 夹具专用串），一条都搜不到才算没污染。
+# 都带得出本轮的名字（完整沙盒 session 名 + 本轮临时根名），一条都搜不到才算没污染。
 ob_leak_scan() { # → 命中行（空 = 没有污染）
-  local pats="$SESSION|半句草稿 half a sentence|never lands|held body|race claim|OB-EXT-KNOCK|ob-nudge-new-work|alpha line one|interrupted once|deliver as today|flush now|vis1|dropme|M30-PI-CHANNEL|M30-PI-KNOCK|M30-PI-DRAFT|M30-PI-FORCED|M30-PI-STALE|M30-PI-FOREIGN"
+  local pats; pats="$(printf '%s\n' "$SESSION" "${TMP##*/}")"
   { [ -n "$SMOKE_INVOKE_ROOT" ] && real_ledger_hits "$pats" "$SMOKE_INVOKE_ROOT"
     [ -n "$SMOKE_INVOKE_MAIN" ] && real_ledger_hits "$pats" "$SMOKE_INVOKE_MAIN"
     :; } | sort -u
@@ -12825,7 +12827,7 @@ P109_MUT=""
 # 隔离证据（M7.2 纪律）：夹具的痕迹不得出现在真实账本里。用**内容签名**判定，不做前后 hash 对比 ——
 # 真实 watchdog 每 15 分钟自己就会写 state/**，hash 对比会把它的正常写入误判成夹具泄漏。
 M98_REAL_MAIN="$(dirname "$(git -C "$SKILL_DIR" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || git -C "$SKILL_DIR" rev-parse --show-toplevel)")"
-M98_PHANTOM="$(real_ledger_hits "M98[.A-G]|$M98SES" "$M98_REAL_MAIN")"
+M98_PHANTOM="$(real_ledger_hits "$(printf '%s\n' "$M98SES" "${TMP##*/}")" "$M98_REAL_MAIN")"
 if [ -n "$M98_PHANTOM" ]; then bad "M9.8 隔离：夹具的痕迹出现在真实账本里：$(printf '%s' "$M98_PHANTOM" | tr '\n' ' ')"
 else ok "M9.8 隔离：真实账本的 inbox/state 里没有夹具的痕迹"; fi
 
@@ -12932,12 +12934,8 @@ else
   bad "26-l 隔离：team paths 不是沙盒"
 fi
 P10_LEAK_SCAN() { # <根…> → 命中行
-  # 词表只放**不可能自然出现的串**（P412）：每条要么是夹具专用中文串，要么带夹具前缀（P10Z / 会话名）。
-  # 曾经的 `wrote the report` 是一句普通英文：真实账本里必然出现（那是 2026-11-03 一条 auto·suspended
-  # 投递消息的正文，落在 docs/team/inbox/dev2.md:228 与 state/notify.log）—— 双语项目里拿这种短语当标记，
-  # 只会把真人写下的交付消息判成泄漏。夹具自己的活动文本（会话 JSONL 与 agent 日志）因此改成 `P10Z-LEAK`：
-  # 它由 `P10Z` 这个夹具代号前缀住，不可能在真实账本里自然出现。
-  local pats="P10 夹具阻塞行|P10Z|$P10SESS"
+  # 本轮会话名与临时根名能归因到本轮；历史代号与普通正文不充当标记。
+  local pats; pats="$(printf '%s\n' "$P10SESS" "${TMP##*/}")"
   local r
   for r in "$@"; do
     [ -n "$r" ] && [ -d "$r" ] || continue
@@ -12947,10 +12945,10 @@ P10_LEAK_SCAN() { # <根…> → 命中行
 P10_LEAK_BEFORE="$(P10_LEAK_SCAN "$SMOKE_INVOKE_ROOT" "$SMOKE_INVOKE_MAIN" | sort -u)"
 # 负对照：故意造一个「真项目」，里面放夹具串 —— 扫描必须抓到（否则这条隔离断言是空的）
 P10_NEG="$TMP/p10-neg"; mkdir -p "$P10_NEG/docs/team/inbox"
-printf 'P10 夹具阻塞行\n' > "$P10_NEG/docs/team/inbox/leak.md"
+printf 'fixture session: %s\n' "$P10SESS" > "$P10_NEG/docs/team/inbox/leak.md"
 if [ -n "$(P10_LEAK_SCAN "$P10_NEG")" ]; then ok "26-l 隔离守卫自检：故意泄漏会被抓到（负对照）"
 else bad "26-l 隔离守卫自检：故意泄漏没被抓到（这条隔离断言是空的）"; fi
-# 反向对照（P412）：词表里只许有「不可能自然出现的串」。把**一句普通英文**放进同一个形状的假真项目——
+# 反向对照（P412/P426）：词表只认本轮完整标识。把**一句普通英文**放进同一个形状的假真项目——
 # 真实世界里这种句子必然出现（本仓 docs/team/inbox/dev2.md:228 就是一句 "… because I wrote the report
 # while it ran"，一条 auto·suspended 投递消息）——它**不许**被点名；同一根里再栽一条真标记，同一个扫描
 # 必须抓到（证明「不点名」不是因为扫描空转）。红侧：把 `wrote the report` 写回词表，第一条必变红。
@@ -12962,7 +12960,7 @@ printf 'The first attempt was invalidated because I wrote the report while it ra
   > "$P10_NEG_EN/.pi/team/state/notify.log"
 assert_eq "26-l 隔离守卫自检：普通英文（含 wrote the report）不算标记，不许点名" \
   "$(P10_LEAK_SCAN "$P10_NEG_EN" | wc -l | tr -d ' ')" "0"
-printf 'P10Z-LEAK\n' > "$P10_NEG_EN/docs/team/inbox/leak.md"
+printf 'fixture session: %s\n' "$P10SESS" > "$P10_NEG_EN/docs/team/inbox/leak.md"
 assert_eq "26-l 隔离守卫自检：同一根里栽真标记仍被抓到（反向对照不是空转）" \
   "$(P10_LEAK_SCAN "$P10_NEG_EN" | grep -c 'inbox/leak\.md' || true)" "1"
 assert_eq "26-l 隔离守卫自检：反向对照根恰一条命中（普通英文那两条腿仍静默）" \
@@ -15794,36 +15792,36 @@ assert_has "$TMP/m16-roster.log" "M16B（夹具乙：收尾行也要带名字）
 
 # 隔离（M7.2 纪律）：夹具痕迹不得落进调用方项目（本段只写 /tmp 下的临时仓库）
 M16_REAL_MAIN="$(dirname "$(git -C "$SKILL_DIR" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || git -C "$SKILL_DIR" rev-parse --show-toplevel)")"
-M16_PHANTOM="$(real_ledger_hits "M16[.A-E]|$M16SES" "$M16_REAL_MAIN")"
+M16_PHANTOM="$(real_ledger_hits "$(printf '%s\n' "$M16SES" "${TMP##*/}")" "$M16_REAL_MAIN")"
 if [ -n "$M16_PHANTOM" ]; then bad "M16 隔离：夹具的痕迹出现在真实账本里：$(printf '%s' "$M16_PHANTOM" | tr '\n' ' ')"
 else ok "M16 隔离：真实账本的 inbox/state 里没有夹具的痕迹"; fi
 # 双向对照（M30 加固）：同一个扫描器①必须抓到 state/ 里的痕迹（守卫不是永远绿），
 # ②必须忽略 state/bg/ 里的门禁作业日志（否则「把门禁放后台跑」自身会被判成泄漏）。
 M16_NEG="$TMP/m16-negroot"; rm -rf "$M16_NEG"; mkdir -p "$M16_NEG/.pi/team/state/bg" "$M16_NEG/docs/team/inbox/bg"
-printf 'M16A phantom\n' > "$M16_NEG/.pi/team/state/bg/gate.log"
+printf '%s phantom\n' "$M16SES" > "$M16_NEG/.pi/team/state/bg/gate.log"
 assert_eq "M16 隔离对照：state/bg/ 里的门禁作业日志不算账本痕迹" \
-  "$(real_ledger_hits 'M16[.A-E]|nomatch-ses' "$M16_NEG" | wc -l | tr -d ' ')" "0"
+  "$(real_ledger_hits "$M16SES" "$M16_NEG" | wc -l | tr -d ' ')" "0"
 # P77：审计日志（闸门代写的调用行，内容是调用者自己的 argv）也是流量记录，不算账本
-printf '2026-09-22T17:00:00+00:00 · act=pass · argv=new-window -t M16A:dev · cwd=/tmp\n' > "$M16_NEG/.pi/team/state/tmux-calls.log"
+printf '2026-09-22T17:00:00+00:00 · act=pass · argv=new-window -t %s:dev · cwd=/tmp\n' "$M16SES" > "$M16_NEG/.pi/team/state/tmux-calls.log"
 assert_eq "M16 隔离对照：审计日志 tmux-calls.log 是调用记录，不算账本痕迹" \
-  "$(real_ledger_hits 'M16[.A-E]|nomatch-ses' "$M16_NEG" | wc -l | tr -d ' ')" "0"
+  "$(real_ledger_hits "$M16SES" "$M16_NEG" | wc -l | tr -d ' ')" "0"
 # P132：长保留付本（act≠pass 的调用行）同样按确切路径排除；子目录里的同名保留文件仍是账本
-printf '2026-09-22T17:00:00+00:00 · act=refused · argv=kill-window -t M16A:dev · cwd=/tmp\n' > "$M16_NEG/.pi/team/state/tmux-calls.log.forensics"
+printf '2026-09-22T17:00:00+00:00 · act=refused · argv=kill-window -t %s:dev · cwd=/tmp\n' "$M16SES" > "$M16_NEG/.pi/team/state/tmux-calls.log.forensics"
 assert_eq "M16 隔离对照：长保留付本 tmux-calls.log.forensics 是调用记录，不算账本痕迹（P132）" \
-  "$(real_ledger_hits 'M16[.A-E]|nomatch-ses' "$M16_NEG" | wc -l | tr -d ' ')" "0"
+  "$(real_ledger_hits "$M16SES" "$M16_NEG" | wc -l | tr -d ' ')" "0"
 mkdir -p "$M16_NEG/.pi/team/state/nested"
-printf 'M16A phantom\n' > "$M16_NEG/.pi/team/state/nested/tmux-calls.log.forensics"
+printf '%s phantom\n' "$M16SES" > "$M16_NEG/.pi/team/state/nested/tmux-calls.log.forensics"
 assert_eq "M16 隔离对照：nested/tmux-calls.log.forensics 必须被抓到（排除是确切路径）" \
-  "$(real_ledger_hits 'M16[.A-E]|nomatch-ses' "$M16_NEG" | grep -c 'nested/tmux-calls.log.forensics')" "1"
-printf 'M16A phantom\n' > "$M16_NEG/.pi/team/state/phantom.log"
+  "$(real_ledger_hits "$M16SES" "$M16_NEG" | grep -c 'nested/tmux-calls.log.forensics')" "1"
+printf '%s phantom\n' "$M16SES" > "$M16_NEG/.pi/team/state/phantom.log"
 assert_eq "M16 隔离对照：真正写进 state/ 的痕迹必须被同一个扫描抓到" \
-  "$(real_ledger_hits 'M16[.A-E]|nomatch-ses' "$M16_NEG" | wc -l | tr -d ' ')" "2"
+  "$(real_ledger_hits "$M16SES" "$M16_NEG" | wc -l | tr -d ' ')" "2"
 # P87（P83-F1）：bg 的排除是确切路径，不是目录名 —— 别处的 bg/ 目录仍是账本，必须被同一个扫描抓到
-printf 'M16A phantom\n' > "$M16_NEG/docs/team/inbox/bg/leak.md"
+printf 'fixture session: %s\n' "$M16SES" > "$M16_NEG/docs/team/inbox/bg/leak.md"
 assert_eq "M16 隔离对照：inbox/bg/ 里的痕迹必须被抓到（bg 排除是确切路径，不是目录名）" \
-  "$(real_ledger_hits 'M16[.A-E]|nomatch-ses' "$M16_NEG" | grep -c 'inbox/bg/leak.md')" "1"
+  "$(real_ledger_hits "$M16SES" "$M16_NEG" | grep -c 'inbox/bg/leak.md')" "1"
 assert_eq "M16 隔离对照：三条真痕迹腿恰三条命中（state/bg/、审计日志与长保留付本仍不在清单里）" \
-  "$(real_ledger_hits 'M16[.A-E]|nomatch-ses' "$M16_NEG" | wc -l | tr -d ' ')" "3"
+  "$(real_ledger_hits "$M16SES" "$M16_NEG" | wc -l | tr -d ' ')" "3"
 rm -rf "$M16_NEG"
 # P342/P347（V83 F1）：**发布证据目录豁免的边界**。P342 给扫描器加了一条按目录前缀的豁免
 # （`.pi/team/state/release-<名字>/`）；这里用同一个扫描器、一个合成根直接钉住它的四条边：
@@ -15836,9 +15834,9 @@ rm -rf "$M16_NEG"
 M16_SCOPE="$TMP/m16-scope-probe"; rm -rf "$M16_SCOPE"
 mkdir -p "$M16_SCOPE/.pi/team/state/nested/release-x" "$M16_SCOPE/.pi/team/state/release-030"
 for m16_f in "state/release-scan.log" "state/nested/release-x/a.log" "state/release-030/a.log" "state/plain.log"; do
-  printf 'M16A phantom\n' > "$M16_SCOPE/.pi/team/$m16_f"
+  printf '%s phantom\n' "$M16SES" > "$M16_SCOPE/.pi/team/$m16_f"
 done
-M16_SCOPE_HITS="$(real_ledger_hits 'M16[.A-E]|nomatch-ses' "$M16_SCOPE")"
+M16_SCOPE_HITS="$(real_ledger_hits "$M16SES" "$M16_SCOPE")"
 assert_eq "M16 隔离对照·P342：同前缀的普通账本文件 release-scan.log 必须被点名（豁免是目录前缀，不是「含 release-」）" \
   "$(printf '%s\n' "$M16_SCOPE_HITS" | grep -c 'state/release-scan\.log$' || true)" "1"
 assert_eq "M16 隔离对照·P342：nested/release-x/a.log 必须被点名（前缀没锚上就不是发布证据目录）" \
@@ -15866,9 +15864,9 @@ M16_MS="$TMP/m16-metasuite-probe"; rm -rf "$M16_MS"
 mkdir -p "$M16_MS/.pi/team/state/meta-suite" "$M16_MS/.pi/team/state/nested/meta-suite"
 for m16_f in "state/meta-suite/2026-11-04T13-30-26Z.log" "state/meta-suite.log" \
              "state/nested/meta-suite/a.log" "state/plain.log"; do
-  printf 'M16A phantom\n' > "$M16_MS/.pi/team/$m16_f"
+  printf '%s phantom\n' "$M16SES" > "$M16_MS/.pi/team/$m16_f"
 done
-M16_MS_HITS="$(real_ledger_hits 'M16[.A-E]|nomatch-ses' "$M16_MS")"
+M16_MS_HITS="$(real_ledger_hits "$M16SES" "$M16_MS")"
 assert_eq "M16 隔离对照·P412：元套件记录 meta-suite/<时间>.log 不命中（取样范围，不是账本痕迹）" \
   "$(printf '%s\n' "$M16_MS_HITS" | grep -c 'state/meta-suite/2026-11-04T13-30-26Z\.log$' || true)" "0"
 assert_eq "M16 隔离对照·P412：同前缀的普通账本文件 state/meta-suite.log 必须被点名（前缀带结尾的 /）" \

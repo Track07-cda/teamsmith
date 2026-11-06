@@ -1,0 +1,25 @@
+ok: scanner [never lands|held body|OB-EXT-KNOCK]: delivery quoting the vocabulary is not leakage
+ok: scanner [P10 夹具阻塞行|P10Z]: delivery quoting the vocabulary is not leakage
+ok: scanner [M16[.A-E]]: delivery quoting the vocabulary is not leakage
+ok: scanner [M98[.A-G]]: delivery quoting the vocabulary is not leakage
+ok: scanner [never lands|held body|OB-EXT-KNOCK]: concrete old session in inbox and notify is leakage
+ok: scanner [P10 夹具阻塞行|P10Z]: concrete old session in inbox and notify is leakage
+ok: scanner [M16[.A-E]]: concrete old session in inbox and notify is leakage
+ok: scanner [M98[.A-G]]: concrete old session in inbox and notify is leakage
+ok: scanner [OB-EXT-KNOCK]: machine state still checks fixture markers
+ok: scanner [P10Z]: machine state still checks fixture markers
+ok: scanner [M16[.A-E]]: machine state still checks fixture markers
+ok: scanner [M98[.A-G]]: machine state still checks fixture markers
+ok: 隔离：真实仓库 inbox 与非遥测 state 未被改动（快照 3 个文件；显式排除共用白名单中的运行日志）
+
+rejected=0
+ok: identity ledger: telemetry
+bad: 隔离：真实仓库 inbox 或非遥测 state 被改动：./inbox/dev.md
+
+rejected=1
+ok: identity ledger: inbox
+bad: 隔离：真实仓库 inbox 或非遥测 state 被改动：./state/unregistered/new.log
+
+rejected=1
+ok: identity ledger: unknown-state
+isolation-ledger: pass=15 fail=0
