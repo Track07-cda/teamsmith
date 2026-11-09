@@ -1,8 +1,10 @@
 # reply-observer-skip-focus · 提案审阅
 
-当前判定：**REVIEW — 返修候选定点复核中，未批准 Apply**
+当前判定：**ACCEPTED — 允许派非作者 Apply，仍未实施**
 
-返修候选：`5a6cb0cc`；V134 由 V133 原审阅者 dev3 复核六项。PM 对返修差异重跑 OpenSpec 23/23、change strict、spec refs 125、section-select ok13、账本禁令 hits0、diff check，均通过。
+最终候选：`5a6cb0cc`。V134（V133 原审阅者 dev3）ACCEPT，无阻断项。PM 已在临时副本独立执行两种归档顺序：正序 reply-exception=1、inventory-exception=1；逆序均为 0；added-requirement 两序均为 1。真实 `openspec/` 未改，真实归档仍需实现验收和用户确认。
+
+实施期保留 V134 两条约束：外部 scratch 必须能解析 `lib/proc-io.sh`；子样本结果行只写自己的文件，不能进入 smoke 或 §36 的通用结果读取。
 
 上一候选：`44de7c2f`（P433，作者 dev2）。V133（dev3）报告：`docs/team/reports/V133-dev3.md`。
 
