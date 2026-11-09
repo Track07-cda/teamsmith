@@ -15,7 +15,7 @@ branch: task/P437-reply-diagnostics-ui
 
 ## 真实现场
 
-data_ontology 的 PM 会话显示：
+另一个项目的 PM 会话显示：
 
 `[team-reply] recover-skip:ineligible; source=unbound; evidence=…/reply-capture/….json`
 
