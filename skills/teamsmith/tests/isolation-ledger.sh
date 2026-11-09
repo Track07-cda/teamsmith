@@ -7,8 +7,12 @@ ROOT="$(cd "$SELF_DIR/../../.." && pwd)"
 REF=""
 if [ "${1:-}" = --ref ] && [ "$#" = 2 ]; then REF="$2"
 elif [ "$#" != 0 ]; then printf 'usage: isolation-ledger.sh [--ref <commit>]\n' >&2; exit 2; fi
-TMP="$(mktemp -d -p /var/tmp p426-isolation.XXXXXX)"
-trap 'rm -rf "$TMP"' EXIT
+# P427：临时根走夹具的**唯一创建者**（tests/lib/tmp-root.sh：owned 家族 + 项目 ns + 落盘台账 + 退出回收）。
+# 不自己算基准、也不写死 /var/tmp —— section 40 的临时根 lint 对这两件事都会点名（旧写法是
+# `mktemp -d -p /var/tmp p426-isolation.XXXXXX`）。
+. "$SELF_DIR/lib/tmp-root.sh"
+TMP="$(tmp_root_create isolation)" || { printf 'isolation-ledger: 建不了临时根\n' >&2; exit 2; }
+trap 'tmp_root_reap_all' EXIT
 for file in smoke.sh tmux-identity-leak.sh; do
   if [ -n "$REF" ]; then git -C "$ROOT" show "$REF:skills/teamsmith/tests/$file" > "$TMP/$file"
   else cp "$SELF_DIR/$file" "$TMP/$file"; fi

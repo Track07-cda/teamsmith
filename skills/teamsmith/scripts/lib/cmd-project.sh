@@ -561,11 +561,13 @@ team_cmd_doctor() {
     fi
   fi
 
+  # P427：doctor 是只读面 —— 外部命令一律走 team_readonly_run（关掉子进程的编译缓存 / jiti 缓存 /
+  # 插件日志：`pi` 的入口会调 enableCompileCache()，拿到 TMPDIR 就把它建出来了）。
   check "pi"; if [ -n "${TEAM_AGENT_CMD:-}" ]; then
       pass "本项目用自定义 agent adapter：不需要 pi"
     elif team_have_cmd pi; then
-      local pv; pv="$(pi --version 2>/dev/null | head -1 || true)"
-      if pi --help 2>&1 | grep -q -- '--session-id'; then pass "${pv:-present}"; else fail "pi 版本过旧：缺 --session-id"; fi
+      local pv; pv="$(team_readonly_run pi --version 2>/dev/null | head -1 || true)"
+      if team_readonly_run pi --help 2>&1 | grep -q -- '--session-id'; then pass "${pv:-present}"; else fail "pi 版本过旧：缺 --session-id"; fi
     else fail "缺 pi（PATH 里没有）"; fi
 
   # agent adapter：空 TEAM_AGENT_CMD = 内置 Pi（默认）；配了就用任意 TUI agent 的命令模板。
@@ -668,7 +670,7 @@ team_cmd_doctor() {
   local os_bin os_ver
   os_bin="$(team_openspec_bin_path)"
   if command -v "$os_bin" >/dev/null 2>&1; then
-    os_ver="$("$os_bin" --version 2>/dev/null | head -1)"
+    os_ver="$(team_readonly_run "$os_bin" --version 2>/dev/null | head -1)"
     pass "${os_ver:-已解析}（$os_bin）"
   elif [ "${TEAM_REQUIRE_OPENSPEC:-1}" = "1" ]; then
     fail "找不到：$os_bin（装上 OpenSpec CLI 并确保在 PATH 里，或设 TEAM_OPENSPEC_BIN；临时可 TEAM_REQUIRE_OPENSPEC=0 降级）"
@@ -778,7 +780,7 @@ team_cmd_doctor() {
   reply_runner="$(team_js_runner)"
   if [ -z "$reply_runner" ]; then
     warn "unknown：无可用 JS 运行时，未核实 live 注册"
-  elif reply_runtime="$("$reply_runner" -e '
+  elif reply_runtime="$(team_readonly_run "$reply_runner" -e '
     import(require("node:url").pathToFileURL(process.argv[1]).href).then(m => {
       const [root,state,config,session,window,skill] = process.argv.slice(2);
       const r = m.inspectRuntime({root,state,config,session,window,skill});

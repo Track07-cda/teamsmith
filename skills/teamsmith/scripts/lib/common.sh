@@ -1376,6 +1376,9 @@ team_inotify_probe() {
   # team_tmp_root_prepare，于是跑一次 doctor 就把尚未创建的默认根建出来了，与规格
   # `never created by a read-only surface` 相反）。根还不存在时，探针落在最近的存在祖先上：
   # 与「余量行按祖先判」同一个判据，同一个文件系统，注册能力也相同。
+  # P427：落地目录落在祖先上还不够 —— **运行时自己**也看 TMPDIR（Node 的编译缓存、jiti 的转换
+  # 缓存、pi 插件日志都写在 `os.tmpdir()` 下），所以跑它一律走 team_readonly_run（关掉那些写入，
+  # 不换目录：换目录只是换个被污染的地方）。
   root="$(team_tmp_root)" || root=""
   [ -n "$root" ] || { printf 'unavailable\n'; return 0; }
   probe_base="$root"
@@ -1402,9 +1405,9 @@ try {
 process.stdout.write(verdict + '\n')
 TEAM_INOTIFY_PROBE_JS
   if command -v timeout >/dev/null 2>&1; then
-    out="$(TEAM_INOTIFY_ROOT="$probe_base" TEAM_INOTIFY_NS="$ns" timeout "${TEAM_INOTIFY_PROBE_TIMEOUT:-10}" "$runner" "$script" 2>/dev/null || true)"   # 留：本机可能没这项能力，按回退走
+    out="$(TEAM_INOTIFY_ROOT="$probe_base" TEAM_INOTIFY_NS="$ns" team_readonly_run timeout "${TEAM_INOTIFY_PROBE_TIMEOUT:-10}" "$runner" "$script" 2>/dev/null || true)"   # 留：本机可能没这项能力，按回退走
   else
-    out="$(TEAM_INOTIFY_ROOT="$probe_base" TEAM_INOTIFY_NS="$ns" "$runner" "$script" 2>/dev/null || true)"   # 留：本机可能没这项能力，按回退走
+    out="$(TEAM_INOTIFY_ROOT="$probe_base" TEAM_INOTIFY_NS="$ns" team_readonly_run "$runner" "$script" 2>/dev/null || true)"   # 留：本机可能没这项能力，按回退走
   fi
   rm -f "$script"
   case "$out" in
@@ -4233,6 +4236,22 @@ team_tmp_root_ancestor_note() { # <path> → "" 或「（尚未创建，按 <祖
   a="$(team_tmp_root_stat_path "$p" 2>/dev/null || true)"   # 留：查不到=空答案（不是故障）
   [ -n "$a" ] || return 0
   printf '（尚未创建，按 %s 的文件系统判）' "$a"
+}
+
+# ---------------------------------------------------------------- 只读面的子进程环境（P427）
+# 只读面不许替操作者把根建出来（规格 verification：`never created by a read-only surface`），
+# 也**不许把这份写入挪到另一个目录**去换个地方污染（独立复核 2026-11-09：把子进程 TMPDIR 指到
+# 最近的存在祖先，于是缓存落在了被检的基准目录里 —— 只是换了个地方留下东西）。
+# 写入的来源是**子进程自己**：Node ≥ 23 的编译缓存、jiti 的转换缓存、pi 插件（magic-context）的
+# 日志默认都落在 `os.tmpdir()` 下，并会把那个目录递归建出来。2026-11-07 夜间实测：
+# `TMPDIR=<尚不存在的目录> pi --version` 把整个根建了出来（里面是 `node-compile-cache/`）。
+# 所以只读面交给子进程的不是「另一个临时目录」，而是**关掉这些写入的开关**（探针命令用环境变量
+# 关缓存是既有做法，同 GIT_OPTIONAL_LOCKS=0 / PIP_NO_CACHE_DIR=1）；TMPDIR 原样不动。
+# 根不存在时：余量行照旧按最近的存在祖先判、报告照旧读解析出的那个根。
+# 新的写入者会被 §40 咬住（「显式根跑完仍然不存在」「默认基准下一个条目没多」）—— 到那时在这里
+# 补一个开关，而不是换目录。
+team_readonly_run() { # <cmd> [args...] → 子进程的 stdout/stderr/rc 原样
+  NODE_DISABLE_COMPILE_CACHE=1 JITI_FS_CACHE=false MAGIC_CONTEXT_LOG_PATH=/dev/null "$@"
 }
 
 # 「谁负责建这个还不存在的根」——只对**不存在**的根说话（存在时返回空串）。三条腿三种答案，
