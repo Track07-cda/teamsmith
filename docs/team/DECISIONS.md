@@ -2217,3 +2217,9 @@ V130 的反例已全部关闭：判定与 finding/FIND 记账一起共享，门�
 接受候选 `5a6cb0cc`：缺观测器时只执行实际缺席处理与结果消费，不再重跑完整 bounded+flip 或失败 trace。正常九臂、真实 full_scan、独立 bounded 文件检查和真实 Pi/UI/存储测试保留。
 
 V133 的六项已关闭：准备顺序有文件事实，父级证据具名且有吞错反侧，反例不递归，计数只解释退休重复，verification 例外不冲突。PM 独立试归档正序 1/1、逆序 0/0。Apply 由非提案作者执行；真实归档仍需实现验收和用户确认。
+
+### D240 · 接受 teamsmith 默认 verify/archive 委派提案（2026-11-09）
+
+接受 `delegate-openspec-archive` 最终规划 `a5c82971`：非实现者执行 verify、archive 和相应门禁，PM 只做派单、证据审阅、接受与合并；同一 verifier 在合并后验证 merged SHA。verify 任务自己的记录是 PM 接受记录，不冒充执行证据。
+
+保留现有限定 PM-proxy，不扩大用户裁定。归档 brief 使用字面 `phase: archive`，自身 blocker 只认该值与同 ID；依赖归档串行，Purpose 在 native archive 后单独明确提交。Apply 由非提案作者执行，完成后独立复验。

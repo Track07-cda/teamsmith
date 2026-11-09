@@ -1,10 +1,12 @@
 # delegate-openspec-archive · 提案审阅
 
-当前判定：**REVIEW — 最后两处差异复核，未批准 Apply**
+当前判定：**ACCEPTED — 允许派 Apply，尚未实施**
 
-V139 留下的两处已在规划 `a5c82971` 修正；V142 由非作者 dev3 只核这两处，待 P435 最终报告提交后执行。此前各项保持关闭，不重开整案。
+最终规划 `a5c82971`、报告 `669d6987`。V142（非作者 dev3）ACCEPT：归档 brief 字面 `phase: archive` 与 PM 接受记录两处均和工具语义一致，结构校验与账本禁令独立通过。此前 V138/V139 的各项均关闭。
 
-上一阶段：V138 非作者审阅报告：`docs/team/reports/V138-dev.md`。方向接受，以下一次性返修，不重开“verify/archive 委派”这一用户裁定。
+实施边界：verify/archive 及门禁由非实现者执行；PM 只做审阅、接受和合并。同一 verifier 做合并后验证；保留限定 PM-proxy；依赖归档串行；Purpose 在 native archive 后单独明确提交。
+
+历史审阅：V138 非作者审阅报告：`docs/team/reports/V138-dev.md`。方向接受，以下一次性返修，不重开“verify/archive 委派”这一用户裁定。
 
 ## PM 对五项阻断的裁定
 
