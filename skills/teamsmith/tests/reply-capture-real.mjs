@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 import { CaptureJournal, captureDiskFingerprint, inspectRuntime } from '../scripts/reply-capture.mjs'
 const tests = dirname(fileURLToPath(import.meta.url)), skill = dirname(tests)
-const selection = (process.argv.find(a => a.startsWith('--select='))?.slice(9) ?? (process.argv.includes('--select') ? process.argv[process.argv.indexOf('--select') + 1] : undefined) ?? 'print,tui,terminal,identity,lifecycle,owner-mutations').split(',')
+const selection = (process.argv.find(a => a.startsWith('--select='))?.slice(9) ?? (process.argv.includes('--select') ? process.argv[process.argv.indexOf('--select') + 1] : undefined) ?? 'print,tui,terminal,identity,lifecycle,owner-mutations,diagnostic-mutations').split(',')
 const evidence = resolve(process.env.P396_EVIDENCE ?? `${process.env.HOME}/.cache/P396/pi-${Date.now()}`)
 mkdirSync(evidence, { recursive: true, mode: 0o700 })
 const temporary = mkdtempSync('/var/tmp/p396-real-'), socket = join(temporary, 'socket')
@@ -62,6 +62,7 @@ server = createServer(async (req, res) => {
 })
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
 const port = server.address().port
+const invalidateIdentity = info => appendFileSync(info.config, '\n# P437: make the previously registered identity stale\n')
 async function run(name, kind = 'print', opts = {}) {
   const dir = join(evidence, name), root = join(temporary, name), home = join(root, 'home'), state = join(root, '.pi/team/state'), config = join(root, '.pi/team/config.sh')
   for (const path of [dir, home, state, join(root, 'docs/team/tasks'), join(root, 'docs/team/inbox'), join(root, 'docs/team/outbox'), join(home, '.pi/agent')]) mkdirSync(path, { recursive: true })
@@ -70,6 +71,12 @@ async function run(name, kind = 'print', opts = {}) {
   if (opts.ownerFlip) {
     const path = join(runSkill, 'extension/team-reply.ts'), bytes = readFileSync(path, 'utf8'), anchor = 'if (owners.has(key)) return'
     assert.equal(bytes.split(anchor).length, 2); writeFileSync(path, bytes.replace(anchor, 'if (false) return'))
+  }
+  if (opts.diagnosticFlip) {
+    const path = join(runSkill, 'extension/team-reply.ts'), bytes = readFileSync(path, 'utf8')
+    const anchor = '    const line = `[team-reply] ${d.reason}; source=${d.entryId || \'unbound\'}; evidence=${d.path}\\n`\n'
+    assert.equal(bytes.split(anchor).length, 2)
+    writeFileSync(path, bytes.replace(anchor, `${anchor}    process.stderr.write(line)\n`))
   }
   writeFileSync(join(home, '.pi/agent/settings.json'), JSON.stringify({ retry: { enabled: kind === 'retry', maxRetries: 1, baseDelayMs: 1 }, compaction: { enabled: false } }))
   writeFileSync(join(root, 'docs/team/BOARD.md'), '# untouched\n')
@@ -192,6 +199,10 @@ async function run(name, kind = 'print', opts = {}) {
     assert(!JSON.stringify(history).includes('[[team-reply'), 'next provider history is clean')
   }
   if (kind === 'print') assert.equal(readFileSync(join(dir, 'stdout'), 'utf8'), text(ends.at(-1).message) + '\n', 'exact final print stdout')
+  for (const file of ['stdout', 'stderr']) {
+    const path = join(dir, file)
+    if (existsSync(path)) assert(!readFileSync(path, 'utf8').includes('[team-reply]'), `terminal ${file} must not contain internal diagnostics`)
+  }
   if (kind === 'tui') {
     await delay(100)
     const raw = readFileSync(join(dir, 'raw.pty'), 'utf8')
@@ -200,6 +211,8 @@ async function run(name, kind = 'print', opts = {}) {
     writeFileSync(join(dir, 'final-screen.txt'), screen)
     assert(screen.includes(`决定 ${name} 保留。`), 'final frame matching body positive')
     assert(!screen.includes('[[team-reply'), 'final frame has no complete control')
+    assert(!screen.includes('[team-reply]'), 'final frame must not contain internal diagnostics')
+    assert(!raw.includes('[team-reply]'), 'raw PTY must not contain internal diagnostics')
     // Scrollback may retain transient frames: validate finalized authoritative message separately, never claim zero flash.
     assert(raw.includes(`决定 ${name} 保留。`), 'raw PTY actual body positive')
   }
@@ -253,6 +266,29 @@ try {
       },
     }))
   }
+  if (selection.includes('diagnostics')) await test('recover-skip:ineligible is file-only and never appears in the Pi terminal', async () => {
+    const info = await run('diagnostics', 'tui', {
+      noPublish: true, onReady: invalidateIdentity,
+      skillCopy: process.env.P437_DIAGNOSTIC_FLIP === '1', diagnosticFlip: process.env.P437_DIAGNOSTIC_FLIP === '1',
+    })
+    const path = join(info.state, 'reply-capture/diagnostics.log')
+    assert(existsSync(path), 'recover refusal leaves a local diagnostic file')
+    const diagnostic = readFileSync(path, 'utf8')
+    assert(diagnostic.includes('[team-reply] recover-skip:ineligible; source=unbound; evidence='), diagnostic)
+    assert(diagnostic.includes(join(info.state, 'reply-capture')), 'diagnostic retains its evidence path')
+  })
+  if (selection.includes('diagnostic-mutations')) await test('restoring diagnostic stderr makes the real Pi terminal assertion red; restoration is green', async () => {
+    for (const [group, code] of [['diagnostics-flip', 1], ['diagnostics-control', 0]]) {
+      const result = spawnSync(process.execPath, [fileURLToPath(import.meta.url), '--select=diagnostics'], {
+        env: { ...process.env, P396_EVIDENCE: join(evidence, group), P437_DIAGNOSTIC_FLIP: code ? '1' : '0' }, encoding: 'utf8',
+      })
+      const output = result.stdout + result.stderr
+      writeFileSync(join(evidence, `${group}.log`), output)
+      assert.equal(result.status, code, output)
+      if (code) assert(output.includes('raw PTY must not contain internal diagnostics'), output)
+      else assert(output.includes('passed=1 failed=0'), output)
+    }
+  })
   if (selection.includes('owner-flip')) await test('first path keeps owner/runtime', () => run('owner-flip', 'print', { skillCopy: true, duplicate: true, ownerFlip: true }))
   if (selection.includes('owner-control')) await test('first path keeps owner/runtime', () => run('owner-control', 'print', { skillCopy: true, duplicate: true }))
   if (selection.includes('owner-mutations')) await test('owner mutation named red and restoration green in private Pi', async () => {

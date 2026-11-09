@@ -38,11 +38,9 @@ export default async function (pi: ExtensionAPI) {
     entry: (id: string) => ctx.sessionManager.getEntry(id),
   })
   const diagnostic = (d: { reason: string; entryId: string; path: string }) => {
-    // Never title/body/model text. Diagnostics are separate from the ordinary answer, including print/JSON modes.
+    // Never title/body/model text. Pi renders extension stderr in the TUI, so routine diagnostics stay local.
     const line = `[team-reply] ${d.reason}; source=${d.entryId || 'unbound'}; evidence=${d.path}\n`
-    process.stderr.write(line)
-    // A TUI swallows stderr, so the same line also lands beside the journal: without it a refused
-    // publication leaves no trace at all and the only symptom is a reply page that never grows.
+    // Keep the line beside the journal: a refused publication remains diagnosable without changing the session output.
     try {
       const state = registration?.state
       if (!state) return
@@ -67,9 +65,8 @@ export default async function (pi: ExtensionAPI) {
     engine = undefined
     let identity: any
     try { identity = capture.resolvePMIdentity(context(ctx)) }
-    catch (e: any) {
-      process.stderr.write(`[team-reply] disabled: ${e.message}\n`)
-      return // Unproven worker/ordinary/custom/foreign contexts do not mutate messages or register ready.
+    catch {
+      return // Unproven contexts stay disabled; doctor/runtime evidence explains the absent registration.
     }
     key = capture.sessionKey(identity)
     if (owners.has(key)) return // A second loaded path must not sanitize, stage, or register a second owner.
