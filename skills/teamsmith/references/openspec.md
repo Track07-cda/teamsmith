@@ -41,16 +41,16 @@ CLI they are the equivalent prompt/skill files (§0).
 | 1 | `opsx-explore` | an **explorer** worker — never the eventual implementer (the verify agent, or a dedicated explorer) | the user's request / problem statement, existing specs and code | exploration report: options, risks, recommended approach, effort — written as the task's report | **PM**: accepts the approach, records the decision in `docs/team/DECISIONS.md`, and writes the propose brief |
 | 2 | `opsx-propose` | the **explorer** (the same agent — it holds the context) | the accepted approach | `openspec/changes/<id>/` (proposal, delta specs, design, tasks) — **planning only, no code** (the workflow itself states this boundary) | **PM proposal review — a recorded gate, same standing as `team review`**: `openspec validate --all --strict` green **and** the verdict written to `docs/team/reviews/<change>-proposal.md` as ACCEPTED (§4). **No apply brief may be dispatched before that.** |
 | 3 | `opsx-apply` | a **dev** agent, different from 1 and 4 | the change + the brief | code committed on its task branch + report | **independent verification** is dispatched to a different agent |
-| 4 | `opsx-verify` | an **independent verify** agent (never the implementer) | the change, the landed code, the report | verification record `docs/team/reviews/<ID>.md` + findings; every scenario of the change exercised, with red/green evidence | **PM**: re-runs the gate on the merged tree, decides `done`, and only then proposes archiving |
-| 5 | `opsx-archive` | **PM** (it changes the ledger) | the verified change | `openspec/changes/archive/<date>-<id>/` + updated capability specs | `team change status <id>` exits 0 (every task finished **and** its `tasks.md` checklist fully ticked — §5); **the user** confirms; the PM may confirm as the user's proxy only when it states that plainly and records why (small, reversible, already covered by the approved approach) |
+| 4 | `opsx-verify` | an **independent verify** agent (never the implementer) | the change, the landed code, the report | implementation-ID execution record + verifier assessment; candidate and merged SHAs, every applicable scenario and red/green evidence | after the PM merges, the **same verifier** resumes on a clean checkout pinned to the merged SHA and runs the applicable gates + OpenSpec assessment; the PM accepts passing evidence before `done` or archive authorization; inspection-only `team review --post-merge` is not that run |
+| 5 | `opsx-archive` | a **non-implementer worker** (possibly that verifier), on its own worktree/task branch | the accepted merged change, completed assessment and valid confirmation | `openspec/changes/archive/<date>-<id>/` + updated capability specs + worker report | completed merged-revision verification, zero unresolved CRITICAL findings, disclosed WARNING/unverified checks, reconciled sibling/checklist evidence; `team change status <id>` may have only the exact archive-task-ID + literal `phase=archive` self blocker; **the user** confirms, or the PM explicitly records a proxy confirmation only for a small, reversible change already covered by the approved approach |
 
 An exploration whose conclusion is "not worth doing", and a verification that fails twice, do not advance: see §7.
 
 ## 2. One phase = one task = one owner
 
-- The phases are **never merged into a single brief**: explore, propose, apply, verify and archive are five briefs
-  (or five gate decisions for the phases the PM owns), each with its own `task:` id, `agent:`, `deps:` and `phase:`
-  header line.
+- The phases are **never merged into a single brief**: explore, propose, apply, verify and archive are five briefs,
+  each with its own `task:` id, `agent:`, `deps:` and `phase:` header line. An archive brief declares the literal
+  `phase: archive`, not the command name `opsx-archive` or `-`.
 - **No agent verifies its own work** — the `team review` rule applied to the OpenSpec phases. The verify phase is
   owned by an agent that did not implement, and the apply phase by an agent that did not propose. Explore and
   propose may be the same agent (it holds the context) — but neither may apply its own proposal.
@@ -150,10 +150,28 @@ $ <a command the proposal itself promises> # → spot-checked: it exists and run
 | explore | the exploration report, the specs and code it cites | the recommendation is one option with its risks and effort, and the scope is the user's request — not a wish list | the decision in `docs/team/DECISIONS.md` + the propose brief |
 | propose | `openspec/changes/<id>/` end to end | `openspec validate --all --strict` green and all eight checklist points pass | `docs/team/reviews/<change>-proposal.md` = ACCEPTED (or NEEDS-CHANGES + per-item findings) |
 | apply | the brief, the change, the branch, the report | the branch carries exactly the change's scenarios; the acceptance commands really ran; nothing outside the boundaries was touched | the verify brief (a different agent) |
-| verify | the change, the landed code, the verification record, the diff | every scenario was exercised with red/green evidence, on a clean independent checkout | `docs/team/reviews/<ID>.md`; then `team board set <ID> done` after re-running the gate on the merged tree |
-| archive | the verified change + the user's confirmation | `team change status <id>` exits 0 — every task of the change is finished **and the change's `tasks.md` has no unchecked `- [ ]` item** (the command names the count and the first three line numbers/titles and exits non-zero) — and the user confirmed; **trial archive first**: `cp -r openspec /tmp/trial && (cd /tmp/trial && openspec archive -y <id>)` — OpenSpec catches some delta defects (a MODIFIED naming a requirement the base lacks, an ADDED collision, …) *only here*; the trial surfaces them while fixing is cheap, and a failure hands the change back to apply with the archiver's message | then `openspec archive -y <id>` for real, and the user's confirmation recorded (who confirmed, or why the PM acted as proxy) |
+| verify | the change, landed code, implementation-ID execution record, verifier report and diff | the assigned non-implementer verifier ran every applicable scenario on the PM-prepared clean checkout; after merge the **same verifier** resumed on the pinned merged SHA and completed the applicable gates + OpenSpec assessment | PM accepts the merged-SHA evidence, then `team board set <ID> done`; when IDs differ the PM writes `reviews/<verify-task>.md` explicitly as **PM acceptance**, linking the implementation-ID execution record, verifier report and verified merged SHA |
+| archive | the accepted merged baseline, linked execution record + completed assessment, and valid confirmation | zero unresolved CRITICAL findings; WARNING/SUGGESTION and every unverified applicable check/reason disclosed before confirmation; sibling/checklist evidence reconciled; `team change status <id>` need not exit zero while this archive task is active; the tool excludes only the row whose task ID equals this brief's ID, and the brief must declare literal `phase: archive` so that row reads as `archive` (`opsx-archive` and `-` do not satisfy the header) — the tool does not match self by phase text, and every other task/archive/checklist/unreadable blocker stops archive; user confirmation, or PM proxy only for a small, reversible change already covered by the approved approach with confirmer/reason recorded | the assigned worker trials and runs `openspec archive -y <id>` on its own authorized branch; PM inspects/integrates and closes the task after acceptance |
 
-The checklist half of that exit code is the apply phase's own ledger: three changes reached archive with 23/24/16
+The archive worker trials native archive on a private disk-backed copy before using its own branch:
+
+```sh
+trial_root="$(mktemp -d -p /var/tmp teamsmith-archive.XXXXXX)"   # substitute the project's declared disk root
+mkdir "$trial_root/project"
+cp -a openspec "$trial_root/project/openspec"
+(cd "$trial_root/project" && openspec archive -y <id>)
+# Inspect complete output and resulting specs; failure returns for correction, never a real archive.
+rm -rf -- "$trial_root"
+```
+
+The archive grant covers only the selected change/native dated destination, enumerated capability specs and the
+worker's report in its own worktree/task branch. Native synchronization preserves existing capability Purpose text.
+The stale verification Purpose is updated only afterwards in a separate, explicitly authorized Purpose-only
+documentation commit with its before/after diff. For dependent archives, the predecessor archive is accepted and
+merged first; the successor starts from that baseline and reconciles every complete MODIFIED block/scenario. A stale
+block or missing merged predecessor returns for authorized correction and independent re-verification.
+
+The checklist half of readiness is the apply phase's own ledger: three changes reached archive with 23/24/16
 items unticked (P151 F3, P175 F3, P206 F1), each caught by a human instead of by the gate. The check counts
 **empty boxes only** — an item ticked with its reason (`- [x] 2.3 … 引用 P206`) is complete, and a box ticked to
 clear the gate is no evidence: the ledger is reconciled on the apply side (tick what was really done, say in the
@@ -185,23 +203,20 @@ tip.
 
 ## 6. Preconditions
 
-- Generate what the installed OpenSpec can generate: `openspec init --tools pi` writes the command and skill files
-  for the workflows of the active profile (use the tool's own id for a non-Pi CLI). With the version this project
-  pins — **1.8.0, whose only profile is `core`** (`openspec config list` prints
-  `workflows: propose, explore, apply, update, sync, archive (from core profile)`) — that is
-  `opsx-{explore,propose,apply,archive}` plus the helper commands `opsx-update`/`opsx-sync`, and the matching
-  skills `openspec-{explore,propose,apply-change,archive-change}` plus `openspec-sync-specs`/`openspec-update-change`.
-  **It does not generate the verify pair** (`opsx-verify.md`,
-  `openspec-verify-change/SKILL.md`): 1.8.0 has no `verify` workflow, and the `expanded` profile this guide used to
-  name does not exist (`openspec config profile expanded` → `Error: Unknown profile preset "expanded". Available
-  presets: core`). Once a project has generated files, `openspec update` refreshes them; it finds the configured
-  tools from those files and answers "No configured tools found" when there are none.
-- **A phase whose command is missing is not a phase that did not run.** The verify phase is owned by this guide, not
-  by a generated file: run it from §1 and §5 — a different agent than the implementer, the change + the landed code
-  + the report as its hand-in, `docs/team/reviews/<ID>.md` as its hand-out. If you want a command for it, write the
-  prompt yourself and say it is yours; do not record a hand-written prompt as generated. What teamsmith gates on is
-  the **artifact** (the review record); the command file is only checked where the checkout carries one (a checkout
-  without the machine-generated surface gets a named skip, never a red — P222).
+- Generate what the installed OpenSpec can generate: `openspec init --tools pi` writes command and skill files for
+  the active profile (use the tool's own id for a non-Pi CLI), and `openspec update` refreshes configured tools.
+  Inspect the **actually generated** `.pi/prompts/opsx-verify.md` and
+  `.pi/skills/openspec-verify-change/SKILL.md`: when present, the verifier follows that workflow's completeness,
+  correctness and coherence assessment and its CRITICAL/WARNING/SUGGESTION/Final assessment definitions. Do not infer
+  availability from an OpenSpec release number or prescribe `openspec instructions verify`, which is not an artifact
+  command for the `spec-driven` profile.
+- **A missing generated verify workflow is a disclosed limitation, not a skipped phase.** The assigned different agent
+  performs the documented equivalent review of completeness, requirement/scenario correctness and design coherence,
+  using this guide's phase ownership plus the same findings/readiness structure; structural `openspec validate` alone
+  is not verification. The hand-out remains the implementation-ID execution record plus the verifier's completed
+  assessment report. What teamsmith gates on is the **artifact** (the review record and assessment); generated command
+  files are checked only where the checkout carries them (a checkout without the machine-generated surface gets a
+  named skip, never a red — P222).
 - Whether the generated files are committed follows the project's own ignore rules. This repository ignores `.pi/**`
   (`.gitignore`): the files are per-machine, every clone and every CI checkout starts without them, and the gate
   reports the `.pi/prompts` / `.pi/skills` checks as named skips there. A project that does commit them gets those
@@ -216,7 +231,8 @@ tip.
   propose, and says so in the ledger. Nothing is archived, nothing is left half-planned.
 - **Verification fails twice** → the PM **stops the change**: leave it in `openspec/changes/<id>/` with a note
   naming the blocker (and the failed findings), rather than pushing it through. The next PM can see it.
-- **The user is not available for the archive decision** → the change stays open; the code can already be merged
-  and `done` on the board (the ledger proves it), only the archive waits for the user.
+- **The user is not available for the archive decision** → the change stays open unless the PM explicitly records
+  the limited proxy case: small, reversible, already covered by the approved approach, with confirmer and reason.
+  PM evidence acceptance alone is not confirmation; WARNING findings and unverified checks/reasons are disclosed first.
 - Never archive to make a red thing disappear: `openspec archive` merges the deltas into `specs/` — after it, the
   spec set claims the change is real. Archive only after the gate passed and the user confirmed.

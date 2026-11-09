@@ -18,8 +18,9 @@ reasons are what stop a future you (and future agents) from treating them as bur
 | Authority | the protected branch, forge writes, repository settings | its own task branch |
 
 Splitting "writing code" from "judging whether the code is acceptable" across different sessions is what creates
-**independent verification**: the agent's report is a **claim**, the gate results the PM obtains on an independent
-worktree are **evidence**.
+**independent verification**: the agent's report is a **claim**, and the gate results a non-implementer verifier
+obtains on the PM-prepared independent worktree are **evidence**. The PM reviews and accepts that evidence without
+executing the gates.
 
 > A real CEP lesson: a report claimed 28/28 tests passing, the PM re-ran it and 4 specs failed (the cause was a value
 > import used to import a pure type under `verbatimModuleSyntax`). Conclusion: a report ≠ evidence, verification has
@@ -29,11 +30,11 @@ worktree are **evidence**.
 
 1. **Claim**: the conclusion an agent writes in its report (least trustworthy).
 2. **Checkable artefact**: commits, test files, log files, diffs.
-3. **Independent verification**: the result the PM gets by running the same commands on **another checkout** (most
-   trustworthy).
+3. **Independent verification**: the result a non-implementer verifier gets by running the same commands on **another
+   checkout** prepared by the PM (most trustworthy).
 
-Any "passes/done" has to land in layers 2 and 3. The acceptance commands in a brief plus the PM's `team review` are
-the implementation of that chain.
+Any "passes/done" has to land in layers 2 and 3. The acceptance commands in a brief plus the verifier's `team review`
+are the implementation of that chain; the PM independently reads and compares the evidence and diff.
 
 ## 3. Isolation: worktree + branch + a long-lived cwd
 
@@ -42,8 +43,10 @@ the implementation of that chain.
   (CEP has been there).
 - Why not "one worktree per task": sessions fragment, and both follow-up questions and resuming from a checkpoint get
   harder; a long-lived worktree lets the agent keep its memory.
-- The main worktree (main) belongs to the PM alone: merges, verification and documentation happen there, so nobody
-  fights an agent over the workspace.
+- The main worktree (main) belongs to the PM alone: merges, evidence acceptance and documentation happen there, so
+  nobody fights an agent over the workspace. The only worker-side exception is that `team review`, invoked by the
+  assigned verifier from its own worktree, writes the brief-named `docs/team/reviews/<ID>.md` and `<ID>-verify.log`
+  plus its existing runtime bookkeeping. This grants no manual main edits or other paths.
 - **A merged branch is deleted at once.** Landing is `merge --squash` + commit + push, then `close`, then
   `git branch -D <branch>`: the commit on `main` is the deliverable and the branch is only the vehicle. Nothing of
   value lives only on a branch, and keeping them turns the branch list into an archeology site (134 branches removed
@@ -646,8 +649,8 @@ A trap: an add/add conflict is often git's rename detection pairing two differen
      refuses and explains why);
   2. **Read-only observation**: `roster` / `digest` show the branch, dirty file count, commits ahead and a
      "waiting to be wrapped up" list;
-  3. **Verification evidence**: `review <ID> --dir <the checkout the PM prepared>` runs the gates and writes
-     `reviews/<ID>.md` (git is prepared by the PM).
+  3. **Verification evidence**: the assigned non-implementer verifier runs `review <ID> --dir <the checkout the PM
+     prepared>`; the tool writes the named central `reviews/<ID>.md` and companion log (git is prepared by the PM).
 - The conventions (written in SKILL.md and the project's PROTOCOL, for the PM to follow): one long-lived worktree per
   agent; task branches cut off the protected branch; verification on a detached independent checkout; merging =
   squashing into the protected branch (with a PR, merge the PR first and then `fetch + merge --ff-only`);
@@ -829,9 +832,10 @@ what it cannot judge (P148's rule); an unchanged tree adds no stdout at all. The
 `tests/flip-p158.sh` (four cases plus two `--break=` shadows), and suite section `0i` runs it.
 
 **How often the full suite runs (2026-09-23, user directive).** The full suite takes 13-20 minutes and the
-machine runs one at a time, so it is a *milestone* gate, not a per-change habit: a task runs it **once at
-delivery** (not per batch), a review runs it **once**, and the PM runs it on the protected branch **only at
-archive/release milestones** - per merge it reads the delivered run plus CI. A change whose diff touches no
+machine runs one at a time, so it is a *milestone* gate, not a per-change habit: an implementation worker runs it
+**once at delivery** (not per batch), the assigned verifier runs it **once per applicable review**, and a delegated
+non-PM worker runs it on the protected branch **only at archive/release milestones** — per merge the PM reads the
+delivered run plus CI and never substitutes a PM-owned background gate for delegation. A change whose diff touches no
 product path (for example records under `docs/**` only) needs **no** suite run: say so in the report and let
 the guarded FAST set (or nothing) stand as the evidence. When in doubt prefer FAST plus the affected
 sections and name what you did not run; **never** claim a full run you did not do. Which sections a changed path affects is

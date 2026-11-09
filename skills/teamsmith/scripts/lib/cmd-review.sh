@@ -1349,11 +1349,13 @@ $(printf '%s\n' "$ignored_list" | head -5)
   [ "$gates_marker" = "mutexbroken" ] && head_flags="$head_flags · gate mutex broken（互斥被破坏：判定不可信）"
   # 被信号终止（不是超时）：把信号名写进抬头，别拿「超时」顶替「被杀」（M6.5 / F15）
   [ -n "$gate_signal" ] && head_flags="$head_flags · gate killed: $gate_signal"
+  local executor; executor="$(team_sender_from_dir)"; [ -n "$executor" ] || executor="unknown"
   {
-    printf '# %s · PM 独立复验\n\n' "$id"
+    printf '# %s · 独立复验\n\n' "$id"
     printf '时间: %s · 分支: `%s` · HEAD: `%s` · 判定: **%s**%s\n\n' "$(team_timestamp)" "$branch" "${head:0:9}" "$verdict" "$head_flags"
     printf '## 复验方式\n\n'
-    printf -- '- 独立 checkout：`%s`（PM 提供，skill 只读；不信任 agent 工作区）\n' "$revdir"
+    printf -- '- 实际执行者：`%s`（从调用者的运行时工作树身份解析；与 checkout 准备者、实现作者及 PM 接受分开）\n' "$executor"
+    printf -- '- 独立 checkout：`%s`（PM 准备；被验内容只读，不信任 agent 工作区）\n' "$revdir"
     printf -- '- 记录绑定：本判定只对上面的 HEAD `%s` 负责（分支再动一格，digest/status 会把它重新列为待复验）\n' "${head:0:9}"
     printf -- '- 门禁命令：`%s`（硬超时 %ss%s；TIMEOUT 需要「包装器 124/137 + 用时贴住 deadline」两条证据，按失败处理）\n' \
       "${TEAM_GATES:-<未配置>}" "${TEAM_REVIEW_TIMEOUT:-1800}" "${gate_elapsed:+，实际用时 ${gate_elapsed}s}"
@@ -1434,7 +1436,7 @@ $(printf '%s\n' "$ignored_list" | head -5)
     else
       printf '## agent 报告原文\n\n**缺失**：分支上没有 `%s/reports/%s-<agent>.md`，这本身就是问题。\n\n' "$TEAM_DOCS_DIR" "$id"
     fi
-    printf '## PM 结论\n\n'
+    printf '## PM 接受清单（由 PM 审阅填写；不代表 PM 执行了上述门禁）\n\n'
     case "$verdict" in
       PASS) printf -- '- [ ] 已读 diff，与任务书交付物一致\n- [ ] 未发现「报告与实际不符」\n- [ ] 可以合并：squash 到 `%s` 并 push 之后，再 `%s board set %s done`\n' "$TEAM_PROTECTED_BRANCH" "$TEAM_CLI" "$id" ;;
       FAIL) printf -- '- [ ] 门禁失败：退回 agent（`%s say <agent> "..."`）或 PM 自行修复\n' "$TEAM_CLI"

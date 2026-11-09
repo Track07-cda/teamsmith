@@ -82,8 +82,9 @@ Alternatives to npm: `pi install …` at a released tag, `./install.sh` from a c
 
 ## 2. Handoff
 
-Day-to-day operation lives in the **`teamsmith`** skill: the PM loop, dispatch, independent verification, merging,
-the pulse, updates and troubleshooting are all there — read `skills/teamsmith/SKILL.md` and follow it. The three
+Day-to-day operation lives in the **`teamsmith`** skill: the PM dispatches and accepts evidence while non-implementer
+workers execute independent verification and archive; merging, the pulse, updates and troubleshooting are all there —
+read `skills/teamsmith/SKILL.md` and follow it. The three
 commands that answer "what now?": `team digest` (pending work), `team pulse status` (patrol and PM liveness),
 `team doctor` (environment). The handover is three steps, and the middle one is the one people skip:
 1. **Bootstrap** — already done in step 6 above (a rerun is idempotent; `--print` shows the plan).

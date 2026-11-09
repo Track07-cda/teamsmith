@@ -9,6 +9,39 @@ branch: `{{BRANCH}}`   PR/MR: <link or ->
 |---|---|
 | `<file>` | <what was done> |
 
+## OpenSpec assessment
+
+For `opsx-verify`, follow the generated `.pi/skills/openspec-verify-change/SKILL.md` when present; otherwise perform
+the documented equivalent review and disclose that limitation. A shell-gate PASS does not complete this assessment.
+Use `N/A — <reason>` only for a genuinely non-OpenSpec task; empty placeholders are not evidence.
+
+| Dimension | Score | Evidence |
+|---|---|---|
+| Completeness | <score> | <implemented tasks and requirement coverage> |
+| Correctness | <score> | <requirement/scenario and red-green evidence> |
+| Coherence | <score> | <design consistency and integration evidence> |
+
+## CRITICAL
+
+- <Incomplete tasks, missing requirement implementations, removed requirements still implemented, or renamed behavior
+  no longer present; give a concrete recommendation. Write `None` only after checking.>
+
+## WARNING
+
+- <Spec/design divergence or missing scenario coverage, with a recommendation; otherwise `None`.>
+
+## SUGGESTION
+
+- <Pattern inconsistency or minor improvement; otherwise `None`.>
+
+## Final assessment
+
+- Counts: CRITICAL <n> · WARNING <n> · SUGGESTION <n>.
+- Readiness: <unresolved CRITICAL = fix before archive; otherwise state readiness only within the checks actually
+  completed, with noted improvements>.
+- Unverified applicable checks and reasons: <every skipped/partial check and why; these prohibit an unqualified
+  readiness claim and must not be described as passed. Write `None` only when every applicable check ran.>
+
 ## Verification evidence (must have actually been run)
 
 ```

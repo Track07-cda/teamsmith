@@ -13,7 +13,7 @@ The user has decided that verification and archive are delegated work, not work 
 - Preserve user confirmation and the existing limited PM-proxy rule: only a small, reversible change already covered by the approved approach, with the proxy identity and reason recorded. Delegating execution does not expand or withdraw confirmation authority.
 - Archive on the assigned worker's own worktree/branch with an enumerated temporary write grant. Trial archive uses a private disk-backed directory. The archive brief explicitly declares the literal `phase: archive`, not `opsx-archive` or `-`. Read readiness blockers instead of requiring exit zero before the archive task itself finishes; only its exact task-ID/phase row is the self entry.
 - Serialize dependent archives after the predecessor's archive is merged; reconcile complete `MODIFIED` blocks against that baseline. Preserve existing capability Purpose text during native archive, then update the stale verification Purpose in a separate, explicit documentation commit with its before/after diff.
-- Correct all contrary instructions in the twelve guidance files inventoried line by line in `design.md`, including installed memory/runbook entry points and public README/init guidance. Replace weak checks within existing smoke sections; do not add a workflow engine or gate section.
+- Correct all contrary instructions in the thirteen guidance files (56 inventoried hits) in `design.md`, including installed memory/runbook entry points and public README/init guidance. Replace weak checks within existing smoke sections; do not add a workflow engine or gate section.
 
 ## Capabilities
 
@@ -27,7 +27,7 @@ None.
 
 ## Impact
 
-- Guidance (12 files): `skills/teamsmith/templates/{AGENTS.section.md,pm-prompt.md,PROTOCOL.md,OWNERSHIP.md,memory-seed.md}.tmpl`, `skills/teamsmith/SKILL.md`, `skills/teamsmith/references/{workflows,openspec,protocol,troubleshooting}.md`, `README.md`, `skills/teamsmith-init/SKILL.md`.
+- Guidance (13 files): `skills/teamsmith/templates/{AGENTS.section.md,pm-prompt.md,PROTOCOL.md,OWNERSHIP.md,DECISIONS.md,memory-seed.md}.tmpl`, `skills/teamsmith/SKILL.md`, `skills/teamsmith/references/{workflows,openspec,protocol,troubleshooting}.md`, `README.md`, `skills/teamsmith-init/SKILL.md`.
 - Evidence output: `skills/teamsmith/scripts/lib/cmd-review.sh` (actual executor instead of the three hard-coded PM attributions), `skills/teamsmith/templates/report.md.tmpl` (fixed findings/assessment sections). No new review command, flag or verdict vocabulary.
 - Existing tests: `skills/teamsmith/tests/smoke.sh` (`19`, `12j`, review identity/evidence in `10`/`10b`) and `skills/teamsmith/tests/section-paths.tsv` (rows for files actually read by those sections).
 - Later authorized archive: `openspec/specs/verification/spec.md` Purpose only in a separate documentation commit after native synchronization preserves it; proposal/apply do not edit the canonical Purpose. The old/new text and sequencing are in design §5.

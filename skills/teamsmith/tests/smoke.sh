@@ -5887,7 +5887,26 @@ assert_eq "分支有 1 个提交" "$(git -C "$REPO/.worktrees/dev" rev-list --co
 section "10 · review（独立 worktree + 门禁）"
 REV_WT="$TMP/review-checkout"
 git -C "$REPO" worktree add --detach "$REV_WT" "$T1_BRANCH" >/dev/null 2>&1 || true
-$TEAM review T1.1 --dir "$REV_WT" >"$TMP/review.log" 2>&1 && ok "review 门禁 PASS 退出码 0" || { bad "review 失败"; cat "$TMP/review.log"; }
+# PM 只准备两个 checkout；真正调用 review 的是与实现作者 dev 不同的 verify 席位。
+git -C "$REPO" worktree add --detach "$REPO/.worktrees/verify" "$PROTECTED" >/dev/null 2>&1 || true
+review_record_has_verifier() { # 真实命令产生的记录必须绑定 verify + 当前 HEAD + 指定 record/log
+  local rec="$REPO/docs/team/reviews/T1.1.md" log="$REPO/docs/team/reviews/T1.1-verify.log" want
+  want="$(git -C "$REV_WT" rev-parse HEAD 2>/dev/null)"
+  [ -f "$rec" ] || { printf 'missing record\n'; return 1; }
+  [ -f "$log" ] || { printf 'missing companion log\n'; return 1; }
+  grep -q '^# T1.1 · 独立复验$' "$rec" || { printf 'title is not neutral independent review\n'; return 1; }
+  grep -q '实际执行者：`verify`' "$rec" || { printf 'actual executor is not verify\n'; return 1; }
+  grep -q "HEAD: \`${want:0:9}\`" "$rec" || { printf 'reviewed HEAD mismatch\n'; return 1; }
+  ! grep -q 'PM 独立复验' "$rec" || { printf 'hard-coded PM attribution\n'; return 1; }
+}
+touch "$TMP/review-write-set-start"
+( cd "$REPO/.worktrees/verify" && $TEAM review T1.1 --dir "$REV_WT" ) >"$TMP/review.log" 2>&1 \
+  && ok "review 门禁 PASS 退出码 0（verify 席位实际执行）" || { bad "review 失败"; cat "$TMP/review.log"; }
+review_record_has_verifier >"$TMP/review-identity-green.log" 2>&1 \
+  && ok "真实 verifier 记录：neutral 标题 + verify 身份 + reviewed SHA + 指定 record/log" \
+  || { bad "真实 verifier 记录不完整"; cat "$TMP/review-identity-green.log"; }
+REVIEW_DOCS_WRITES="$(cd "$REPO" && find docs/team -type f -newer "$TMP/review-write-set-start" -printf '%P\n' | LC_ALL=C sort)"
+assert_eq "review 在主检出的文档写集只有指定 record/log" "$REVIEW_DOCS_WRITES" $'reviews/T1.1-verify.log\nreviews/T1.1.md'
 if $TEAM review T1.1 >"$TMP/review-nodir.log" 2>&1; then bad "review 缺 --dir 应报错"; else ok "review 缺 --dir 明确报错（skill 不碰 git）"; fi
 assert_has "$TMP/review-nodir.log" "PM 自己准备独立 checkout" "报错里给出 git 命令"
 assert_file "$REPO/docs/team/reviews/T1.1.md" "写复验记录"
@@ -6081,7 +6100,14 @@ assert_has "$REPO/docs/team/reviews/T1.1.md" "Flip evidence" "F14 记录给出�
 assert_has "$REPO/docs/team/reviews/T1.1.md" "checkout 里没有这个路径" "F14 老实记下包路径未随分支提交（提示项，不阻塞）"
 
 # F14b（PM 退回的复现）：报告措辞直接取自我们自己的模板 —— 检查器不能只认自己的正则，
-# 否则「检查器 ↔ 模板」会漂移（模板改写后真报告又被判“缺证据”）
+# 否则「检查器 ↔ 模板」会漂移（模板改写后真报告又被判“缺证据”）。同一既有证据例也钉住 OpenSpec 固定分节。
+for P439_SECTION in CRITICAL WARNING SUGGESTION 'Final assessment'; do
+  assert_has "$SKILL_DIR/templates/report.md.tmpl" "## $P439_SECTION" "F14b 报告模板含固定 OpenSpec 分节：$P439_SECTION"
+done
+assert_has "$SKILL_DIR/templates/report.md.tmpl" "Completeness" "F14b 报告模板含 Completeness 评分维度"
+assert_has "$SKILL_DIR/templates/report.md.tmpl" "Correctness" "F14b 报告模板含 Correctness 评分维度"
+assert_has "$SKILL_DIR/templates/report.md.tmpl" "Coherence" "F14b 报告模板含 Coherence 评分维度"
+assert_has "$SKILL_DIR/templates/report.md.tmpl" "Unverified applicable checks and reasons" "F14b 报告模板要求列出未验证检查与理由"
 TMPL_FLIP_HEAD="$(grep -m1 -E '^#{2,3}[[:space:]].*[Ff]lip' "$SKILL_DIR/templates/report.md.tmpl" | sed 's/[[:space:]]*$//')"
 [ -n "$TMPL_FLIP_HEAD" ] || TMPL_FLIP_HEAD='## Flip evidence'
 { printf '# T1.1 · template shaped report\n\n'
@@ -6140,9 +6166,27 @@ assert_match "$TMP/status-f3.log" 'stale: verified [0-9a-f]+, branch now [0-9a-f
 assert_eq "F3 分支已被合并删除（解析不到）→ 不算过期（否则合并后任务永远待办）" \
   "$(TEAM_ROOT=$REPO bash -c '. "'$SKILL_DIR'/scripts/lib/common.sh"; . "'$SKILL_DIR'/scripts/lib/cmd-review.sh"; team_load_config; team_resolve_branch() { printf "no-such-branch\\n"; }; team_review_branch_tip T1.1')" ""
 
-# 10b 收尾：重建一条正常的 PASS 记录，后续小节的现场与改造前一致
+# 10b 收尾：真实 verify 运行 + 恢复硬编码 PM 署名的红/绿/还原。变异只在自己的 skill 副本里。
 rev_refresh; rec_reset
-$TEAM review T1.1 --dir "$REV_WT" >/dev/null 2>&1
+( cd "$REPO/.worktrees/verify" && $TEAM review T1.1 --dir "$REV_WT" ) >"$TMP/p439-review-restored-baseline.log" 2>&1
+review_record_has_verifier >"$TMP/p439-review-green.log" 2>&1 \
+  && ok "10b verifier 证据绿：真实 verify + reviewed SHA + 指定 record/log" \
+  || { bad "10b verifier 证据绿失败"; cat "$TMP/p439-review-green.log"; }
+P439_MUT="$TMP/p439-review-pm-attribution"; rm -rf "$P439_MUT"; cp -a "$SKILL_DIR" "$P439_MUT"
+sed -i 's/# %s · 独立复验/# %s · PM 独立复验/' "$P439_MUT/scripts/lib/cmd-review.sh"
+rec_reset
+( cd "$REPO/.worktrees/verify" && bash "$P439_MUT/scripts/team" review T1.1 --dir "$REV_WT" ) >"$TMP/p439-review-pm-mutant.log" 2>&1
+if review_record_has_verifier >"$TMP/p439-review-red.log" 2>&1; then
+  bad "10b 红侧失效：恢复 PM 独立复验署名仍通过执行者证据断言"
+else
+  ok "10b 红侧：恢复 PM 独立复验署名 → 执行者证据断言红（$(tr '\n' ' ' < "$TMP/p439-review-red.log")）"
+fi
+cp "$SKILL_DIR/scripts/lib/cmd-review.sh" "$P439_MUT/scripts/lib/cmd-review.sh"
+rec_reset
+( cd "$REPO/.worktrees/verify" && bash "$P439_MUT/scripts/team" review T1.1 --dir "$REV_WT" ) >"$TMP/p439-review-restored.log" 2>&1
+review_record_has_verifier >"$TMP/p439-review-restore-green.log" 2>&1 \
+  && ok "10b 还原绿：恢复真实执行者署名后同一断言通过" \
+  || { bad "10b 还原后执行者证据仍红"; cat "$TMP/p439-review-restore-green.log"; }
 assert_has "$REPO/docs/team/reviews/T1.1.md" "判定: **PASS**" "10b 收尾：恢复干净 checkout 上的 PASS 记录"
 $TEAM digest >"$TMP/digest-10b-end.log" 2>&1 || true
 assert_not "$TMP/digest-10b-end.log" "T1.1-dev" "10b 收尾：记录有效后不再列为待复验"
@@ -11630,7 +11674,7 @@ os_need() {
 os_pipeline_hits() { # <skill 目录> → 违规行（空 = 通过）
   local d="$1" f="$1/references/openspec.md" p t n
   if [ ! -f "$f" ]; then printf 'references/openspec.md: GUIDE-MISSING\n'; return 0; fi
-  # ① 五个阶段各一行：第 3 列是 `opsx-<phase>`，第 4 列（所有者）与第 7 列（门禁）必须非空
+  # ① 五个阶段各一行：非空不够，verify/archive 的执行者必须不是 PM；合并后仍由同一 verifier 执行。
   for p in $OS_PHASES; do
     awk -F'|' -v p="$p" '
       $3 ~ ("`opsx-" p "`") {
@@ -11638,11 +11682,24 @@ os_pipeline_hits() { # <skill 目录> → 违规行（空 = 通过）
         owner = $4; gate = $7
         gsub(/[[:space:]]/, "", owner); gsub(/[[:space:]]/, "", gate)
         if (owner == "") print "OWNER-EMPTY " p
+        if ((p == "verify" || p == "archive") && owner ~ /PM/) print "OWNER-PM " p
         if (gate == "") print "GATE-EMPTY " p
       }
       END { if (!row) print "ROW-MISSING " p }
     ' "$f" | sed 's|^|references/openspec.md: |'
   done
+  local v_row a_row para
+  v_row="$(awk -F'|' '$3 ~ /`opsx-verify`/ { print; exit }' "$f")"
+  os_need "$v_row" references/openspec.md POST-MERGE-OWNER-MISSING \
+    'same verifier' 'merged SHA' 'PM accepts' 'done'
+  a_row="$(awk -F'|' '$3 ~ /`opsx-archive`/ { print; exit }' "$f")"
+  os_need "$a_row" references/openspec.md VERIFY-PREREQ-MISSING 'completed merged-revision verification'
+  os_need "$a_row" references/openspec.md CRITICAL-GATE-MISSING 'zero unresolved CRITICAL findings'
+  os_need "$a_row" references/openspec.md ARCHIVE-WORKTREE-MISSING 'own worktree/task branch'
+  os_need "$a_row" references/openspec.md ARCHIVE-SELF-PHASE 'phase=archive' 'opsx-archive'
+  para="$(os_para_with "$f" 'For dependent archives')"
+  os_need "$para" references/openspec.md ARCHIVE-BASELINE-MISSING \
+    'predecessor archive is accepted and' 'merged first' 'complete MODIFIED block/scenario'
   # ② 硬规则：没人复验自己的工作（「归档要用户确认」那一条由 ⑥ 的逐文件循环覆盖 —— 原来这里对
   #    references/openspec.md 还查过一遍同样的正则，P404 按净零纪律把它退了：同一条断言写两遍，
   #    删掉哪一遍都不改变判定，只会让红侧点名的理由有两条互相遮蔽）
@@ -11658,13 +11715,32 @@ os_pipeline_hits() { # <skill 目录> → 违规行（空 = 通过）
   grep -q 'openspec instructions' "$f" || printf 'references/openspec.md: DOCS-POINTER-MISSING\n'
   grep -q 'openspec init --tools pi' "$f" || printf 'references/openspec.md: PRECONDITION-MISSING\n'
   grep -qE '^### Requirement:' "$f" && printf 'references/openspec.md: ARTIFACT-SYNTAX-COPIED\n'
-  # ⑥ 这条门必须写进 agent/PM 真正读的文件 —— 只活在指南里 = 没人会照做
+  # ⑥ 这条门必须写进 agent/PM 真正读的文件；判据落在执行段落，而不是文件里孤立的 independent 字样。
   for t in templates/AGENTS.section.md.tmpl templates/PROTOCOL.md.tmpl SKILL.md references/workflows.md; do
     if [ ! -f "$d/$t" ]; then printf '%s: FILE-MISSING\n' "$t"; continue; fi
     grep -q 'opsx-apply' "$d/$t" || printf '%s: PHASE-NAMES-MISSING\n' "$t"
     grep -q 'ACCEPTED' "$d/$t" || printf '%s: APPLY-GATE-MISSING\n' "$t"
-    grep -qi 'independent' "$d/$t" || printf '%s: INDEPENDENT-VERIFY-MISSING\n' "$t"
   done
+  for t in templates/AGENTS.section.md.tmpl templates/PROTOCOL.md.tmpl SKILL.md; do
+    para="$(os_para_with "$d/$t" 'A change runs as')"
+    os_need "$para" "$t" 'OWNER-PM verify' '**different** agent' 'opsx-verify'
+    os_need "$para" "$t" 'OWNER-PM archive' 'non-implementer worker' 'opsx-archive'
+    os_need "$para" "$t" POST-MERGE-OWNER-MISSING 'same verifier'
+  done
+  para="$(awk -F'|' '$3 ~ /`opsx-verify`/ { print; exit }' "$d/references/workflows.md")"
+  os_need "$para" references/workflows.md POST-MERGE-OWNER-MISSING 'same verifier' 'merged SHA' 'PM accepts'
+  para="$(awk -F'|' '$3 ~ /`opsx-archive`/ { print; exit }' "$d/references/workflows.md")"
+  os_need "$para" references/workflows.md OWNER-PM-archive 'non-implementer worker'
+  # PM 的后台作业不能顶替委派；归档记录例外只覆盖指定 record/log。
+  para="$(os_para_with "$d/templates/pm-prompt.md.tmpl" 'PM-owned')"
+  os_need "$para" templates/pm-prompt.md.tmpl PM-BACKGROUND-VERIFY 'does not satisfy delegation' 'assigned non-implementer workers'
+  para="$(os_para_with "$d/templates/OWNERSHIP.md.tmpl" 'Narrow review exception')"
+  os_need "$para" templates/OWNERSHIP.md.tmpl LEDGER-EXCEPTION-MISSING \
+    'docs/team/reviews/<ID>.md' '<ID>-verify.log' 'no other manual main-checkout write'
+  # team init 的 D1 也必须把执行与接受分开，不能把 PM 复验写进每个新项目。
+  para="$(os_para_with "$d/templates/DECISIONS.md.tmpl" 'Issue')"
+  os_need "$para" templates/DECISIONS.md.tmpl 'OWNER-PM verify' \
+    'verifier 独立复验' 'PM 审阅接受' 'PM 必须审阅复验证据与 diff' '不得以自己执行替代委派'
   # ⑥b 任务书模板：`phase:` 头 + 五阶段枚举 + apply 门（这一份是 PM 抄着写简报的底稿）
   t=templates/task.md.tmpl
   if [ ! -f "$d/$t" ]; then printf '%s: FILE-MISSING\n' "$t"; else
@@ -11672,8 +11748,10 @@ os_pipeline_hits() { # <skill 目录> → 违规行（空 = 通过）
     grep -q 'explore|propose|apply|verify|archive' "$d/$t" || printf '%s: PHASE-ENUM-MISSING\n' "$t"
     grep -q 'ACCEPTED' "$d/$t" || printf '%s: APPLY-GATE-MISSING\n' "$t"
   fi
+  # 用户确认仍保留；限定的 PM-proxy 也必须带小步、可逆、已批准方案与记录理由，而非被删掉或无限放宽。
   for t in templates/AGENTS.section.md.tmpl templates/PROTOCOL.md.tmpl SKILL.md references/workflows.md references/openspec.md; do
-    grep -qEi 'user[^|]*confirm|confirm[^|]*user' "$d/$t" || printf '%s: USER-CONFIRM-MISSING\n' "$t"
+    para="$(os_para_with "$d/$t" 'user.*confirm|confirm.*user')"
+    os_need "$para" "$t" USER-CONFIRM-MISSING 'user' 'confirm' 'small, reversible' 'approved approach'
   done
   # ⑦ P404 · 规格点名的两处声明面（V125 实测：这两处此前**没有断言守着**，删掉整句、把冻结措辞改成
   #    禁语，门禁都还是绿的）。判据取**段落里的实质**：先按空行取出那一段，再要求段落内同时有两条命令、
@@ -11789,6 +11867,30 @@ OS_CLEAN_HITS="$(os_pipeline_hits "$OS_SB")"
 os_flip_red "指南里删掉 apply 那一行" "ROW-MISSING apply" "references/openspec.md" '/^| 3 | /d'
 os_flip_red "掏空 verify 行的所有者单元格" "OWNER-EMPTY verify" "references/openspec.md" \
   's/^| 4 | `opsx-verify` |[^|]*|/| 4 | `opsx-verify` |  |/'
+os_flip_red "verify 所有者改回 PM（非空也算错）" "references/openspec.md: OWNER-PM verify" "references/openspec.md" \
+  -E '/^\| 4 \| `opsx-verify`/s/an \*\*independent verify\*\* agent \(never the implementer\)/**PM**/'
+os_flip_red "archive 所有者改回 PM" "references/openspec.md: OWNER-PM archive" "references/openspec.md" \
+  -E '/^\| 5 \| `opsx-archive`/s/a \*\*non-implementer worker\*\*/**PM**/'
+os_flip_red "AGENTS 的 verify 执行者改回 PM" "templates/AGENTS.section.md.tmpl: OWNER-PM verify" "templates/AGENTS.section.md.tmpl" \
+  -E 's/a \*\*different\*\* agent runs/a PM runs/'
+os_flip_red "DECISIONS 的复验执行者改回 PM" "templates/DECISIONS.md.tmpl: OWNER-PM verify" "templates/DECISIONS.md.tmpl" \
+  's/verifier 独立复验/PM 独立复验/'
+os_flip_red "合并后不再由同一 verifier 执行" "POST-MERGE-OWNER-MISSING" "references/openspec.md" \
+  's/same verifier/PM/g'
+os_flip_red "归档允许缺 completed merged-revision verification" "VERIFY-PREREQ-MISSING" "references/openspec.md" \
+  's/completed merged-revision verification/verification optional/g'
+os_flip_red "归档允许未清 CRITICAL" "CRITICAL-GATE-MISSING" "references/openspec.md" \
+  's/zero unresolved CRITICAL findings/CRITICAL findings optional/g'
+os_flip_red "归档缺自己的 worktree/task branch 边界" "ARCHIVE-WORKTREE-MISSING" "references/openspec.md" \
+  's/own worktree\/task branch/any checkout/g'
+os_flip_red "归档自身 phase 写成命令名而非 archive" "ARCHIVE-SELF-PHASE" "references/openspec.md" \
+  's/phase=archive/phase=opsx-archive/g'
+os_flip_red "归档缺 predecessor merged baseline 对账" "ARCHIVE-BASELINE-MISSING" "references/openspec.md" \
+  's/For dependent archives/For no ordering/'
+os_flip_red "PM 后台门禁被写成满足委派" "PM-BACKGROUND-VERIFY" "templates/pm-prompt.md.tmpl" \
+  's/does not satisfy delegation/satisfies delegation/'
+os_flip_red "主检出写例外缺 companion log" "LEDGER-EXCEPTION-MISSING" "templates/OWNERSHIP.md.tmpl" \
+  's/<ID>-verify.log//'
 os_flip_red "掏空 propose 行的门禁单元格" "GATE-EMPTY propose" "references/openspec.md" \
   's/\(^| 2 | .*`opsx-propose`.*\)|[^|]*|$/\1|  |/'
 os_flip_red "删掉「未 ACCEPTED 不得派 apply」" "APPLY-GATE-MISSING" "references/openspec.md" '/No apply brief may be dispatched/d'
@@ -11803,7 +11905,8 @@ os_flip_red "任务书模板不再提 apply 门" "APPLY-GATE-MISSING" "templates
 os_flip_red "AGENTS 协议段不再提用户确认" "USER-CONFIRM-MISSING" "templates/AGENTS.section.md.tmpl" \
   -E 's/user[^|]*confirm[^|]*/ACCOUNTABILITY-REMOVED/g'
 os_flip_red "任务书模板删掉 phase: 头" "PHASE-FIELD-MISSING" "templates/task.md.tmpl" '/^phase:/d'
-os_flip_red "runbook 里的 verify 不再写独立" "INDEPENDENT-VERIFY-MISSING" "references/workflows.md" '/independent/d'
+os_flip_red "runbook 合并后缺同一 verifier" "references/workflows.md: POST-MERGE-OWNER-MISSING" "references/workflows.md" \
+  '/^| 4 | `opsx-verify`/s/same verifier/PM/'
 # P404 · 两处声明面的红侧（V125 的三个变异：此前每一个都还能全绿）
 os_flip_red "删掉 SKILL.md 的双门禁分工那段" "TWO-GATES-MISSING" "SKILL.md" \
   '/^The two gates answer different questions/,/^$/d'
@@ -17828,10 +17931,10 @@ assert_eq "12i --force 越过守卫" "$([ "$(p24_shim_windows)" -ge 1 ] && echo 
 section "12j · 归档前提（P24/B6）"
 P24J="$(p24_project 12j)"
 mkdir -p "$P24J/openspec/changes/archive/2026-09-20-alpha"
-p24_brief "$P24J" A1 pm archive alpha -
+p24_brief "$P24J" A1 verify archive alpha -
 p24_brief "$P24J" M1 dev apply alpha -
-p24_brief "$P24J" C1 pm archive - -
-p24_add "$P24J" A1 pm; p24_add "$P24J" M1 dev; p24_add "$P24J" C1 pm
+p24_brief "$P24J" C1 verify archive - -
+p24_add "$P24J" A1 verify; p24_add "$P24J" M1 dev; p24_add "$P24J" C1 verify
 p24_team "$P24J" board set M1 wip >/dev/null 2>&1
 A1_ROW="$(p24_board_row "$P24J" A1)"
 J_OUT="$(p24_team "$P24J" board set A1 done)"; J_RC=$?
@@ -17875,8 +17978,8 @@ P209A="$(p24_project 12j-checklist)"
 p24_change "$P209A" alpha
 mkdir -p "$P209A/openspec/changes/archive/2026-10-03-alpha"
 p24_brief "$P209A" M1 dev apply alpha -
-p24_brief "$P209A" A1 pm archive alpha -
-p24_add "$P209A" M1 dev; p24_add "$P209A" A1 pm
+p24_brief "$P209A" A1 verify archive alpha -
+p24_add "$P209A" M1 dev; p24_add "$P209A" A1 verify
 p24_pass "$P209A" M1
 p24_team "$P209A" board set M1 done >/dev/null 2>&1
 cat > "$P209A/openspec/changes/alpha/tasks.md" <<'EOT'
@@ -17920,8 +18023,8 @@ assert_file "$P209A/docs/team/reviews/A1-done.md" "12j P209 done 证据落盘"
 p24_brief "$P209A" M2 dev2 apply alpha -
 p24_add "$P209A" M2 dev2
 p24_team "$P209A" board set M2 wip >/dev/null 2>&1
-p24_brief "$P209A" A2 pm archive alpha -
-p24_add "$P209A" A2 pm
+p24_brief "$P209A" A2 verify archive alpha -
+p24_add "$P209A" A2 verify
 A_RV="$(p24_team "$P209A" change status alpha)"; A_RV_RC=$?
 assert_eq "12j P209 清单全勾但兄弟没结束 → 仍然非 0" "$A_RV_RC" "1"
 assert_has_echo "$A_RV" "M2 · apply · wip ·" "12j P209 反向阻塞来自映射任务（不是清单）"
@@ -17932,8 +18035,8 @@ assert_has_echo "$A_RV_DONE" "M2 · apply · wip ·" "12j P209 反向拒绝点�
 assert_not_echo "$A_RV_DONE" "checklist" "12j P209 反向拒绝不提清单（新检查没顶掉旧的）"
 # 归档之后：活动目录没了，读归档那份（真实时序里归档任务的 done 闸门这时才跑）
 P209B="$(p24_project 12j-archived)"
-p24_brief "$P209B" B1 pm archive beta -
-p24_add "$P209B" B1 pm
+p24_brief "$P209B" B1 verify archive beta -
+p24_add "$P209B" B1 verify
 mkdir -p "$P209B/openspec/changes/archive/2026-10-03-beta"
 printf '# Tasks: beta\n\n- [ ] 1.1 没勾\n' > "$P209B/openspec/changes/archive/2026-10-03-beta/tasks.md"
 B_NC="$(p24_team "$P209B" change status beta)"; B_NC_RC=$?

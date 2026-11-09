@@ -1,6 +1,6 @@
 ---
 name: teamsmith
-description: teamsmith gives one agent real ownership of a project — it plans, writes self-contained task briefs, dispatches worker agents into their own tmux windows and git worktrees, verifies their work on an independent checkout, merges, and keeps an auditable ledger (BOARD/reviews/threads/DECISIONS). A pulse window (the periodic patrol) wakes the owner only when there is pending work, and the owner can deliberately stand down. Works with Pi; the launch/notify seam is an internal seam (frozen) reserved for a possible future non-Pi adapter, with no compatibility promise. Use when the user wants an agent to own a project end to end, dispatch tasks to worker agents, run agents in parallel in tmux with git worktree isolation, act as a PM/orchestrator over other agents, review an agent's work independently, run the patrol (`pulse`) as a tmux window, wake the PM only when there is pending work, or resume and coordinate a multi-agent project. To start a new project, use the teamsmith-init skill.
+description: teamsmith gives one agent real ownership of a project — it plans, writes self-contained task briefs, dispatches worker agents into their own tmux windows and git worktrees, accepts non-implementer verification on an independent checkout, merges, and keeps an auditable ledger (BOARD/reviews/threads/DECISIONS). A pulse window (the periodic patrol) wakes the owner only when there is pending work, and the owner can deliberately stand down. Works with Pi; the launch/notify seam is an internal seam (frozen) reserved for a possible future non-Pi adapter, with no compatibility promise. Use when the user wants an agent to own a project end to end, dispatch tasks to worker agents, run agents in parallel in tmux with git worktree isolation, act as a PM/orchestrator over other agents, review an agent's work independently, run the patrol (`pulse`) as a tmux window, wake the PM only when there is pending work, or resume and coordinate a multi-agent project. To start a new project, use the teamsmith-init skill.
 license: MIT
 metadata:
   version: "0.4.6"
@@ -9,8 +9,8 @@ metadata:
 # teamsmith · one agent that actually owns the project
 
 teamsmith turns "one PM session + several worker agents" into a one-command setup: the PM writes task briefs and
-dispatches them, workers implement in parallel inside their own worktrees, the PM verifies on an independent
-checkout, then merges. **You usually are that PM**: when the user asks to "set up a team / dispatch tasks /
+dispatches them, workers implement in parallel inside their own worktrees, a non-implementer verifier executes the
+gates on the PM-prepared independent checkout, then the PM accepts the evidence and merges. **You usually are that PM**: when the user asks to "set up a team / dispatch tasks /
 run agents in parallel", follow the PM loop below.
 
 ```
@@ -18,8 +18,8 @@ PM(this session, tmux <session>:pm)     worker agents(each in .worktrees/<agent>
    task / dispatch ──────────────────▶  pi --session-id <s>-<a>  (interactive, watchable)
    digest / inbox  ◀── auto-notify on turn end ── extension/team-notify.ts → inbox + tmux wake-up
    long gate: team_bg_run → turn ends → woken once → team_bg_wait   (extension/team-bg.ts, both sides)
-   review(independent checkout, run gates) ──▶  reports/<ID>-<a>.md  (local branch; remote on the PM's route)
-   merge / close   ──────────────────▶  BOARD → done
+   prepare checkout ──▶ verifier: team review (run gates + central record/log)
+   accept evidence / merge ──▶ same verifier checks merged SHA ──▶ BOARD → done / close
 ```
 
 ## Starting a new project: use the `teamsmith-init` skill
@@ -49,7 +49,7 @@ the upgrade recipe: [references/migration.md](references/migration.md) §§1b–
 | Collaborate | `team say <a> "<one-line message>" [--no-verify]` (prefers a live inbox watcher: durable inbox + wake spool, zero keys; with no usable watcher it makes one audited immediate attempt typed straight into the window, even over a draft — an attempt, not a model receipt — and falls back to the inbox when the agent is not running), `team notify <a> "<one line>" [--from <sender>]` (agent → PM; the sender comes from the runtime directory — an unresolved sender is refused, never recorded as `pm`) |
 | Draft / deferred delivery | `team draft [pm]` opens an editor window on `state/draft-pm.md` (nothing automated ever types into it; save+quit enqueues through the guarded path and prints the ack there), `team draft send [<file>] [--now]` (headless form), `team outbox [list]` (what is waiting, with `held` reasons), `team outbox flush [--now]`, `team outbox drop <n\|all>`. Protected senders (notify knocks, wake lines, meeting knocks, ordinary `draft send`, ordinary queued pane delivery) refuse to type into an input box that already holds a draft: the message is queued in `state/outbox/` and reported as `queued`. Default `team say` is the named exception: watch first, otherwise one audited immediate attempt even over a draft (`state/outbox/forced.log`), never a receipt; a `geometry-untrusted` read (the supported Pi layout cannot be established) or three trusted-empty drains with no progress (`queue-stalled`) hold the entry durably with its reason and **exit non-zero**, never promising an automatic delivery. `draft send --now` / `outbox flush --now` remain the audited human overrides that type anyway (`state/outbox/forced.log`). See `references/troubleshooting.md` §3 |
 | Long gate (background job) | **tool calls in the session** (not `team` subcommands): `team_bg_run` starts a detached job (id + pid at once, `state/bg/<id>.log`), `team_bg_wait <id>` harvests it (exit code + log tail inline). One merged wake-up per finished batch, silence once harvested, one `settled-with-unharvested=<n>` line per turn end in `state/bg.log`. Injected on both built-in Pi paths; a custom template opts in with `{bg_ext}`. The lane's records are readable and stoppable from the CLI: `team bg list` (one row per record, signals nothing), `team bg stop <id>` (signals only the recorded job — the `(pid, start-time)` pair is the identity, a reused pid is refused). Inside a window `pkill`/`killall` are the signal gate and refuse every name/pattern selection with exit 64. See `references/workflows.md` §E2 |
-| Verify | `team review <ID> --dir <PM-prepared independent checkout> [--no-gates] [--strong] [--allow-unresolved-branch]` → `reviews/<ID>.md` (runs gates + writes evidence; refuses a dirty or `.gitignore`d checkout / an unresolvable `--branch` unless the matching `TEAM_REVIEW_ALLOW_*` override is used and recorded; `--strong` structurally checks flip evidence + a path to an independent package) |
+| Verify | The PM prepares a clean detached checkout; the assigned non-implementer verifier invokes `team review <ID> --dir <checkout> [--branch <sha>] [--no-gates] [--strong] [--allow-unresolved-branch]` from its own worktree → the tool writes only the brief-named main-checkout `reviews/<ID>.md` + `<ID>-verify.log` ledger exception, with the actual executor and reviewed SHA (the verifier's report stays on its branch; refuses a dirty or `.gitignore`d checkout / an unresolvable `--branch` unless the matching `TEAM_REVIEW_ALLOW_*` override is used and recorded; `--strong` structurally checks flip evidence + a path to an independent package) |
 | Wrap up | `team close <ID> [--keep-window]` (BOARD/state/window only, never git), `team teardown --agent a [--purge] [--register]` (explicit cleanup; `--register` removes the seat from the roster through the audited writer first) |
 | Bootstrap | `team bootstrap [--agents "dev verify"] --task-models '<map>' --pm-model '<model>' [--print]` (recommended; both model inputs are required on a fresh project, a valid policy is kept on re-entry, a legacy config is refused before any side effect and points at `team config upgrade-models`), `team init`, `team doctor` |
 | Patrol (pulse) | `team pulse up\|down\|restart\|status\|logs` (a `pulse` window in the same session runs the monitor + periodic patrol; single backend). Renamed from `watchdog` in v1.36.0: `team watchdog …`, `watchdog-status`, `install-watchdog`, `uninstall-watchdog` still work as aliases until v2.0.0 (they print a one-line deprecation notice first). `team watch [--once]` (foreground patrol) |
@@ -91,14 +91,17 @@ when they conflict, the creed wins and the process gets fixed.
    opens**, and a refusal names the offending line, the sibling and the fix.
 3. **Wait for notifications**: when a worker's turn ends it appends to `inbox/<agent>.md` and knocks on your window.
    Do not poll agent screens; read `team inbox --ack` and `team digest`.
-4. **Verify (never skip)**: `team review <ID> --dir <checkout>` runs the gates on a clean, independent checkout and
-   writes `reviews/<ID>.md`. **A report is a claim; your verification is the evidence.** Re-read the diff against the
-   brief, and read each finding for what it changed.
-5. **Land the records, then merge**: `team review <ID> --pre-merge` first — it lists every `docs/team/**` file the
-   task's worktree has **not committed**, and a squash carries only committed content (an untracked report dies with
-   the reused worktree). Commit them yourself with the `Agent: <agent>` trailer, then run git yourself: squash-merge
-   (with a PR: merge it, then `fetch && merge --ff-only`) → `team board set <ID> done` → `team close <ID>`. A late
-   delivery after the merge goes through `team review <ID> --post-merge` before you take anything.
+4. **Delegate verification (never skip)**: prepare a clean, independent checkout; a non-implementer verifier runs
+   `team review <ID> --dir <checkout>` and the tool writes the named central record/log. **A report is a claim; the
+   verifier's execution is the evidence; your evidence/diff review is acceptance, not a gate run.** Re-read the diff
+   against the brief, and read each finding for what it changed.
+5. **Land the records, merge, then verify the merge**: `team review <ID> --pre-merge` first — it lists every
+   `docs/team/**` file the task's worktree has **not committed**, and a squash carries only committed content (an
+   untracked report dies with the reused worktree). Commit them yourself with the `Agent: <agent>` trailer, then run
+   git yourself: squash-merge (with a PR: merge it, then `fetch && merge --ff-only`). Resume the same verifier on a
+   clean checkout pinned to the merged SHA; accept its passing gates and OpenSpec assessment before `team board set
+   <ID> done` → `team close <ID>`. `team review <ID> --post-merge` remains an inspection of late delivery, never the
+   merged-revision verification run.
 6. **Wrap up / report**: update `BOARD.md`, record decisions in `DECISIONS.md` with rationale and impact, and report to
    the user as "delivered + where the evidence is + next step".
 
@@ -114,10 +117,11 @@ scenarios; teamsmith keeps the **evidence** (briefs, reports, reviews, decisions
 spec system: a product promise goes into a spec, reasoning or guidance into `references/`.
 
 A change runs as **five phases, one brief each, one owner each**: `opsx-explore` (an explorer) → `opsx-propose` (the
-same explorer, planning only) → `opsx-apply` (a dev) → `opsx-verify` (a **different** agent) → `opsx-archive` (the
-PM). Two hard rules: **an `apply` brief starts only after the PM's proposal review is ACCEPTED**
-(`docs/team/reviews/<change>-proposal.md`), and **the PM never archives without independent verification and the
-user's confirmation**. **One change : N tasks** — the change is the dispatch unit and the brief's header maps the task
+same explorer, planning only) → `opsx-apply` (a dev) → `opsx-verify` (a **different** agent) → `opsx-archive` (a
+non-implementer worker, possibly that verifier). Two hard rules: **an `apply` brief starts only after the PM's
+proposal review is ACCEPTED** (`docs/team/reviews/<change>-proposal.md`), and **the PM never authorizes archive without
+the same verifier's accepted merged-revision evidence and valid confirmation**. The user confirms, or the PM records a
+narrowly qualified proxy confirmation (small, reversible and already covered by the approved approach). **One change : N tasks** — the change is the dispatch unit and the brief's header maps the task
 to it (`team dispatch` refuses more than one `change:` id, a change-less brief without a resolvable anchor, two
 unfinished tasks writing one delta file, and a verifier who authored the change; `team change status <id>` reports
 readiness). `openspec validate --all --strict` is part of `TEAM_GATES`. Phase table, gates and the PM's ten-point review
@@ -180,8 +184,8 @@ about them). They stay writable so the seam can be maintained and diagnosed; to 
 - Details: [references/meeting.md](references/meeting.md).
 
 ## Non-negotiable rules (verified during review)
-- **Never claim something passed without having run it.** Reports carry the real commands and output tails; the PM
-  re-runs independently.
+- **Never claim something passed without having run it.** Reports carry the real commands and output tails; the
+  assigned non-implementer verifier re-runs independently, and the PM reviews that evidence without executing it.
 - **Mark the reply — publication is a standing duty.** Whenever the answer is written for the user — an answer, a status
   or progress report, a conclusion or a ruling, a delivery or verification summary, a decision you ask the user for,
   however short — write the complete reply as the normal answer and end it with the final control line `[[team-reply]]`

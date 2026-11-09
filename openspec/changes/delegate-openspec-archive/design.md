@@ -4,7 +4,7 @@
 
 Normative behavior lives in this change's `specs/verification/spec.md`. This is an executor/evidence correction to the existing five phases, not an archive coordinator. The PM review following V138 selects the narrow main-ledger exception, same-verifier post-merge check and retention of limited PM-proxy confirmation.
 
-The following is the complete line-by-line disposition of `grep -nE 'PM.*(verif|archive|gate)|(verif|archive|gate).*PM'` over the twelve guidance files at planning baseline `e180fdbf`, supplemented by contrary sentences split across lines or missed by that case-sensitive expression. Paths below are relative to `skills/teamsmith/` unless prefixed by repository root. CHANGE means a future apply edit, not an edit made by P435. KEEP always states why. Apply rechecks the actual sentences if line numbers move.
+The following is the complete line-by-line disposition of `grep -nE 'PM.*(verif|archive|gate)|(verif|archive|gate).*PM'` over the thirteen guidance files (56 hits) at planning baseline `e180fdbf`, supplemented by contrary sentences split across lines or missed by that case-sensitive expression. Paths below are relative to `skills/teamsmith/` unless prefixed by repository root. CHANGE means a future apply edit, not an edit made by P435. KEEP always states why. Apply rechecks the actual sentences if line numbers move.
 
 ### `templates/AGENTS.section.md.tmpl`
 
@@ -45,6 +45,13 @@ The following is the complete line-by-line disposition of `grep -nE 'PM.*(verif|
 | 9 | CHANGE | Keep PM ownership of docs; enumerate the command-written review record/log exception, not unrestricted worker access. |
 | 29 | CHANGE | Change-phase owner may archive only in its own authorized worktree/branch. |
 | 28 (supplement) | CHANGE | Separate PM-owned config/default specs from archive's enumerated temporary capability-spec grant. |
+
+### `templates/DECISIONS.md.tmpl`
+
+| Line | Decision | Action/reason |
+|---|---|---|
+| 11, 15 | CHANGE | D1 names the verifier as independent-review executor and PM as evidence/diff acceptor; remove the requirement that PM execute the review. |
+| 20 | KEEP | D2 asks PM to review the research evidence chain, not to execute verification gates. |
 
 ### `templates/memory-seed.md.tmpl`
 
@@ -167,7 +174,7 @@ The verify brief includes both halves and the temporary record/log grant. Its re
 
 The three explicit old merged-tree instructions are `references/workflows.md:19` and `references/openspec.md:44,153`. All three name this same owner/order. Both local and forge examples put done/close after accepted post-merge evidence. The two currently authorized changes and current V136 are not required to rerun checks retroactively.
 
-Before archive the worker reads completed independent verification for the accepted merged baseline and the recorded confirmation, and reconciles task/checklist evidence. The archive brief explicitly declares the literal header `phase: archive`; `opsx-archive` is the command name, not this header value, and neither it nor `-` satisfies the self-blocker rule. `team change status <change>` prints each brief's phase verbatim and may exit nonzero because archive is itself active. A self blocker is **only** a row with literal `phase=archive` and task ID exactly equal to this archive brief's ID. No exit-zero prerequisite is imposed before archive: a nonzero result is acceptable only if that row is the sole blocker. Any other task row, another archive task, checklist problem or unreadable/ambiguous output still blocks. Update `workflows.md:281` and `openspec.md:45,154` together. Do not add a readiness switch or treat any archive-phase row as self. Archive is not an unchecked implementation task that can only be ticked after archive. PM closes the task after accepted merge, with existing evidence/board behavior.
+Before archive the worker reads completed independent verification for the accepted merged baseline and the recorded confirmation, and reconciles task/checklist evidence. The archive brief explicitly declares the literal header `phase: archive`; `opsx-archive` is the command name, not this header value, and neither it nor `-` makes the row read as archive. `team change status <change>` prints each brief's phase verbatim and may exit nonzero because archive is itself active. The tool excludes only the row whose task ID exactly equals this archive brief's ID; the literal header makes that row readable as archive, but phase text is not the tool's self-match key. No exit-zero prerequisite is imposed before archive: a nonzero result is acceptable only if that exact-ID row is the sole blocker. Any other task row, another archive task, checklist problem or unreadable/ambiguous output still blocks. Update `workflows.md:281` and `openspec.md:45,154` together. Do not add a readiness switch or exclude every archive-phase row. Archive is not an unchecked implementation task that can only be ticked after archive. PM closes the task after accepted merge, with existing evidence/board behavior.
 
 ## 4. OpenSpec findings and confirmation
 

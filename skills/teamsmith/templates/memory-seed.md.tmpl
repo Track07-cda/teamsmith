@@ -20,8 +20,8 @@
 - Branch mode: `{{BRANCH_MODE}}`; agent worktrees: `{{WORKTREES_DIR}}/<agent>` (**never move them**: sessions are keyed by cwd).
 
 ### Working rules (the creed; cross-project)
-- Deliverables must be independently verifiable: an agent's report is a claim; the PM's gates on an independent
-  checkout are the evidence.
+- Deliverables must be independently verifiable: an agent's report is a claim; a non-implementer verifier runs the
+  gates on the PM-prepared independent checkout, and the PM accepts that evidence without executing the gates.
 - Status is a promise: `done` only after the code really landed on the protected branch; on failure keep the old state.
 - Govern less to be reliable: the skill does not wrap git/forge, the PM does not implement, the pulse only wakes.
 - Failure is information: a false green is worse than nothing; gates need hard timeouts; skips must be declared.

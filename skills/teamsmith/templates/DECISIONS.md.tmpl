@@ -8,9 +8,9 @@
 
 ## D1 · {{TODAY}} · 决定 — 采用 teamsmith 的多 Agent 协作流程
 
-- **决策**：Issue → agent worktree/分支 → 报告 + 门禁 → PM 独立复验 → squash 合并。
+- **决策**：Issue → agent worktree/分支 → 报告 + 门禁 → verifier 独立复验 → PM 审阅接受 → squash 合并。
 - **理由**：可追溯、并行不冲突、合并权集中在 PM（质量门禁不被绕过）。
-- **影响**：agent 不得 push 保护分支 / 不得 merge；PM 必须真的跑复验，不能只看报告。
+- **影响**：agent 不得 push 保护分支 / 不得 merge；PM 必须审阅复验证据与 diff，不能只看报告，也不得以自己执行替代委派。
 
 ## D2 · {{TODAY}} · 暂定 — <技术栈/选型类决策>
 

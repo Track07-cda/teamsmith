@@ -6,7 +6,7 @@
 | Path | Owner | Purpose |
 |---|---|---|
 | `<path>/**` | agent:<name> | <what this directory is responsible for> |
-| `docs/**` | PM | Briefs / reports / verification / decisions |
+| `docs/**` | PM | Briefs / reports / verification / decisions. Narrow review exception: only `team review` may write the brief-named `docs/team/reviews/<ID>.md` and `<ID>-verify.log` in the main checkout; the verifier's own report stays on its task branch, and no other manual main-checkout write is granted |
 | `.pi/**`, `AGENTS.md` | PM | Team protocol and configuration |
 | `scripts/team*`, root config (lockfile/tsconfig, ...) | PM | New dependencies → raise them in the report |
 
@@ -25,5 +25,5 @@
 1. Need a new directory? The PM updates this file (and references it in the brief).
 2. Temporary borrowing (e.g. one package handled by another agent for a phase) must be marked **temporary** in the
    brief together with the hand-over condition.
-| `openspec/specs/**` · `openspec/config.yaml` | PM | 规格与配置是账本的一部分 |
-| `openspec/changes/<change>/**` | 该 change 当前阶段的 owner（任务书明授） | propose 归提案者；apply 归实现者；archive 由 PM 执行 |
+| `openspec/specs/**` · `openspec/config.yaml` | PM | 规格与配置是账本的一部分；archive 仅获任务书逐个点名的 capability spec 临时写权，不含 config |
+| `openspec/changes/<change>/**` | 该 change 当前阶段的 owner（任务书明授） | propose 归提案者；apply 归实现者；archive 由非实现者 worker 在自己的 worktree/task branch 执行，仅写任务书枚举的 change、归档目标与报告 |

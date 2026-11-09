@@ -16,8 +16,8 @@ each** — the reasoning, owners and gates are in [openspec.md](openspec.md):
 | 1 | `opsx-explore` | an explorer worker (never the eventual implementer) | the PM accepts the approach, records it in `DECISIONS.md`, writes the propose brief |
 | 2 | `opsx-propose` | the explorer, same agent (planning only — no code) | the PM's **proposal review is ACCEPTED** in `reviews/<change>-proposal.md`: `openspec validate --all --strict` green + the ten-point checklist |
 | 3 | `opsx-apply` | a dev worker | independent verification is dispatched to a different agent |
-| 4 | `opsx-verify` | an **independent** verify agent | the PM re-runs the gate on the merged tree and sets `done` |
-| 5 | `opsx-archive` | the PM | the user confirms (the PM may act as the user's proxy only when it says so and records why) |
+| 4 | `opsx-verify` | an **independent** verify agent | after the PM merges, the same verifier resumes on the pinned merged SHA and runs the applicable gates + OpenSpec assessment; the PM accepts passing evidence before `done` |
+| 5 | `opsx-archive` | a non-implementer worker (possibly that verifier) | the PM dispatches archive only after accepted merged-revision evidence, zero unresolved CRITICAL findings, reconciled sibling/checklist evidence, and the user's confirmation; the PM may act as proxy only for a small, reversible change already covered by the approved approach and records the confirmer and reason |
 
 ```bash
 openspec list --specs                    # capabilities and their requirement counts
@@ -146,19 +146,30 @@ When a "turn ended" notification arrives, look at `git -C .worktrees/<a> log --o
 decide: dispatch the next task, send it back, or verify. After a long absence (end of day, machine reboot): **run
 `team up` first**.
 
-## E. Verification (the PM's independent check, never skipped)
+## E. Delegated verification (the verifier executes; the PM accepts)
 
 ```bash
 git -C <root> worktree add --detach /tmp/review-T1.1 task/T1.1-*   # the PM prepares an independent checkout
-bash <skill>/scripts/team review T1.1 --dir /tmp/review-T1.1      # runs gates only + writes the verification record
-bash <skill>/scripts/team review T1.1 --dir /tmp/review-T1.1 --no-gates   # manual review only
+# From the assigned verifier's own worktree, not the PM window:
+bash <skill>/scripts/team review T1.1 --dir /tmp/review-T1.1      # verifier runs gates; tool writes the named record/log
+bash <skill>/scripts/team review T1.1 --dir /tmp/review-T1.1 --no-gates   # manual review only; not gate evidence
 ```
 
-Artefact `docs/team/reviews/T1.1.md`: HEAD, diffstat, commit list, file list, tail of the gate output, verdict
-checklist. When the gates fail the command returns non-zero — do not ignore it.
+The verify brief names the implementation task ID, target revision and exactly `docs/team/reviews/<ID>.md` plus
+`<ID>-verify.log` as the tool-written main-checkout exception. The generated record identifies the actual verifier,
+checkout and reviewed SHA; it does not attribute execution to the PM or the implementer. The verifier's report stays on
+its own task branch. The exception excludes manual main edits, other records, code/spec writes, merges and pushes.
+When the verify assignment ID differs from the implementation ID, the PM writes `docs/team/reviews/<verify-task>.md`
+as a separate **PM acceptance** record linking that implementation-ID execution record, the verifier report and the
+verified merged SHA; it is not execution evidence.
 
-**The PM also has to read the diff**: gates only prove "the existing tests did not fail", not "the implementation
-matches the brief".
+Artefact `docs/team/reviews/T1.1.md`: actual executor, HEAD, diffstat, commit list, file list, tail of the gate output
+and verdict checklist. When the gates fail the command returns non-zero — do not ignore it. A shell PASS is not a
+completed OpenSpec assessment: the verifier's report uses CRITICAL/WARNING/SUGGESTION/Final assessment and records
+unverified checks and reasons.
+
+**The PM also has to read the evidence and diff**: gates only prove "the existing tests did not fail", not "the
+implementation matches the brief". This acceptance review does not make the PM the gate executor.
 
 **A gate that takes tens of minutes must not sit inside a turn.** teamsmith's own background lane is the default
 on Pi (§E2); `team doctor` reports the harness and the plugins this project carries (`harness` /
@@ -171,12 +182,12 @@ fact, counterexample, reasoning gap or unobserved boundary is a finding to delet
 and a longer or more defensive report is not stronger evidence. This is a reading rule, not a gate: no section
 checks the wording (see [references/protocol.md](protocol.md) §11b).
 
-### E2. The PM's background gate (the team's own lane, no extra window)
+### E2. The verifier's background gate (the team's own lane, no extra window)
 
 On the built-in Pi paths (both the PM and the workers) the session already has two tools for this:
 
 ```text
-team_bg_run command="bash <skill>/scripts/team review T1.1 --dir /tmp/review-T1.1" name="review-T1.1"
+team_bg_run command="bash <skill>/scripts/team review T1.1 --dir /tmp/review-T1.1" name="review-T1.1"  # verifier-owned job
    → job review-T1.1 started (pid 12345); log: <root>/.pi/team/state/bg/review-T1.1.log
      cmd: bash <skill>/scripts/team review T1.1 --dir /tmp/review-T1.1   (single-lined; shortened with … past 100 code points)
    (the tool returns at once — the turn is free again)
@@ -208,8 +219,9 @@ The four rules that make it safe (they are the extension's code, not a conventio
 4. **A restart does not kill a job** (the process is detached), but the job table is per session: after a
    restart read `state/bg.log` and the log file instead of waiting for a wake-up.
 
-A worker uses the same tools (its prompt says so) — that is how a worker can run a long build without burning its
-turn. A CLI without the Pi extension API does not have them: fall back to a background tmux window
+The assigned verifier uses these tools for review gates; a PM-owned background review does not satisfy delegation.
+Another worker uses the same tools for a long build without burning its turn. A CLI without the Pi extension API does
+not have them: fall back to a background tmux window
 ([troubleshooting.md](troubleshooting.md) §17).
 
 ### E3. Performance is a separate run (and a release step)
@@ -238,7 +250,9 @@ release checklist says (`docs/team/PUBLISH.md`).
 git -C <root> status                    # the main worktree must be clean and on the protected branch
 git -C <root> merge --squash <branch>    # conflict handling: see protocol.md §8e
 git -C <root> commit -m "T1.1: <title>"
-bash <skill>/scripts/team board set T1.1 done   # only mark done once it is really in the protected branch
+git -C <root> worktree add --detach /tmp/review-T1.1-merged <merged-SHA>   # PM prepares the merged checkout
+# The same verifier resumes and runs: team review T1.1 --dir /tmp/review-T1.1-merged --branch <merged-SHA>
+bash <skill>/scripts/team board set T1.1 done   # only after the PM accepts that passing merged-revision evidence
 bash <skill>/scripts/team close T1.1            # close the window, clear the task
 ```
 
@@ -258,7 +272,8 @@ bash <skill>/scripts/team close T1.1            # close the window, clear the ta
 gh pr merge --squash --delete-branch <PR>                  # GitLab: glab mr merge <iid> --squash
 # 若 forge 合并 403（缺 Contents: write）：本地 squash + push + 评论 + 关 PR
 git -C <root> fetch origin <protected-branch> && git -C <root> merge --ff-only FETCH_HEAD
-bash <skill>/scripts/team board set <ID> done
+# PM prepares a detached checkout of the merged SHA; the same verifier resumes with --branch <merged-SHA>.
+bash <skill>/scripts/team board set <ID> done   # only after the PM accepts passing merged-revision evidence
 ```
 
 > The order matters: **pushing locally first makes the PR unmergeable right away** (equivalent content, different
@@ -273,14 +288,38 @@ bash <skill>/scripts/team board set <ID> done
 > **close the PR/MR instead of merging it** (the content is already in; merging afterwards would create a second,
 > empty change). The `board set <ID> done` step below is unchanged.
 
-When the whole change (not just this task) is done, close the spec side too — **after** the verification record
-exists, the code landed, the user confirmed, and **the change's own ledger is reconciled** (every box in its
-`tasks.md` ticked against evidence, or ticked with the reason it could not be run):
+When the whole change (not just this task) is ready to close, the PM dispatches a separate archive brief to a
+non-implementer worker. The brief declares the literal header `phase: archive` (`opsx-archive` is the command name,
+and neither it nor `-` is the header value) and grants only the selected change/archive destination, enumerated
+capability specs and the worker's report in its own worktree/task branch. It names the accepted merged baseline and
+the implementation-ID execution record plus completed OpenSpec assessment; a PM acceptance stub is not a substitute.
+
+The worker requires zero unresolved CRITICAL findings and discloses WARNING/SUGGESTION findings and every unverified
+check/reason before confirmation. Confirmation is the user's, or an explicitly recorded PM proxy only for a small,
+reversible change already covered by the approved approach; PM evidence acceptance alone is not confirmation.
+
+The worker reads blockers rather than demanding pre-archive exit zero. `team change status <change>` may exit nonzero
+because this archive task is active. The tool excludes only the row whose task ID equals this brief's ID. The brief's
+literal `phase: archive` makes that row read as `archive`; the tool does not use the phase text to decide which row is
+self. Any other task/archive row, checklist problem or unreadable output still blocks. After the accepted archive
+merge, the PM closes the archive task.
 
 ```bash
-bash <skill>/scripts/team change status <change>   # must exit 0: every task finished + no unchecked item
-openspec archive -y <change>        # merges the deltas into openspec/specs/ and archives the change (see §0)
+bash <skill>/scripts/team change status <change>   # read blockers; only the exact self archive row may remain
+trial_root="$(mktemp -d -p /var/tmp teamsmith-archive.XXXXXX)"   # use the project's declared disk-backed root
+mkdir "$trial_root/project"
+cp -a openspec "$trial_root/project/openspec"
+(cd "$trial_root/project" && openspec archive -y <change>)
+# Inspect the complete output and resulting specs; remove only this exact private directory.
+rm -rf -- "$trial_root"
+openspec archive -y <change>   # on the assigned worker's own branch, after every prerequisite passes
 ```
+
+Native synchronization preserves each capability's existing Purpose. The stale verification Purpose is changed only
+in a later, separately authorized Purpose-only documentation commit with its before/after diff, not in the native
+archive commit. For dependent `alpha → beta`, the PM accepts and merges alpha's archive before preparing beta from
+that new baseline. Beta's worker reconciles every complete MODIFIED block/scenario against post-alpha accepted
+behavior; a missing predecessor or stale block returns for authorized correction and independent re-verification.
 
 ## G. Scaling up / down
 
@@ -293,9 +332,10 @@ bash <skill>/scripts/team teardown --all --purge --force   # delete the worktree
 ```
 
 Sizing rule of thumb: **parallel agents ≈ min((RAM+free swap)/one-agent footprint, strong-model concurrency limit,
-the verification bandwidth you actually have)**.
-Memory no longer limits you so tightly (the floor is "do not fill swap"), but the PM's verification bandwidth is
-usually the real bottleneck — dispatching too fast just builds a queue of reports waiting to be verified.
+the verifier execution capacity and PM evidence-review bandwidth you actually have)**.
+Memory no longer limits you so tightly (the floor is "do not fill swap"), but verifier capacity and the PM's
+evidence-review bandwidth are usually the real bottleneck — dispatching too fast just builds a queue awaiting delegated
+verification and acceptance.
 Tune the estimate with `TEAM_AGENT_MEM_MB` (default 6144); `team ps` tells you directly "how many more fit".
 
 ## H. Blockers, conflicts, boundary crossings
@@ -316,7 +356,8 @@ git -C .worktrees/dev branch --show-current      # task/T1.2-api-health
 git -C <root> worktree add --detach /tmp/review-T1.2 task/T1.2-api   # the PM prepares an independent checkout
 bash <skill>/scripts/team review T1.2 --dir /tmp/review-T1.2 --strong # gates with a hard timeout + structural strong-verification checks
 gh pr merge --squash --delete-branch 17 && git -C <root> fetch origin main && git -C <root> merge --ff-only FETCH_HEAD
-bash <skill>/scripts/team board set T1.2 done        # only mark done once it is confirmed in main
+# PM prepares the merged-SHA checkout; the same verifier resumes with --branch <merged-SHA>.
+bash <skill>/scripts/team board set T1.2 done        # only after the PM accepts passing merged-revision evidence
 ```
 
 `review` **fails closed** on evidence that does not describe what it stamps: an unresolvable `--branch` (the old code

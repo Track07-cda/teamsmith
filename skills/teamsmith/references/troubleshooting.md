@@ -655,7 +655,7 @@ seat's last screen and tmux's exit evidence survive the death. Reading such a se
 ## 12. General Pi traps
 
 - **A test conclusion must come from a real run of this round**: put the command and the tail of its output into the
-  report, and the PM re-runs it.
+  report, and the assigned non-implementer verifier re-runs it; the PM reviews that evidence.
 - Type-only imports (`import type`) are mandatory in projects with `verbatimModuleSyntax` and the like — such project
   rules belong in `AGENTS.md`, otherwise weaker models trip over them again and again.
 - Screen scraping is unreliable (TUI refreshes/line wraps), so never treat tmux scrollback as evidence; reports and
@@ -1396,16 +1396,21 @@ offending line, so the fix stays local to the brief.
 
 ### 27c. `team review` refuses without `--dir`: the one-command independent review
 
-`team review` runs the gates against a checkout **the PM prepared** and writes the verdict record itself; it does
-not create the checkout and does not run git. One command line covers both steps:
+The PM prepares the checkout; the assigned non-implementer verifier runs `team review` from its own worktree, and
+the tool writes the verdict record/log. The command does not create the checkout and does not run git. Preparation
+and verifier execution are separate steps:
 
 ```bash
-git -C <root> worktree add --detach /tmp/review-<ID> <task-branch> && \
-  bash <skill>/scripts/team review <ID> --dir /tmp/review-<ID>            # add --strong for the structural checks
+git -C <root> worktree add --detach /tmp/review-<ID> <task-branch>        # PM
+# Assigned verifier, from its own worktree:
+bash <skill>/scripts/team review <ID> --dir /tmp/review-<ID>              # add --strong for structural checks
 ```
 
-Both forms write `docs/team/reviews/<ID>.md` (HEAD, diffstat, commit list, gate tail, verdict checklist) — the
-record that `team board set <ID> done` and the merge step read. The details that bite:
+The verify brief explicitly authorizes only the tool-written main-checkout `docs/team/reviews/<ID>.md` and
+`<ID>-verify.log` exception. The record carries the actual executor, HEAD, diffstat, commit list, gate tail and
+verdict checklist; the verifier's own report stays on its task branch. This grants no other manual main-checkout
+writes. After merging, the same verifier checks the merged revision and the PM accepts that passing evidence before
+`team board set <ID> done`. The details that bite:
 
 - `--dir` is the **root** of the checkout; a subdirectory is refused with the path it resolved.
 - The checkout must be clean and sit at the branch under review; a dirty or mismatched one is refused, and the

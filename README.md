@@ -1,6 +1,6 @@
 # teamsmith
 
-**Give one agent real ownership of a project**: it plans, dispatches, verifies independently, merges and keeps the ledger.
+**Give one agent real ownership of a project**: it plans, dispatches, accepts independent verification, merges and keeps the ledger.
 
 Runs on Pi; the launch/notify seam is an **internal seam (frozen)** — reserved for a possible future non-Pi adapter, with no compatibility promise (ROADMAP M3.0).
 
@@ -12,7 +12,7 @@ not "more agents chatting with each other".
 | Capability | Mechanism |
 |---|---|
 | Dispatch | Task briefs are self-contained (context / deliverables / boundaries / copy-pasteable acceptance commands); `team dispatch` puts a worker agent into its own tmux window and git worktree |
-| **Independent verification** | The agent's report is a **claim**; the PM runs the gates on an **independent checkout** (`team review <ID> --dir …`) and that becomes the evidence |
+| **Independent verification** | The agent's report is a **claim**; a non-implementer verifier runs `team review <ID> --dir …` on the PM-prepared independent checkout, and the PM accepts that evidence without running the gates |
 | Ledger | `BOARD.md` (state), `reviews/` (verification evidence), `threads/` (decision trail), `DECISIONS.md` (the "why") |
 | Not rigid | The watchdog only wakes the owner when there is pending work; the PM can `standby` deliberately; when capacity is tight, work queues instead of thrashing |
 | Boundaries | Cross-project interaction is discussion only (`team meeting`) — never command; git/forge work stays with the PM's own tools |
