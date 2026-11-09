@@ -1,7 +1,7 @@
 ---
 id: P438
 title: 模型配置变化不得停用关键回复捕获
-agent: verify
+agent: dev
 category: code
 phase: apply
 change: -
@@ -15,7 +15,7 @@ branch: task/P438-reply-config-change
 
 ## 真实现场
 
-data_ontology 在 06:54 仅修改 `TEAM_TASK_MODELS`。下一条回复时，`team-reply.ts` 的 `verify()` 对整个 identity 做深比较，因 configHash/configIno 变化写入 `degraded: identity/config changed`。该消息没有 intent/source，Pulse 无内容可显示。
+另一个项目在 06:54 仅修改 `TEAM_TASK_MODELS`。下一条回复时，`team-reply.ts` 的 `verify()` 对整个 identity 做深比较，因 configHash/configIno 变化写入 `degraded: identity/config changed`。该消息没有 intent/source，Pulse 无内容可显示。
 
 这不是模型没写标记或 Pulse 显示问题。仅修改任务模型不应停用捕获。
 
@@ -35,6 +35,6 @@ data_ontology 在 06:54 仅修改 `TEAM_TASK_MODELS`。下一条回复时，`tea
 
 ## 交付与顺序
 
-报告 `docs/team/reports/P438-verify.md`，本地提交并通知 PM，之后由非作者复验；不合并、不发布。
+报告 `docs/team/reports/P438-dev.md`，本地提交并通知 PM，之后由非作者复验；不合并、不发布。
 
-**与 P437 同改 `team-reply.ts`，在 P437 合入后再基于新 main 开工，避免覆盖。** 当前只登记任务，不提前改文件。
+前次 verify 席位仅提交阻塞报告，未改实现；本次由 dev 在 P437 已合入的 main 上开工。
