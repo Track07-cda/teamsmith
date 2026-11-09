@@ -1,8 +1,10 @@
 # route-page-check-determinism · 提案审阅
 
-当前判定：**NEEDS-CHANGES — 不批准 Apply**
+当前判定：**REVIEW — 返修候选复审中，未批准 Apply**
 
-候选：`9ac9a709`（P429，作者 dev2）。独立审阅 V130（dev3）报告：`docs/team/reports/V130-dev3.md`。
+返修候选：`68f82553`；定点复审：V131（V130 原审阅者 dev3）。PM 对返修差异重跑 OpenSpec 22/22、change strict、spec refs 121、section-select ok13、账本禁令 hits0、diff check，均通过。以下为 V130 对上一候选 `9ac9a709` 的裁定与返修要求。
+
+上一轮候选：`9ac9a709`（P429，作者 dev2）。独立审阅 V130（dev3）报告：`docs/team/reports/V130-dev3.md`。
 
 ## 已关闭的结构检查
 
