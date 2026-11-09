@@ -1,10 +1,10 @@
 # delegate-openspec-archive · 提案审阅
 
-当前判定：**NEEDS-CHANGES — 仅剩两处最小文字修正，不批准 Apply**
+当前判定：**REVIEW — 最后两处差异复核，未批准 Apply**
 
-V139 确认 F1–F7 与 PM 裁定基本关闭，剩：①归档 brief 必须明确 `phase: archive`，`opsx-archive`/`-` 与 blockers 原样值不匹配；②verify 任务自身记录明确是 PM 的接受记录，不是 PM 执行验证，真正执行证据仍为实现 ID 的工具记录。规划 `3cb3a783`、报告 `b99166d9`；返修后只做这两处定点复核。
+V139 留下的两处已在规划 `a5c82971` 修正；V142 由非作者 dev3 只核这两处，待 P435 最终报告提交后执行。此前各项保持关闭，不重开整案。
 
-上一候选 `e180fdbf`（P435，dev2）；V138 非作者审阅报告：`docs/team/reports/V138-dev.md`。方向接受，以下一次性返修，不重开“verify/archive 委派”这一用户裁定。
+上一阶段：V138 非作者审阅报告：`docs/team/reports/V138-dev.md`。方向接受，以下一次性返修，不重开“verify/archive 委派”这一用户裁定。
 
 ## PM 对五项阻断的裁定
 
