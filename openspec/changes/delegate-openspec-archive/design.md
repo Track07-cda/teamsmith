@@ -4,7 +4,7 @@
 
 Normative behavior lives in this change's `specs/verification/spec.md`. This is an executor/evidence correction to the existing five phases, not an archive coordinator. The PM review following V138 selects the narrow main-ledger exception, same-verifier post-merge check and retention of limited PM-proxy confirmation.
 
-The following is the complete line-by-line disposition of `grep -nE 'PM.*(verif|archive|gate)|(verif|archive|gate).*PM'` over the thirteen guidance files (56 hits) at planning baseline `e180fdbf`, supplemented by contrary sentences split across lines or missed by that case-sensitive expression. Paths below are relative to `skills/teamsmith/` unless prefixed by repository root. CHANGE means a future apply edit, not an edit made by P435. KEEP always states why. Apply rechecks the actual sentences if line numbers move.
+The following is the complete line-by-line disposition of `grep -nE 'PM.*(verif|archive|gate)|(verif|archive|gate).*PM'` over the thirteen guidance files (54 hits) at planning baseline `e180fdbf`, supplemented by contrary sentences split across lines or missed by that case-sensitive expression. Paths below are relative to `skills/teamsmith/` unless prefixed by repository root. CHANGE means a future apply edit, not an edit made by P435. KEEP always states why. Apply rechecks the actual sentences if line numbers move.
 
 ### `templates/AGENTS.section.md.tmpl`
 
@@ -50,8 +50,8 @@ The following is the complete line-by-line disposition of `grep -nE 'PM.*(verif|
 
 | Line | Decision | Action/reason |
 |---|---|---|
-| 11, 15 | CHANGE | D1 names the verifier as independent-review executor and PM as evidence/diff acceptor; remove the requirement that PM execute the review. |
-| 20 | KEEP | D2 asks PM to review the research evidence chain, not to execute verification gates. |
+| 11, 13 | CHANGE | D1 names the verifier as independent-review executor and PM as evidence/diff acceptor; remove the requirement that PM execute the review. |
+| 17–18 | KEEP | D2 asks PM to review the research evidence chain, not to execute verification gates. |
 
 ### `templates/memory-seed.md.tmpl`
 
