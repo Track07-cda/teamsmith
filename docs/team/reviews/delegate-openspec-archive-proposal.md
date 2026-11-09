@@ -1,8 +1,8 @@
 # delegate-openspec-archive · 提案审阅
 
-当前判定：**REVIEW — 返修候选复核排队中，未批准 Apply**
+当前判定：**NEEDS-CHANGES — 仅剩两处最小文字修正，不批准 Apply**
 
-返修候选：规划 `3cb3a783`、报告 `b99166d9`。PM 对返修差异重跑 OpenSpec 24/24、change strict、spec refs 126、section-select ok13、账本禁令 hits0、diff check，均通过。V139 由 V138 原审阅者 dev 在 P437 交付后定点复核。
+V139 确认 F1–F7 与 PM 裁定基本关闭，剩：①归档 brief 必须明确 `phase: archive`，`opsx-archive`/`-` 与 blockers 原样值不匹配；②verify 任务自身记录明确是 PM 的接受记录，不是 PM 执行验证，真正执行证据仍为实现 ID 的工具记录。规划 `3cb3a783`、报告 `b99166d9`；返修后只做这两处定点复核。
 
 上一候选 `e180fdbf`（P435，dev2）；V138 非作者审阅报告：`docs/team/reports/V138-dev.md`。方向接受，以下一次性返修，不重开“verify/archive 委派”这一用户裁定。
 
