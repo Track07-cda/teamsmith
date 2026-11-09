@@ -349,8 +349,14 @@ closed" ;;
 }
 
 # pulse-key-replies 的固定回复块（stub 面；见上面的三条 case）。
+# 时间默认不变；P436 用同一固定 UTC 输入切换 TZ，并可注入非法值或省略字段验证显示降级。
+reply_at_json() {
+  [ "${B3_STUB_REPLY_AT_OMIT:-0}" = "1" ] && return 0
+  printf '"at": %s, ' "$(json_str "${B3_STUB_REPLY_AT:-2026-09-16T09:59:00Z}")"
+}
 reply_entry_json() {
-  printf '{"no": 1, "available": true, "title": "固定关键回复", "from": "dev2", "at": "2026-09-16T09:59:00Z", "bytes": 24, "sha256": "%s"}' "$(printf 'a%.0s' {1..64})"
+  printf '{"no": 1, "available": true, "title": "固定关键回复", "from": "dev2", %s"bytes": 24, "sha256": "%s"}' \
+    "$(reply_at_json)" "$(printf 'a%.0s' {1..64})"
 }
 reply_summary_json() {
   case "${B3_STUB_REPLY:-empty}" in
@@ -367,7 +373,8 @@ reply_list_json() {
   esac
 }
 reply_body_json() {
-  printf '%s\n' '{"no": 1, "available": true, "title": "固定关键回复", "from": "dev2", "at": "2026-09-16T09:59:00Z", "bytes": 24, "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "text_kind": "safe-display", "display_text": "固定回复正文\n第二行\n"}'
+  printf '{"no": 1, "available": true, "title": "固定关键回复", "from": "dev2", %s"bytes": 24, "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "text_kind": "safe-display", "display_text": %s}\n' \
+    "$(reply_at_json)" "$(json_str_ml $'固定回复正文\n第二行\n')"
 }
 
 case "$block" in

@@ -47,6 +47,13 @@ kr_panel_snapshot() { # <页> <额外参数…> → stdout
     | sed -e 's/\x1b\[[0-9;]*m//g'
 }
 
+kr_reply_time_snapshot() { # <输出> <TZ> <at|-> <省略 0|1> <页> <额外参数…>
+  local out="$1" tz="$2" at="$3" omit="$4" page="$5"; shift 5
+  "${clean_env[@]}" TZ="$tz" B3_STUB_REPLY=ok B3_STUB_REPLY_AT="$at" B3_STUB_REPLY_AT_OMIT="$omit" \
+    node "$panel" --root "$ROOT" --team-cli "$SELF_DIR/panel-b3-stub.sh" --snapshot --page "$page" \
+      --width 160 --height 30 --lang zh "$@" 2>/dev/null | sed -e 's/\x1b\[[0-9;]*m//g' >"$out"
+}
+
 # ---------------------------------------------------------------- 组：blocks
 kr_group_blocks() {
   section "blocks · 三个需求块的装配契约（3.3）"
@@ -73,6 +80,52 @@ kr_group_blocks() {
   assert_match "$(kr_argv)" 'reply_body.*--no 1' "blocks：视窗形态出现在 argv（--no 1）"
   assert_eq "blocks：打开视窗时不调度 list（视窗取代列表）" "$(block_calls reply_list)" "0"
   assert_has "$tmp/bl-body.txt" "块夹具正文" "blocks：正文块渲染出原文"
+
+  # P436：同一 UTC 输入在两个阅读者时区下，列表/摘要保持紧凑本地时间，详情带实际偏移。
+  # 用固定 stub 而非真实发布时间，避免测试依赖运行时钟；KR_PANEL 可指向变异 bundle 做红侧。
+  local time_at='2026-09-16T09:59:00Z' zone tz compact full surface page f
+  for zone in shanghai new-york; do
+    if [ "$zone" = shanghai ]; then
+      tz='Asia/Shanghai'; compact='09-16 17:59'; full='2026-09-16 17:59 +08:00'
+    else
+      tz='America/New_York'; compact='09-16 05:59'; full='2026-09-16 05:59 -04:00'
+    fi
+    for surface in summary list body; do
+      f="$tmp/bl-time-$zone-$surface.txt"
+      page=5
+      [ "$surface" = summary ] && page=1
+      if [ "$surface" = body ]; then
+        kr_reply_time_snapshot "$f" "$tz" "$time_at" 0 "$page" --reply-no 1
+      else
+        kr_reply_time_snapshot "$f" "$tz" "$time_at" 0 "$page"
+      fi
+      assert_has "$f" "$compact" "blocks：$zone 的 $surface 与列表使用同一紧凑本地时刻"
+      assert_not "$f" "$time_at" "blocks：$zone 的 $surface 不直接显示原始 UTC"
+      assert_not "$f" 'Invalid Date' "blocks：$zone 的 $surface 没有 Invalid Date"
+      if [ "$surface" = body ]; then
+        assert_has "$f" "$full" "blocks：$zone 的详情显示完整本地时间与实际偏移"
+      fi
+    done
+  done
+  # 非法/缺失时间沿用无时间的降级：保留回复与发布者，不显示原始坏值或 Invalid Date。
+  local mode omit shown_at
+  for mode in invalid missing; do
+    if [ "$mode" = invalid ]; then shown_at='not-a-time'; omit=0; else shown_at='-'; omit=1; fi
+    for surface in summary list body; do
+      f="$tmp/bl-time-$mode-$surface.txt"
+      page=5
+      [ "$surface" = summary ] && page=1
+      if [ "$surface" = body ]; then
+        kr_reply_time_snapshot "$f" 'Asia/Shanghai' "$shown_at" "$omit" "$page" --reply-no 1
+      else
+        kr_reply_time_snapshot "$f" 'Asia/Shanghai' "$shown_at" "$omit" "$page"
+      fi
+      assert_not "$f" 'Invalid Date' "blocks：$mode 的 $surface 不显示 Invalid Date"
+      assert_not "$f" 'not-a-time' "blocks：$mode 的 $surface 不显示非法原始时间"
+      assert_has "$f" 'dev2' "blocks：$mode 的 $surface 仍保留回复与发布者"
+    done
+  done
+
   # ⑤ 慢块：子进程超时被杀（timeoutMs 10s）→ 只降级本块，其余块照常
   kr_shim_set_slow reply_list 30
   reset_argv

@@ -1343,13 +1343,19 @@ function replyRowLabel(e: ReplyEntry): string {
   return e.available ? `#${e.no} ${e.title}` : ''
 }
 
-/** Reader's local clock, `MM-DD HH:MM`: when a reply was published, in the list itself. */
-function replyTimeLabel(at: string | undefined): string {
+/** Reader's local clock: compact for rows/summary, full date and actual offset for the viewer. */
+function replyTimeLabel(at: string | undefined, full = false): string {
   if (!at) return ''
   const when = new Date(at)
   if (Number.isNaN(when.getTime())) return ''
   const pad = (n: number): string => String(n).padStart(2, '0')
-  return `${pad(when.getMonth() + 1)}-${pad(when.getDate())} ${pad(when.getHours())}:${pad(when.getMinutes())}`
+  const compact = `${pad(when.getMonth() + 1)}-${pad(when.getDate())} ${pad(when.getHours())}:${pad(when.getMinutes())}`
+  if (!full) return compact
+  const offsetMinutes = -when.getTimezoneOffset()
+  const offsetSign = offsetMinutes >= 0 ? '+' : '-'
+  const absoluteOffset = Math.abs(offsetMinutes)
+  const offset = `${offsetSign}${pad(Math.floor(absoluteOffset / 60))}:${pad(absoluteOffset % 60)}`
+  return `${String(when.getFullYear()).padStart(4, '0')}-${compact} ${offset}`
 }
 
 /** The nav row of page 5: Older / Newer / `r` (the same actions `←`/`→` and `r` fire). */
@@ -1423,12 +1429,13 @@ function replyListBlock(ctx: Ctx): Block | null {
     const active = i === focus
     const cursor = active ? s.settingsCursor : ' '
     const head = `  ${cursor} `
+    const at = e.available ? replyTimeLabel(e.at) : ''
     const bodyLine: Line = e.available
       ? ln(
           seg(head, 'accent'),
           seg(replyRowLabel(e), active ? 'selected' : 'text'),
           seg(` · ${e.from}`, 'dim'),
-          ...(replyTimeLabel(e.at) ? [seg(` · ${replyTimeLabel(e.at)}`, 'dim')] : []),
+          ...(at ? [seg(` · ${at}`, 'dim')] : []),
         )
       : ln(
           seg(head, 'accent'),
@@ -1485,9 +1492,11 @@ function replyViewerBlock(ctx: Ctx): Block | null {
   if (data.available === false) {
     return build([nav, { line: truncLine(ln(seg(` ${s.replyBodyMissing}`, 'warn')), innerW) }, backLine], { no, total: 0, visible: 0, offset: 0 })
   }
+  const at = replyTimeLabel(data.at, true)
+  const declared = fill(at ? s.replyDeclared : s.replyDeclaredShort, { from: data.from, at })
   const meta: PlacedLine[] = [
     { line: truncLine(ln(seg(` ${data.title}`, 'heading')), innerW) },
-    { line: truncLine(ln(seg(` ${fill(s.replyDeclared, { from: data.from, at: data.at })}`, 'dim')), innerW) },
+    { line: truncLine(ln(seg(` ${declared}`, 'dim')), innerW) },
     { line: truncLine(ln(seg(` ${s.replyBodyHint} · ${data.bytes} B`, 'dim')), innerW) },
   ]
   const doc = markdownMemo(`reply:${no}`, data.display_text ?? '', innerW)
@@ -1523,9 +1532,12 @@ function replySummaryBlock(ctx: Ctx): Block | null {
     line.push(seg(text, 'text'))
     hits.push({ start: x, end: x + dispWidth(text), action: { kind: 'reply-open-latest', no: entry.no } })
     x += dispWidth(text)
-    const at = ` · ${entry.at}`
-    line.push(seg(at, 'dim'))
-    x += dispWidth(at)
+    const at = replyTimeLabel(entry.at)
+    if (at) {
+      const suffix = ` · ${at}`
+      line.push(seg(suffix, 'dim'))
+      x += dispWidth(suffix)
+    }
   } else if (d.state === 'empty') {
     line.push(seg(s.replyEmpty, 'dim'))
   } else {
