@@ -568,7 +568,7 @@ export function resolvePMIdentity(context, env = process.env) {
   if (!env.TEAM_STATE_DIR || !env.TEAM_CONFIG_FILE || !env.TEAM_PM_WINDOW || !env.TEAM_SESSION) throw new Error('missing directed PM launch environment')
   const state = safeDirectory(env.TEAM_STATE_DIR), config = resolve(env.TEAM_CONFIG_FILE)
   if (config !== env.TEAM_CONFIG_FILE || realpathSync(config) !== config) throw new Error('noncanonical PM config')
-  const configBytes = readRegular(config), configStat = lstatSync(config)
+  readRegular(config) // The path, type and owner remain capture boundaries; its contents do not.
   if (!context.sessionId || !context.sessionFile || !isAbsolute(context.sessionFile)) throw new Error('no persistent session identity')
   const sessionFile = join(safeDirectory(dirname(context.sessionFile)), basename(context.sessionFile))
   if (sessionFile !== context.sessionFile) throw new Error('noncanonical session path')
@@ -584,8 +584,7 @@ export function resolvePMIdentity(context, env = process.env) {
   let proof = proofPid(join(state, 'pm.pid.spawn'), process.pid, root) ? 'spawn' : ''
   if (!proof && proofPid(join(state, 'pm.pid'), process.pid, root) && /^(argv|spawn)$/.test(readRegular(join(state, 'pm.pid.proof')).trim())) proof = 'final'
   if (!proof) throw new Error('no current PM launch proof')
-  return { root, state, config, configHash: digest(configBytes), configDev: configStat.dev, configIno: configStat.ino,
-    sessionId: context.sessionId, sessionFile, pid: process.pid, starttime: life.starttime, cwd, tmux }
+  return { root, state, config, sessionId: context.sessionId, sessionFile, pid: process.pid, starttime: life.starttime, cwd, tmux }
 }
 
 /** Registry is process evidence, not a second source index. Fixed lock and atomic replacement match journal discipline. */
@@ -637,8 +636,8 @@ export function inspectRuntime({ root, state, config, session, window, skill }) 
   catch (e) { return { disk, state: 'unknown', reason: `registration:${e.code ?? e.name}` } }
   const base = { disk, loaded: runtime.fingerprint, generation: runtime.generation, extension: runtime.extension, sessionId: runtime.sessionId }
   try {
-    if (runtime.root !== realpathSync(root) || runtime.state !== realpathSync(state) || runtime.config !== realpathSync(config) ||
-        runtime.configHash !== digest(readRegular(config))) throw new Error('identity/config changed')
+    if (runtime.root !== realpathSync(root) || runtime.state !== realpathSync(state) || runtime.config !== realpathSync(config)) throw new Error('identity/config changed')
+    readRegular(config) // Keep the doctor's symlink and ownership checks without comparing configuration contents.
     const life = processIdentity(runtime.pid)
     if (life.dead || life.zombie || !life.starttime || life.starttime !== runtime.starttime || realpathSync(`/proc/${runtime.pid}/cwd`) !== runtime.cwd) throw new Error('dead/reused/foreign process')
     const actual = tmuxEvidence(runtime.tmux.socket, runtime.tmux.pane)

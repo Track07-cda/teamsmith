@@ -2,13 +2,13 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { spawnSync } from 'node:child_process'
-import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 import { CaptureJournal, captureDiskFingerprint, inspectRuntime } from '../scripts/reply-capture.mjs'
 const tests = dirname(fileURLToPath(import.meta.url)), skill = dirname(tests)
-const selection = (process.argv.find(a => a.startsWith('--select='))?.slice(9) ?? (process.argv.includes('--select') ? process.argv[process.argv.indexOf('--select') + 1] : undefined) ?? 'print,tui,terminal,identity,lifecycle,owner-mutations,diagnostic-mutations').split(',')
+const selection = (process.argv.find(a => a.startsWith('--select='))?.slice(9) ?? (process.argv.includes('--select') ? process.argv[process.argv.indexOf('--select') + 1] : undefined) ?? 'print,tui,terminal,identity,lifecycle,owner-mutations,diagnostic-mutations,config-mutations').split(',')
 const evidence = resolve(process.env.P396_EVIDENCE ?? `${process.env.HOME}/.cache/P396/pi-${Date.now()}`)
 mkdirSync(evidence, { recursive: true, mode: 0o700 })
 const temporary = mkdtempSync('/var/tmp/p396-real-'), socket = join(temporary, 'socket')
@@ -62,7 +62,7 @@ server = createServer(async (req, res) => {
 })
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
 const port = server.address().port
-const invalidateIdentity = info => appendFileSync(info.config, '\n# P437: make the previously registered identity stale\n')
+const invalidateIdentity = info => tmux('rename-window', '-t', info.pane, 'not-pm')
 async function run(name, kind = 'print', opts = {}) {
   const dir = join(evidence, name), root = join(temporary, name), home = join(root, 'home'), state = join(root, '.pi/team/state'), config = join(root, '.pi/team/config.sh')
   for (const path of [dir, home, state, join(root, 'docs/team/tasks'), join(root, 'docs/team/inbox'), join(root, 'docs/team/outbox'), join(home, '.pi/agent')]) mkdirSync(path, { recursive: true })
@@ -77,6 +77,17 @@ async function run(name, kind = 'print', opts = {}) {
     const anchor = '    const line = `[team-reply] ${d.reason}; source=${d.entryId || \'unbound\'}; evidence=${d.path}\\n`\n'
     assert.equal(bytes.split(anchor).length, 2)
     writeFileSync(path, bytes.replace(anchor, `${anchor}    process.stderr.write(line)\n`))
+  }
+  if (opts.configFlip) {
+    const path = join(runSkill, 'scripts/reply-capture.mjs'); let bytes = readFileSync(path, 'utf8')
+    const read = '  readRegular(config) // The path, type and owner remain capture boundaries; its contents do not.\n'
+    const identify = '  return { root, state, config, sessionId: context.sessionId, sessionFile, pid: process.pid, starttime: life.starttime, cwd, tmux }\n'
+    const inspect = "    readRegular(config) // Keep the doctor's symlink and ownership checks without comparing configuration contents.\n"
+    for (const anchor of [read, identify, inspect]) assert.equal(bytes.split(anchor).length, 2, `config flip anchor: ${anchor.trim()}`)
+    bytes = bytes.replace(read, '  const configBytes = readRegular(config), configStat = lstatSync(config)\n')
+    bytes = bytes.replace(identify, '  return { root, state, config, configHash: digest(configBytes), configIno: configStat.ino, sessionId: context.sessionId, sessionFile, pid: process.pid, starttime: life.starttime, cwd, tmux }\n')
+    bytes = bytes.replace(inspect, "    if (runtime.configHash !== digest(readRegular(config))) throw new Error('identity/config changed')\n")
+    writeFileSync(path, bytes)
   }
   writeFileSync(join(home, '.pi/agent/settings.json'), JSON.stringify({ retry: { enabled: kind === 'retry', maxRetries: 1, baseDelayMs: 1 }, compaction: { enabled: false } }))
   writeFileSync(join(root, 'docs/team/BOARD.md'), '# untouched\n')
@@ -252,6 +263,38 @@ async function test(name, body) {
   try { await body(); console.log(`PASS real Pi ${name}`); passed++ }
   catch (e) { failed++; console.error(`FAIL real Pi ${name}: ${e.stack}`) }
 }
+async function configChange(name) {
+  const flip = process.env.P438_CONFIG_FLIP === '1'
+  await run(name, 'print', {
+    skillCopy: flip, configFlip: flip,
+    onReady: async info => {
+      const runtimePath = join(info.state, 'reply-capture/runtime.json')
+      await until(() => existsSync(runtimePath) && json(runtimePath).status === 'ready', 'capture ready before config edit')
+      const before = readFileSync(info.config, 'utf8'), beforeIno = statSync(info.config).ino
+      const output = command('bash', [join(info.skill, 'scripts/team'), '--root', info.root, 'config', 'set-task-model', 'routine', 'p396/after-config', '--yes'], { cwd: info.root, env: info.env })
+      writeFileSync(join(info.dir, 'config-change.txt'), output)
+      assert.notEqual(readFileSync(info.config, 'utf8'), before, 'the product CLI really changed task-model configuration')
+      assert.notEqual(statSync(info.config).ino, beforeIno, 'the atomic CLI write really changed the config inode')
+      assert.match(readFileSync(info.config, 'utf8'), /routine=p396\/after-config/)
+      const { inspectRuntime: inspect } = await import(join(info.skill, 'scripts/reply-capture.mjs'))
+      assert.equal(inspect({ ...info, window: 'pm' }).state, 'ready', 'task-model edit leaves runtime ready')
+    },
+    interactive: async info => {
+      await until(() => storeCount(info.state) === 1 && confirmedCount(info.state) === 1, 'marked reply saved after task-model edit')
+      const runtime = json(join(info.state, 'reply-capture/runtime.json'))
+      assert.equal(runtime.status, 'ready', 'capture does not degrade after the changed configuration is re-proved')
+      const { inspectRuntime: inspect } = await import(join(info.skill, 'scripts/reply-capture.mjs'))
+      assert.equal(inspect({ ...info, window: 'pm' }).state, 'ready', 'doctor runtime remains ready after capture')
+      const doctor = spawnSync('bash', [join(info.skill, 'scripts/team'), '--root', info.root, 'doctor'], { cwd: info.root, env: info.env, encoding: 'utf8' })
+      writeFileSync(join(info.dir, 'doctor.txt'), doctor.stdout + doctor.stderr)
+      assert.match(doctor.stdout, /关键回复运行/)
+      assert.match(doctor.stdout, /ready disk=/)
+      const events = jsonl(join(info.dir, 'events.jsonl'))
+      assert(events.filter(e => e.type === 'message_end').every(e => !text(e.message).includes('[[team-reply')), 'the post-edit reply is cleaned')
+      await control(info, 'stop')
+    },
+  })
+}
 try {
   if (selection.includes('print')) await test('builtin print/end/append/entry/settled/raw store/transcript', () => run('print'))
   if (selection.includes('tui')) await test('interactive actual-marker raw PTY and authoritative final cleanup', () => run('tui', 'tui'))
@@ -266,6 +309,18 @@ try {
       },
     }))
   }
+  if (selection.includes('config-change')) await test('task-model CLI edit keeps live capture and doctor ready', () => configChange('config-change'))
+  if (selection.includes('config-mutations')) await test('restoring config hash/inode identity makes the real edit red; restoration is green', async () => {
+    for (const [group, code] of [['config-flip', 1], ['config-control', 0]]) {
+      const result = spawnSync(process.execPath, [fileURLToPath(import.meta.url), '--select=config-change'], {
+        env: { ...process.env, P396_EVIDENCE: join(evidence, group), P438_CONFIG_FLIP: code ? '1' : '0' }, encoding: 'utf8',
+      })
+      const output = result.stdout + result.stderr
+      writeFileSync(join(evidence, `${group}.log`), output)
+      assert.equal(result.status, code, output)
+      assert(output.includes(code ? 'task-model edit leaves runtime ready' : 'passed=1 failed=0'), output)
+    }
+  })
   if (selection.includes('diagnostics')) await test('recover-skip:ineligible is file-only and never appears in the Pi terminal', async () => {
     const info = await run('diagnostics', 'tui', {
       noPublish: true, onReady: invalidateIdentity,
