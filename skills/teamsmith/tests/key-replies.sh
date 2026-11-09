@@ -15,7 +15,7 @@
 #   readonly     只读：缺 store 不建、坏源 hash/mtime 不变、无 mkdir/write（2.3）
 #   workflow     指引：fixture Agent 在五种结果后仍发同一正文、回执 body-free、账本不变（4.1）
 #   flip         坏源码→红→还原→绿：九条具名 guard 的独立 scratch 源码 + 哈希（2.4）
-#   skip-path    缺观测器（/proc/<pid>/io）时可见跳过并点名，而不是判红（V27 M3）
+#   skip-path    缺观测器短样本：三条真实诊断、两项未验证、结果消费者与反例（reply-observer-skip-focus）
 #   capture      marker parser/source/CAS/crash 及私有真 Pi 注入、终稿和依赖 reload（P396）
 #   guide        指引面：PM 提示词/协议/命令表三处纪律在场 + 示例命令对拍真解析器 + 四变异红侧（change: pm-reply-discipline · P267）
 #
@@ -648,6 +648,59 @@ kr_group_paging() {
   eq "paging：bodies 缺失时 list 仍返回元数据（不读正文）" "$(jget "$j4" 'd["total_slots"]')" "123"
 }
 
+# ---------------------------------------------------------------- bounded 的观测专属入口
+# 正常 bounded 先完成坏最新、权限与正文检查，最后才调用这里。强制缺席样本也调用同一入口；
+# 能力检查必须先于 mid 的观测专属准备；bounded 缺席时只发自己的具名 SKIP。
+kr_bounded_observe() { # <big proj> <small proj>
+  local p="$1" q="$2"
+  if ! kr_io_supported; then
+    skip "bounded：缺 /proc/<pid>/io（$(kr_io_why)）—— 读取量断言跳过（点名：内核计数器不可读）"
+    return 0
+  fi
+  local mid; mid="$(kr_new_proj bounded-mid --empty)" || return 1
+  kr_make_big_store "$mid" 60 || { bad "bounded：60 槽夹具建不出来"; return 1; }
+  # 中档（60 槽）与 10 万槽各取一页：一页的读取量必须与历史规模无关
+  kr_observe "$TMP/obs-mid-list" bash -c "cd '$mid' && exec \"\$@\"" _ "${KR_CLEAN[@]}" "$KR_TEAM" --root "$mid" reply list --json
+  kr_observe "$TMP/obs-big-list" bash -c "cd '$p' && exec \"\$@\"" _ "${KR_CLEAN[@]}" "$KR_TEAM" --root "$p" reply list --before 90000 --json
+  local mid_bytes big_bytes mid_sys big_sys d_bytes d_sys
+  mid_bytes="$(kr_obs_rchar "$TMP/obs-mid-list")"; big_bytes="$(kr_obs_rchar "$TMP/obs-big-list")"
+  mid_sys="$(kr_obs_syscr "$TMP/obs-mid-list")"; big_sys="$(kr_obs_syscr "$TMP/obs-big-list")"
+  d_bytes=$((big_bytes - mid_bytes)); d_sys=$((big_sys - mid_sys))
+  # 正控：观测器必须真的看见了这个进程打开过的 store 文件（否则下面的 0 不能当证据）
+  local ctl_fd; ctl_fd="$(kr_obs_fd_count "$TMP/obs-big-list" 'index.v1')"
+  if [ "$ctl_fd" -ge 1 ]; then ok "bounded：观测器正控（看见了 index.v1 的 fd，$ctl_fd 个）"
+  else bad "bounded：观测器看不见 store 的 fd —— 后面的读取量/打开断言不能当证据"; fi
+  eq "bounded：一页读的字节数与历史规模无关（10 万槽 − 60 槽 = ${d_bytes} 字节 ≤ 64 KiB）" \
+    "$([ "$d_bytes" -le 65536 ] && echo ok || echo over)" "ok"
+  eq "bounded：一页的读系统调用数也与历史规模无关（Δsyscr=${d_sys} ≤ 100）" \
+    "$([ "$d_sys" -le 100 ] && echo ok || echo over)" "ok"
+  eq "bounded：list 不打开任何正文文件（fd 证据）" "$(kr_obs_fd_count "$TMP/obs-big-list" '/bodies/')" "0"
+  # bodies/ 目录本身被以 O_PATH 打开（flags 里带 010000000）：O_PATH 的 fd 在内核里无法 getdents，
+  # 所以「不枚举」是结构性的，不只是行为上的。
+  local bflags bdec; bflags="$(kr_obs_fd_flags "$TMP/obs-big-list" '/key-replies/bodies$')"
+  bdec=$(( 0$bflags ))   # fdinfo 的 flags 是八进制字面（前导 0）；O_PATH = 010000000 = 0x200000
+  if [ -n "$bflags" ] && [ $(( bdec & 0x200000 )) -ne 0 ]; then
+    ok "bounded：bodies 目录以 O_PATH 打开（flags=$bflags）—— 结构上不可能枚举"
+  else
+    bad "bounded：bodies 目录不是 O_PATH 打开的（flags=${bflags:-<没看见>}）"
+  fi
+  # summary：只读最后一个槽 —— 与历史规模无关（≤ 2 个槽位的余量）
+  kr_observe "$TMP/obs-mid-sum" bash -c "cd '$mid' && exec \"\$@\"" _ "${KR_CLEAN[@]}" "$KR_TEAM" --root "$mid" __panel-data --block reply_summary
+  kr_observe "$TMP/obs-big-sum" bash -c "cd '$p' && exec \"\$@\"" _ "${KR_CLEAN[@]}" "$KR_TEAM" --root "$p" __panel-data --block reply_summary
+  local s_d; s_d=$(( $(kr_obs_rchar "$TMP/obs-big-sum") - $(kr_obs_rchar "$TMP/obs-mid-sum") ))
+  eq "bounded：summary 的读取量与历史规模无关（Δ=${s_d} 字节 ≤ 8 KiB，即 ≤ 2 个槽位）" \
+    "$([ "$s_d" -le 8192 ] && echo ok || echo over)" "ok"
+  # show：恰打开一个正文文件（fd 证据），且它不带 O_PATH
+  kr_observe "$TMP/obs-show" bash -c "cd '$q' && exec \"\$@\"" _ "${KR_CLEAN[@]}" "$KR_TEAM" --root "$q" reply show 3
+  local sh_d; sh_d=$(( $(kr_obs_rchar "$TMP/obs-show") - $(kr_obs_rchar "$TMP/obs-mid-sum") ))
+  eq "bounded：show 的读取量 = summary（都只读一个槽）+ 那份正文（Δ=${sh_d} 字节 ≤ 64 KiB）" \
+    "$([ "$sh_d" -le 65536 ] && echo ok || echo over)" "ok"
+  local f
+  for f in obs-mid-list obs-big-list obs-mid-sum obs-big-sum obs-show; do
+    kr_ev_save "$TMP/$f.io" "io-$f.txt"; kr_ev_save "$TMP/$f.fds" "fd-$f.txt"
+  done
+}
+
 # ---------------------------------------------------------------- 组：bounded
 kr_group_bounded() {
   section "bounded · 有界读（2.3）"
@@ -668,55 +721,6 @@ kr_group_bounded() {
   # P348 合并（两条 → 一条）：同一次机器出口的两个面（状态 + 没有退回旧标题）。
   jok "$sj" 'd["state"]=="unavailable" and d.get("entry") is None' \
     && ok "bounded：坏最新槽 summary=unavailable 且不退回旧标题" || bad "bounded：坏最新槽的处理不对（$sj）"
-  # 读取量的观测器：内核自述的 /proc/<pid>/io（rchar/syscr）+ /proc/<pid>/fd{,info}（进程真正打开过
-  # 哪些路径、以什么 flags 打开）。无编译器依赖 —— 门禁镜像按 M47 故意 purge 掉 build-essential，
-  # 所以旧版 LD_PRELOAD shim 在那里永远编不出来（V27 的 M3）。观测器不可用（hidepid 等）时**点名跳过**。
-  if ! kr_io_supported; then
-    skip "bounded：缺 /proc/<pid>/io（$(kr_io_why)）—— 读取量断言跳过（点名：内核计数器不可读）"
-    skip "bounded：同上 —— flip/full_scan 也会点名跳过"
-  else
-    local mid; mid="$(kr_new_proj bounded-mid --empty)" || return 1
-    kr_make_big_store "$mid" 60 || { bad "bounded：60 槽夹具建不出来"; return 1; }
-    # 中档（60 槽）与 10 万槽各取一页：一页的读取量必须与历史规模无关
-    kr_observe "$TMP/obs-mid-list" bash -c "cd '$mid' && exec \"\$@\"" _ "${KR_CLEAN[@]}" "$KR_TEAM" --root "$mid" reply list --json
-    kr_observe "$TMP/obs-big-list" bash -c "cd '$p' && exec \"\$@\"" _ "${KR_CLEAN[@]}" "$KR_TEAM" --root "$p" reply list --before 90000 --json
-    local mid_bytes big_bytes mid_sys big_sys d_bytes d_sys
-    mid_bytes="$(kr_obs_rchar "$TMP/obs-mid-list")"; big_bytes="$(kr_obs_rchar "$TMP/obs-big-list")"
-    mid_sys="$(kr_obs_syscr "$TMP/obs-mid-list")"; big_sys="$(kr_obs_syscr "$TMP/obs-big-list")"
-    d_bytes=$((big_bytes - mid_bytes)); d_sys=$((big_sys - mid_sys))
-    # 正控：观测器必须真的看见了这个进程打开过的 store 文件（否则下面的 0 不能当证据）
-    local ctl_fd; ctl_fd="$(kr_obs_fd_count "$TMP/obs-big-list" 'index.v1')"
-    if [ "$ctl_fd" -ge 1 ]; then ok "bounded：观测器正控（看见了 index.v1 的 fd，$ctl_fd 个）"
-    else bad "bounded：观测器看不见 store 的 fd —— 后面的读取量/打开断言不能当证据"; fi
-    eq "bounded：一页读的字节数与历史规模无关（10 万槽 − 60 槽 = ${d_bytes} 字节 ≤ 64 KiB）" \
-      "$([ "$d_bytes" -le 65536 ] && echo ok || echo over)" "ok"
-    eq "bounded：一页的读系统调用数也与历史规模无关（Δsyscr=${d_sys} ≤ 100）" \
-      "$([ "$d_sys" -le 100 ] && echo ok || echo over)" "ok"
-    eq "bounded：list 不打开任何正文文件（fd 证据）" "$(kr_obs_fd_count "$TMP/obs-big-list" '/bodies/')" "0"
-    # bodies/ 目录本身被以 O_PATH 打开（flags 里带 010000000）：O_PATH 的 fd 在内核里无法 getdents，
-    # 所以「不枚举」是结构性的，不只是行为上的。
-    local bflags bdec; bflags="$(kr_obs_fd_flags "$TMP/obs-big-list" '/key-replies/bodies$')"
-    bdec=$(( 0$bflags ))   # fdinfo 的 flags 是八进制字面（前导 0）；O_PATH = 010000000 = 0x200000
-    if [ -n "$bflags" ] && [ $(( bdec & 0x200000 )) -ne 0 ]; then
-      ok "bounded：bodies 目录以 O_PATH 打开（flags=$bflags）—— 结构上不可能枚举"
-    else
-      bad "bounded：bodies 目录不是 O_PATH 打开的（flags=${bflags:-<没看见>}）"
-    fi
-    # summary：只读最后一个槽 —— 与历史规模无关（≤ 2 个槽位的余量）
-    kr_observe "$TMP/obs-mid-sum" bash -c "cd '$mid' && exec \"\$@\"" _ "${KR_CLEAN[@]}" "$KR_TEAM" --root "$mid" __panel-data --block reply_summary
-    kr_observe "$TMP/obs-big-sum" bash -c "cd '$p' && exec \"\$@\"" _ "${KR_CLEAN[@]}" "$KR_TEAM" --root "$p" __panel-data --block reply_summary
-    local s_d; s_d=$(( $(kr_obs_rchar "$TMP/obs-big-sum") - $(kr_obs_rchar "$TMP/obs-mid-sum") ))
-    eq "bounded：summary 的读取量与历史规模无关（Δ=${s_d} 字节 ≤ 8 KiB，即 ≤ 2 个槽位）" \
-      "$([ "$s_d" -le 8192 ] && echo ok || echo over)" "ok"
-    # show：恰打开一个正文文件（fd 证据），且它不带 O_PATH
-    kr_observe "$TMP/obs-show" bash -c "cd '$q' && exec \"\$@\"" _ "${KR_CLEAN[@]}" "$KR_TEAM" --root "$q" reply show 3
-    local sh_d; sh_d=$(( $(kr_obs_rchar "$TMP/obs-show") - $(kr_obs_rchar "$TMP/obs-mid-sum") ))
-    eq "bounded：show 的读取量 = summary（都只读一个槽）+ 那份正文（Δ=${sh_d} 字节 ≤ 64 KiB）" \
-      "$([ "$sh_d" -le 65536 ] && echo ok || echo over)" "ok"
-    for f in obs-mid-list obs-big-list obs-mid-sum obs-big-sum obs-show; do
-      kr_ev_save "$TMP/$f.io" "io-$f.txt"; kr_ev_save "$TMP/$f.fds" "fd-$f.txt"
-    done
-  fi
   # 不枚举的独立证据（受控文件接口）：bodies/ 去掉读权限（0111）——枚举必然 EACCES，
   # 按名直开仍可用。先证明这个金丝雀真的看得见枚举，再断言读命令在同样权限下照常。
   local KR_B="$KR/bodies" KR_QB="$q/.pi/team/state/key-replies/bodies"
@@ -750,6 +754,8 @@ kr_group_bounded() {
   eq "bounded：同一 store 的 list 照常（不读正文）" "$rc_noread_list" "0"
   eq "bounded：同一 store 的 summary 照常（不读正文）" "$rc_noread_sum" "0"
   kr_ev_save "$TMP/obs-noread-show.out" "obs-body-unreadable-show.txt"
+  # 读取量观测最后执行：上面的坏最新、不可枚举、正文不可读与权限恢复不依赖观测器。
+  kr_bounded_observe "$p" "$q" || return 1
 }
 
 # ---------------------------------------------------------------- 组：readonly
@@ -863,6 +869,31 @@ kr_flip_copy() { # → 独立 scratch 源码树
 }
 kr_hash_file() { sha256sum "$1" 2>/dev/null | cut -d' ' -f1; }
 
+# full_scan probe 与缺席样本共用。能力判定必须先于 60/100000 槽准备。
+flip_probe_full_scan() { # <proj> <body>
+  local p="$1" b="$2"
+  kr_io_supported || return 9   # 9 = 观测器缺席 → 具名跳过，不判红
+  local mid; mid="$(kr_new_proj "flip-scan-mid" --empty)" || return 1
+  kr_make_big_store "$mid" 60 || return 1
+  kr_make_big_store "$p" 100000 || return 1
+  # 观测前缀不能与夹具项目同名（$TMP/flip-scan-mid 是项目目录，.io 会写到目录上）
+  kr_observe "$TMP/obs-flip-mid" bash -c "cd '$mid' && exec \"\$@\"" _ "${KR_CLEAN[@]}" "$KR_TEAM" --root "$mid" reply list --json
+  kr_observe "$TMP/obs-flip-big" bash -c "cd '$p' && exec \"\$@\"" _ "${KR_CLEAN[@]}" "$KR_TEAM" --root "$p" reply list --json
+  local big mid d brc
+  big="$(kr_obs_rchar "$TMP/obs-flip-big")"; mid="$(kr_obs_rchar "$TMP/obs-flip-mid")"
+  brc="$(kr_obs_rc "$TMP/obs-flip-big")"
+  d=$(( big - mid ))
+  printf 'flip/full_scan：big=%s mid=%s rc=%s Δrchar=%s\n' "$big" "$mid" "$brc" "$d" >>"$TMP/flip-scan.log"
+  [ "$d" -le 65536 ]
+}
+
+# flip_run 与短缺席样本共用的正常结果消费者。返回 0 表示已经按缺席收口；其它结果交回调用者。
+kr_flip_absence_result() { # <arm> <probe rc>
+  local a="$1" r1="$2"
+  [ "$r1" = "9" ] || return 1
+  skip "flip/$a：观测器缺席（$(kr_io_why)）—— 该臂跳过，未得结论"
+}
+
 kr_group_flip() {
   section "flip · 坏源码→红→还原→绿（2.4）"
   local B="$TMP/flip-body.md"; printf 'flip body\n' >"$B"
@@ -879,9 +910,7 @@ kr_group_flip() {
     if [ "$after_mut" = "$before_hash" ]; then bad "flip/$a：matched=0（源码没被改）"; return 1; fi
     KR_TEAM="$mutant/scripts/team" KR_SKILL="$mutant" "$probe" "$proj" "$B" >/dev/null 2>&1
     local r1=$?
-    if [ "$r1" = "9" ]; then
-      # 9 = 该臂依赖的观测器缺席：**可见跳过并点名**（不判红、也不算绿）
-      skip "flip/$a：观测器缺席（$(kr_io_why)）—— 该臂跳过，未得结论"
+    if kr_flip_absence_result "$a" "$r1"; then
       rm -rf "$mutant"
       return 0
     fi
@@ -938,24 +967,7 @@ kr_group_flip() {
   }
   kr_flip_mutate_no_cursor() { perl -0pi -e 's/const nextBefore = oldest > 1 \? oldest : null/const nextBefore = null/' "$1"; }
   flip_run no_cursor flip_probe_no_cursor
-  # 探针 ⑤：全历史读 → 一页读量越界。用内核计数器：10 万槽 store 的一页读取量必须与 60 槽 store
-  # 的一页几乎相同；全扫会读 400 MB，任何一次采样都抓得住。观测器不可用 → 该臂**可见跳过**。
-  flip_probe_full_scan() {
-    local p="$1" b="$2"
-    kr_io_supported || return 9   # 9 = 观测器缺席 → 具名跳过，不判红
-    local mid; mid="$(kr_new_proj "flip-scan-mid" --empty)" || return 1
-    kr_make_big_store "$mid" 60 || return 1
-    kr_make_big_store "$p" 100000 || return 1
-    # 观测前缀不能与夹具项目同名（$TMP/flip-scan-mid 是项目目录，.io 会写到目录上）
-    kr_observe "$TMP/obs-flip-mid" bash -c "cd '$mid' && exec \"\$@\"" _ "${KR_CLEAN[@]}" "$KR_TEAM" --root "$mid" reply list --json
-    kr_observe "$TMP/obs-flip-big" bash -c "cd '$p' && exec \"\$@\"" _ "${KR_CLEAN[@]}" "$KR_TEAM" --root "$p" reply list --json
-    local big mid d brc
-    big="$(kr_obs_rchar "$TMP/obs-flip-big")"; mid="$(kr_obs_rchar "$TMP/obs-flip-mid")"
-    brc="$(kr_obs_rc "$TMP/obs-flip-big")"
-    d=$(( big - mid ))
-    printf 'flip/full_scan：big=%s mid=%s rc=%s Δrchar=%s\n' "$big" "$mid" "$brc" "$d" >>"$TMP/flip-scan.log"
-    [ "$d" -le 65536 ]
-  }
+  # 探针 ⑤：全历史读 → 一页读量越界。probe 在组外，与短缺席样本共用。
   kr_flip_mutate_full_scan() { perl -0pi -e 's/entries\.length < LIST_PAGE/entries.length < slots/' "$1"; }
   flip_run full_scan flip_probe_full_scan
   # 探针 ⑥：跟随软链 → 外根文件被当索引读
@@ -1009,45 +1021,230 @@ kr_group_flip() {
   flip_run no_enumerate flip_probe_no_enumerate
 }
 
-# ---------------------------------------------------------------- 组：skip-path（M3）
+# ---------------------------------------------------------------- skip-path 的短缺席样本
+kr_skip_sample_index_facts() { # <owned root> <before|after>；只报事实，不记产品通过/失败
+  local root="$1" when="$2"
+  local bp="$root/bounded-project/.pi/team/state/key-replies/index.v1"
+  local fp="$root/full-scan-project/.pi/team/state/key-replies/index.v1"
+  local indexes count bi=absent fi=absent
+  [ ! -e "$bp" ] || bi=present
+  [ ! -e "$fp" ] || fi=present
+  indexes="$(find "$root" -type f -name index.v1 -print)"
+  if [ -n "$indexes" ]; then count="$(printf '%s\n' "$indexes" | wc -l | tr -d ' ')"; else count=0; fi
+  printf 'reply-observer-sample-%s: bounded-index=%s full-scan-index=%s prepared-indexes=%s\n' \
+    "$when" "$bi" "$fi" "$count"
+  if [ "$count" -gt 0 ]; then printf 'reply-observer-sample-index: %s\n' "$indexes"; fi
+}
+
+kr_skip_sample_collect() {
+  # 命令替换会捕获 fd 1；fd 3 也必须改向，否则 kr_paths_check 等报告行会泄进父日志。
+  local PASS=0 FAIL=0 SKIP=0 GROUP_PASS=0 GROUP_FAIL=0 KR_REPORT_FD=1
+  exec 3>&1
+  local root="$TMP/reply-observer-absence-sample"
+  rm -rf "$root"
+  local bp="$root/bounded-project" fp="$root/full-scan-project"
+  mkdir -p "$bp/.pi/team" "$fp/.pi/team"
+  local body="$root/body.md"; printf 'absence sample\n' >"$body"
+  kr_skip_sample_index_facts "$root" before
+
+  kr_driver_observer_notice
+  kr_bounded_observe "$bp" "$bp"
+  local bounded_rc=$?
+  if [ "$bounded_rc" -ne 0 ]; then bad "reply-observer sample：bounded 观测入口异常返回 rc=$bounded_rc"; fi
+
+  flip_probe_full_scan "$fp" "$body"
+  local full_rc=$?
+  if kr_flip_absence_result full_scan "$full_rc"; then
+    :
+  elif [ "$full_rc" -eq 0 ]; then
+    ok "reply-observer sample：flip/full_scan 被误算为观测通过"
+  else
+    bad "reply-observer sample：flip/full_scan 被误判为产品失败（rc=$full_rc）"
+  fi
+
+  # 清理前留下文件事实；判定同时要求 before/after 都没有任何观测专属索引。
+  kr_skip_sample_index_facts "$root" after
+  printf '\n== reply-observer absence sample 结果 == ✓%s ✗%s SKIP%s\n' "$PASS" "$FAIL" "$SKIP"
+  [ "$FAIL" -eq 0 ]
+}
+
+kr_skip_sample_clean() {
+  printf '%s\n' "$1" | sed 's/\x1b\[[0-9;]*m//g'
+}
+
+kr_skip_sample_diagnose() { # <sample output> → 失败时只返回缺项文本，不打父级断言
+  local clean reason id want count misses=""
+  clean="$(kr_skip_sample_clean "$1")"
+  reason="$(TEAM_REPLY_NO_PROC_IO=1 kr_io_why)"
+  for id in driver bounded full_scan; do
+    case "$id" in
+      driver) want="key-replies: 可见跳过 —— /proc/<pid>/io 不可读（${reason}）：bounded 的读取量断言与 flip/full_scan 会点名跳过" ;;
+      bounded) want="  SKIP bounded：缺 /proc/<pid>/io（${reason}）—— 读取量断言跳过（点名：内核计数器不可读）" ;;
+      full_scan) want="  SKIP flip/full_scan：观测器缺席（${reason}）—— 该臂跳过，未得结论" ;;
+    esac
+    count="$(printf '%s\n' "$clean" | grep -Fxc -- "$want")"
+    if [ "$count" -ne 1 ]; then misses+="${id}诊断=${count}次;"; fi
+  done
+  [ -z "$misses" ] || printf '%s' "$misses"
+  [ -z "$misses" ]
+}
+
+kr_skip_sample_judge() { # <real rc> <sample output> → 0 证据完整；1 输出具体差异
+  local rc="$1" out="$2" clean misses="" detail
+  clean="$(kr_skip_sample_clean "$out")"
+  if detail="$(kr_skip_sample_diagnose "$out")"; then :; else misses+="诊断[$detail];"; fi
+  if [ "$rc" -ne 0 ]; then misses+="真实退出=${rc};"; fi
+
+  local result='== reply-observer absence sample 结果 == ✓0 ✗0 SKIP2'
+  local result_count
+  result_count="$(printf '%s\n' "$clean" | grep -Fxc -- "$result")"
+  if [ "$result_count" -ne 1 ]; then misses+="完整结果行=${result_count}份;"; fi
+  if [ "$(printf '%s\n' "$clean" | tail -1)" != "$result" ]; then misses+="结果行不是末行;"; fi
+  if printf '%s\n' "$clean" | grep -Fq '== P234 key-replies 结果 =='; then misses+="子样本混入父级结果前缀;"; fi
+
+  local skip_count pass_lines fail_lines
+  skip_count="$(printf '%s\n' "$clean" | awk 'index($0,"SKIP") && index($0,"== reply-observer absence sample 结果 ==") != 1 {n++} END {print n+0}')"
+  if [ "$skip_count" -ne 2 ]; then misses+="观测跳过数=${skip_count}（应为2）;"; fi
+  pass_lines="$(printf '%s\n' "$clean" | awk 'index($0,"✓") && index($0,"== reply-observer absence sample 结果 ==") != 1 {print}')"
+  fail_lines="$(printf '%s\n' "$clean" | awk 'index($0,"✗") && index($0,"== reply-observer absence sample 结果 ==") != 1 {print}')"
+  if [ -n "$pass_lines" ]; then misses+="意外通过[$(printf '%s' "$pass_lines" | head -1)];"; fi
+  if [ -n "$fail_lines" ]; then misses+="意外失败[$(printf '%s' "$fail_lines" | head -1)];"; fi
+
+  local before after
+  before='reply-observer-sample-before: bounded-index=absent full-scan-index=absent prepared-indexes=0'
+  after='reply-observer-sample-after: bounded-index=absent full-scan-index=absent prepared-indexes=0'
+  if ! printf '%s\n' "$clean" | grep -Fqx -- "$before"; then misses+="准备顺序[调用前索引事实缺失];"; fi
+  if ! printf '%s\n' "$clean" | grep -Fqx -- "$after"; then
+    detail="$(printf '%s\n' "$clean" | grep -E '^reply-observer-sample-(after|index):' | tr '\n' ' ')"
+    misses+="准备顺序[${detail:-调用后索引事实缺失}];"
+  fi
+  [ -z "$misses" ] || printf '%s' "$misses"
+  [ -z "$misses" ]
+}
+
+kr_skip_control_red() { # <label> <judge 必须点名的文本>；在当前 subshell 的函数覆盖下收集
+  local label="$1" expect="$2" out rc jout jrc
+  if out="$(TEAM_REPLY_NO_PROC_IO=1 kr_skip_sample_collect 2>&1)"; then rc=0; else rc=$?; fi
+  if jout="$(kr_skip_sample_judge "$rc" "$out")"; then jrc=0; else jrc=$?; fi
+  {
+    printf '\n=== %s · sample rc=%s judge rc=%s ===\n%s\n--- judgement ---\n%s\n' \
+      "$label" "$rc" "$jrc" "$out" "$jout"
+  } >>"$TMP/skip-path-controls.log"
+  [ "$jrc" -ne 0 ] && case "$jout" in *"$expect"*) return 0 ;; esac
+  return 1
+}
+
+kr_skip_control_green() { # <label>；离开覆盖 subshell 后用真实函数收集并判定
+  local label="$1" out rc jout jrc
+  if out="$(TEAM_REPLY_NO_PROC_IO=1 kr_skip_sample_collect 2>&1)"; then rc=0; else rc=$?; fi
+  if jout="$(kr_skip_sample_judge "$rc" "$out")"; then jrc=0; else jrc=$?; fi
+  {
+    printf '\n=== %s · sample rc=%s judge rc=%s ===\n%s\n--- judgement ---\n%s\n' \
+      "$label" "$rc" "$jrc" "$out" "$jout"
+  } >>"$TMP/skip-path-controls.log"
+  [ "$rc" -eq 0 ] && [ "$jrc" -eq 0 ]
+}
+
+kr_skip_preparation_control() {
+  local failed=0
+  (
+    # 保存原函数后在当前 subshell 覆盖：先真实建一槽，再委托原缺席处理，绝不递归进入 skip-path。
+    eval "$(declare -f kr_bounded_observe | sed '1s/^kr_bounded_observe /kr_bounded_observe_delegated /')"
+    kr_bounded_observe() {
+      kr_make_big_store "$1" 1 || return 1
+      kr_bounded_observe_delegated "$@"
+    }
+    kr_skip_control_red preparation-order 准备顺序
+  ) || failed=1
+  kr_skip_control_green preparation-restore || failed=1
+  return "$failed"
+}
+
+kr_skip_negative_diagnostics() {
+  local failed=0
+  ( kr_driver_observer_notice() { return 0; }
+    kr_skip_control_red missing-driver driver ) || failed=1
+  kr_skip_control_green missing-driver-restore || failed=1
+  (
+    kr_bounded_observe() {
+      skip "unrelated：任意跳过①"; skip "unrelated：任意跳过②"; skip "unrelated：任意跳过③"
+    }
+    kr_skip_control_red missing-bounded-with-unrelated-skips bounded
+  ) || failed=1
+  kr_skip_control_green missing-bounded-restore || failed=1
+  ( kr_flip_absence_result() { return 0; }
+    kr_skip_control_red missing-full-scan full_scan ) || failed=1
+  kr_skip_control_green missing-full-scan-restore || failed=1
+  if [ "$failed" -eq 0 ]; then
+    ok "skip-path：反例·三处诊断各自不可缺，无关 SKIP 不能顶数且逐项还原"
+  else
+    bad "skip-path：反例·缺诊断判定或还原不成立（详见 skip-path-controls.log）"
+  fi
+}
+
+kr_skip_negative_success() {
+  local failed=0
+  ( kr_bounded_observe() { ok "bounded：读取量被误算通过"; }
+    kr_skip_control_red bounded-false-success 意外通过 ) || failed=1
+  kr_skip_control_green bounded-false-success-restore || failed=1
+  ( flip_probe_full_scan() { return 0; }
+    kr_skip_control_red full-scan-false-success 意外通过 ) || failed=1
+  kr_skip_control_green full-scan-false-success-restore || failed=1
+  if [ "$failed" -eq 0 ]; then
+    ok "skip-path：反例·bounded/full_scan 缺席都不能误算观测通过且逐项还原"
+  else
+    bad "skip-path：反例·误算成功的判定或还原不成立（详见 skip-path-controls.log）"
+  fi
+}
+
+kr_skip_negative_failure() {
+  local failed=0
+  ( kr_bounded_observe() { bad "bounded：被误判为产品失败"; return 1; }
+    kr_skip_control_red bounded-false-failure 意外失败 ) || failed=1
+  kr_skip_control_green bounded-false-failure-restore || failed=1
+  ( flip_probe_full_scan() { return 1; }
+    kr_skip_control_red full-scan-false-failure 意外失败 ) || failed=1
+  kr_skip_control_green full-scan-false-failure-restore || failed=1
+  if [ "$failed" -eq 0 ]; then
+    ok "skip-path：反例·bounded/full_scan 缺席都不能误判产品失败且逐项还原"
+  else
+    bad "skip-path：反例·误判产品失败的判定或还原不成立（详见 skip-path-controls.log）"
+  fi
+}
+
+# ---------------------------------------------------------------- 组：skip-path（七条旧判断 → 六条聚焦判断）
 kr_group_skip_path() {
-  section "skip-path · 缺观测器时可见跳过并点名（M3）"
-  # 旋钮本身生效（否则下面的子进程证明是空对空）
+  section "skip-path · 缺观测器短样本与结果分类"
   if TEAM_REPLY_NO_PROC_IO=1 bash -c '. "$1"; kr_io_supported' _ "$SELF_DIR/lib/proc-io.sh"; then
     bad "skip-path：TEAM_REPLY_NO_PROC_IO=1 没有让观测器判为不可用（旋钮失效）"
   else
     ok "skip-path：旋钮让观测器判为不可用"
   fi
-  # 子进程里跑 bounded + flip：必须点名跳过、没有 ✗、退出 0（可见跳过 ≠ 静默通过，也 ≠ 红）
-  local out="$TMP/skip-path.out" rc
-  # P357/P324：嵌套子进程跑的是**用完就扔**的隔离基，门禁的 `--keep` 说的是它自己那个根。继承了保留
-  # 开关时子进程末行会变成「保留临时根：…」而不是结果行 —— 那条断言测的「跑完整轮」就永远不成立。
-  TEAM_REPLY_NO_PROC_IO=1 env -u TEAM_TMP_KEEP timeout 900 bash "$SELF_DIR/key-replies.sh" --select bounded,flip >"$out" 2>&1; rc=$?
-  # 实质判据有两条：子进程跑完了整轮（末行是结果行且 ✗0）且没有红行。失败时**重跑一次带 trace**
-  # 只为取证（不是掩盖红：红照旧判红，只是把成因写进断言与证据包）。
-  local last
-  last="$(tail -1 "$out" 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g')"
-  case "$last" in
-    *"✗0"*) ok "skip-path：缺观测器时子进程跑完整轮且 ✗0（末行：${last}）" ;;
-    *)
-      local trace="$TMP/skip-path-trace.out"
-      TEAM_REPLY_NO_PROC_IO=1 env -u TEAM_TMP_KEEP timeout 600 bash -x "$SELF_DIR/key-replies.sh" --select bounded,flip >"$trace" 2>&1
-      kr_ev_save "$trace" "skip-path-failure-trace.txt"
-      bad "skip-path：子进程没跑完整轮（末行=[${last:-<空>}]，rc=$rc，子进程日志长度=$(stat -c %s "$out" 2>/dev/null || echo 0)）—— 带 trace 的重跑见证据包 skip-path-failure-trace.txt；trace 尾部=[$(tail -3 "$trace" 2>/dev/null | tr '\n' ' ' | cut -c1-200)]"
-      ;;
-  esac
-  has "skip-path：点名缺 /proc/<pid>/io" "$(cat "$out")" "缺 /proc/<pid>/io"
-  has "skip-path：bounded 的读取量断言点名跳过" "$(cat "$out")" "读取量断言跳过"
-  has "skip-path：flip/full_scan 也点名跳过" "$(cat "$out")" "flip/full_scan：观测器缺席"
-  local reds; reds="$(grep '✗' "$out" 2>/dev/null | grep -v '结果 ==' || true)"
-  if [ -n "$reds" ]; then
-    bad "skip-path：跳过路径里出现了红（$(printf '%s' "$reds" | head -1 | cut -c1-120)）"
+
+  : >"$TMP/skip-path-controls.log"
+  local out rc diag judge
+  if out="$(TEAM_REPLY_NO_PROC_IO=1 kr_skip_sample_collect 2>&1)"; then rc=0; else rc=$?; fi
+  printf '%s\n' "$out" >"$TMP/skip-path.out"
+  if diag="$(kr_skip_sample_diagnose "$out")"; then
+    ok "skip-path：驱动/bounded/full_scan 三条缺席诊断及理由完整"
   else
-    ok "skip-path：跳过路径里没有红（结果行的 ✗0 不算）"
+    bad "skip-path：缺席诊断集合不完整（$diag）"
   fi
-  local skips; skips="$(grep -c 'SKIP' "$out" 2>/dev/null || echo 0)"
-  if [ "$skips" -ge 3 ]; then ok "skip-path：子进程打印了 $skips 条可见跳过"; else bad "skip-path：可见跳过只有 $skips 条"; fi
-  kr_ev_save "$out" "skip-path-bounded-flip.txt"
+  if judge="$(kr_skip_sample_judge "$rc" "$out")"; then
+    if kr_skip_preparation_control; then
+      ok "skip-path：样本 rc=0、✓0 ✗0 SKIP2、无索引；一槽准备反例及还原创立"
+    else
+      bad "skip-path：准备顺序反例或还原不成立（详见 skip-path-controls.log）"
+    fi
+  else
+    # 父级唯一定位标签：外部损坏/吞错对照靠它证明普通样本失败确实被消费。
+    bad "skip-path：缺席诊断/分类不完整（$judge；样本rc=$rc）"
+  fi
+  kr_skip_negative_diagnostics
+  kr_skip_negative_success
+  kr_skip_negative_failure
+  kr_ev_save "$TMP/skip-path.out" "skip-path-focused-sample.txt"
+  kr_ev_save "$TMP/skip-path-controls.log" "skip-path-focused-controls.txt"
 }
 
 # ---------------------------------------------------------------- 组：guide（change: pi-marker-key-replies · P396；判据面沿用 P267/P301）
@@ -1395,11 +1592,15 @@ kr_group_guide() {
 }
 
 # ---------------------------------------------------------------- 驱动
+kr_driver_observer_notice() {
+  if ! kr_io_supported; then
+    printf 'key-replies: 可见跳过 —— /proc/<pid>/io 不可读（%s）：bounded 的读取量断言与 flip/full_scan 会点名跳过\n' \
+      "$(kr_io_why)" >&2
+  fi
+}
+
 if [ -n "$KR_EV" ]; then mkdir -p "$KR_EV" 2>/dev/null || true; kr_ev_note "run start $(date -u +%Y-%m-%dT%H:%M:%SZ)"; fi
-if ! kr_io_supported; then
-  printf 'key-replies: 可见跳过 —— /proc/<pid>/io 不可读（%s）：bounded 的读取量断言与 flip/full_scan 会点名跳过\n' \
-    "$(kr_io_why)" >&2
-fi
+kr_driver_observer_notice
 
 kr_group_capture() {
   section 'capture：真 parser/source/writer 与隔离 Pi 生命周期'
