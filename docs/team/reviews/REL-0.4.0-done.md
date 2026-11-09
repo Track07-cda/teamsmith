@@ -1,0 +1,3 @@
+- 2026-11-09T01:57:04Z · `team board set REL-0.4.0 done` · FORCED：PM 显式覆盖（理由：0.4.0 已发布；公开 CI run 41962097724 四路全绿，发布记录 docs/team/reviews/release-0.4.0.md）
+  -   - ① 复验记录 docs/team/reviews/REL-0.4.0.md：不存在
+  -   - ② 分支是否已并入 main：找不到 REL-0.4.0 的分支
