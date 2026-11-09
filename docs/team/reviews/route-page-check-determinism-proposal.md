@@ -1,10 +1,12 @@
 # route-page-check-determinism · 提案审阅
 
-当前判定：**REVIEW — 返修候选复审中，未批准 Apply**
+当前判定：**ACCEPTED — 可以派 Apply，尚未实施**
 
-返修候选：`68f82553`；定点复审：V131（V130 原审阅者 dev3）。PM 对返修差异重跑 OpenSpec 22/22、change strict、spec refs 121、section-select ok13、账本禁令 hits0、diff check，均通过。以下为 V130 对上一候选 `9ac9a709` 的裁定与返修要求。
+接受候选：`68f82553`。V131（原审阅者 dev3）确认 V130 五项与直接联动全部关闭，报告 `docs/team/reports/V131-dev3.md`。PM 已复核无附带阻断条件。
 
-上一轮候选：`9ac9a709`（P429，作者 dev2）。独立审阅 V130（dev3）报告：`docs/team/reports/V130-dev3.md`。
+Apply 必须保留一条精度边界：④只要求正确的列 0 归属 finding，**不得断言 FIND==1**；受损 board 页还可能产生集差 finding。真实走查两个失败传播调用点仍由实现者与独立复验审查，不冒充行为测试。
+
+历史候选：`9ac9a709`（P429，作者 dev2）。独立审阅 V130（dev3）报告：`docs/team/reports/V130-dev3.md`。
 
 ## 已关闭的结构检查
 
