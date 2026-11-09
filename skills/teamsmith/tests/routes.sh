@@ -16,11 +16,11 @@
 #           (probes assert the EFFECT, never the exit code). The set of keys needing a probe is derived
 #           from the schema, so a note added without one is RED naming the key.
 #
-#   flips   ten mutations that MUST redden their guard (a field defect, a sibling flag, a swallowing
-#           parser, an unattributable line, a fake schema route, an unprobed note, a broken promise, a
-#           nested run that does not reap, an unclaimed route, a mutated repair), plus a control arm on
-#           the last tree that must stay green, plus two red sides of the landing check itself. They are
-#           the walk's own proof that it can fail.
+#   pages   file-facing samples for the former column-zero, undeclared-usage and unread-level arms:
+#           two damaged/normal single-page renderer pairs plus menu/group/command file judgement.
+#   flips   the remaining parser, schema-promise, cleanup and refusal mutations that MUST redden their
+#           guard, a control arm that must stay green, two landing-check red sides, and one unconditional
+#           non-FAST invocation of pages. They are the walk's own proof that it can fail.
 #           Every mutation must PROVE IT LANDED (target text 1→0 / new text 0→1, and the copy must
 #           differ from the pristine file byte-wise) BEFORE its verdict is judged: a silent no-op patch is
 #           reported as `变异没落地（夹具缺陷）`, never as `没有兑现` (M21). And every verdict reads the
@@ -28,7 +28,7 @@
 #           matched log as unmatched (grep -q exits first, printf takes SIGPIPE, the pipeline turns 141).
 #
 # Usage / knobs:
-#   bash skills/teamsmith/tests/routes.sh [walk] [control] [promises] [refusals] [flips]
+#   bash skills/teamsmith/tests/routes.sh [walk] [control] [promises] [refusals] [pages] [flips]
 #   TEAM_ROUTES_TREE=<tree>     tree under test (default: this checkout; flips use scratch copies)
 #   TEAM_ROUTES_KEEP=1          keep the fixture root and print it
 #   TEAM_ROUTES_TIMEOUT=<s>     per-probe timeout, default 15 (containment, never a verdict: a probe
@@ -97,13 +97,17 @@ ok()      { printf '  \033[32m✓\033[0m %s\n' "$1"; PASS=$((PASS + 1)); }
 finding() { printf '  \033[31m✗\033[0m %s\n' "$1"; FIND=$((FIND + 1)); }
 skip()    { printf '  \033[33mSKIP\033[0m %s\n' "$1"; SKIP=$((SKIP + 1)); }
 
+[ -f "$here/lib/routes-pages.sh" ] || { printf 'routes: 没有共享页面判定：%s\n' "$here/lib/routes-pages.sh" >&2; exit 3; }
+# shellcheck source=tests/lib/routes-pages.sh
+. "$here/lib/routes-pages.sh"
+
 [ -f "$team" ] || { printf 'routes: 没有 CLI：%s\n' "$team" >&2; exit 3; }
 [ -f "$perf_sh" ] || { printf 'routes: 没有 tests/perf.sh：%s\n' "$perf_sh" >&2; exit 3; }
 TIMEOUT_BIN=""
 command -v timeout >/dev/null 2>&1 && TIMEOUT_BIN=timeout
 
 SECTIONS=("$@")
-# 段集是**显式**的：给了段名就只跑给的段；不带段名 = 全部四段（FAST 下 flips 按下面的 skip 可见跳过）。
+# 段集是**显式**的：给了段名就只跑给的段；不带段名跑真实走查与 flips（pages 由 flips 调用，也可显式运行）。
 # 旧写法给任何不含 flips 的子集追加 flips —— flips 的每一臂都在 scratch 树上再跑一遍
 # `routes.sh walk`，那个嵌套 run 又被追加 flips，于是自己生自己：实测进程链每 ~40 秒长一层、
 # 跑 12 分钟不返回（08:08 → 08:20，32 个进程），只能人工杀。子集的边界由调用者给。
@@ -254,165 +258,6 @@ mr_known_tables() {
 }
 
 # ── Walk A: parse `team help` (awk), then probe every claim ─────────────────────────────────────────
-mr_write_parser() {
-cat > "$tmp/walk-a.awk" <<'AWK'
-function fail(ln, msg) { printf "FAIL\t%d\t%s\n", ln, msg }
-function tokenize(s, arr, offs,   rest, tok, n, pos) {
-  n=0; rest=s; pos=1
-  while (match(rest, /\[[^]]*\]|[^ \t]+/)) {
-    tok=substr(rest, RSTART, RLENGTH)
-    n++; arr[n]=tok; offs[n]=pos+RSTART-1
-    pos += RSTART-1+RLENGTH; rest=substr(rest, RSTART+RLENGTH)
-  }
-  return n
-}
-function isph(t) {
-  if (t ~ /^<.*>$/) return 1
-  if (t ~ /^".*"$/ || t ~ /^'.*'$/) return 1
-  if (t=="..." || t=="…" || t=="ID" || t=="N" || t=="X") return 1
-  return 0
-}
-function addverb(w) { if (!(w in VERBW)) { VERBW[w]=1; NV++; VERBW_LIST[NV]=w } }
-function lastwordpos(s, w,   re, off, best) {
-  re = "(^|[ \t])" w "([^ \t]|$)"
-  off=0; best=0
-  while (off < length(s) && match(substr(s, off+1), re)) {
-    best = off + RSTART
-    off = best + RLENGTH - 2
-    if (RLENGTH <= 0) break
-  }
-  return best
-}
-function emit(ln, path, flag, key) {
-  key = path "\t" flag
-  if (key in EMITTED) return
-  EMITTED[key]=1
-  printf "CLAIM\t%d\t%s\t%s\n", ln, path, flag
-}
-function one_fragment(frag, ln,   nt, toks, offs, i, t, core, j, k, na, alts, ok, usage_end, rest, base, fl, fpos, bind, best, w, p, nnp, newp, isbr) {
-  nt = tokenize(frag, toks, offs)
-  # `version / help` (and only that shape): a plain ` / ` splits into fragments when BOTH sides
-  # start with a command; `perf … （交互首帧 / 帧装配 / …）` is description text and must not split.
-  if (nt >= 1) {
-    # handled by the caller (expand_slash)
-  }
-  t = toks[1]; gsub(/^\[|\]$/, "", t)
-  if (!(t in TOP)) { fail(ln, "这一行无法归属到命令（首 token「" t "」不是 CLI 的命令）：" frag); return }
-  NP=1; PATHS[1]=t; NV=0; delete VERBW; delete VERBW_LIST; delete EMITTED
-  usage_end = offs[1]+length(toks[1])-1
-  for (i=2; i<=nt; i++) {
-    t=toks[i]
-    isbr = (t ~ /^\[.*\]$/)
-    core=t; if (isbr) core=substr(t,2,length(t)-2)
-    if (isph(core) || core ~ /^-/) { usage_end = offs[i]+length(t)-1; continue }
-    if (index(core, "|") > 0) {
-      na=split(core, alts, "|"); ok=1
-      for (j=1;j<=NP;j++) for (kk=1;kk<=na;kk++) if (!(PATHS[j] " " alts[kk] in SUB)) ok=0
-      if (ok) {
-        nnp=0
-        for (j=1;j<=NP;j++) for (kk=1;kk<=na;kk++) { nnp++; newp[nnp]=PATHS[j] " " alts[kk] }
-        NP=nnp; for (j=1;j<=nnp;j++) PATHS[j]=newp[j]
-        for (kk=1;kk<=na;kk++) addverb(alts[kk])
-        usage_end = offs[i]+length(t)-1
-        continue
-      }
-      # 未解析的组：可选的（[...]）当参数——如 standby [on|off|status]；不带的则是一句「这个命令有这些子命令」
-      # 的假活，必须红（不能静默降级成只有主命令）。
-      if (isbr) break
-      fail(ln, "这一行的命令组无法解析（" core "）：" frag); return
-    }
-    ok=1
-    for (j=1;j<=NP;j++) if (!(PATHS[j] " " core in SUB)) ok=0
-    if (ok) {
-      for (j=1;j<=NP;j++) PATHS[j]=PATHS[j] " " core
-      addverb(core)
-      usage_end = offs[i]+length(t)-1
-      continue
-    }
-    break   # 参数/描述文本：命令部分到此为止
-  }
-  # every --flag on the line, judged at its own offset
-  rest=frag; base=0
-  while (match(rest, /--[a-z0-9-]+/)) {
-    fl=substr(rest, RSTART, RLENGTH)
-    fpos=base+RSTART
-    base=base+RSTART+RLENGTH-1
-    rest=substr(rest, RSTART+RLENGTH)
-    if (fpos <= usage_end) {
-      for (j=1;j<=NP;j++) emit(ln, PATHS[j], fl)
-      continue
-    }
-    # description flag: the nearest preceding verb token of this fragment's own group, else the
-    # fragment's command(s) — `board …（add [--allow-dup] …）` binds to `board add`, `perf …；--host …`
-    # to `perf`.
-    best=0
-    for (kk=1;kk<=NV;kk++) { p=lastwordpos(substr(frag, 1, fpos-1), VERBW_LIST[kk]); if (p>best) best=p }
-    bind=0
-    if (best > 0) {
-      for (kk=1;kk<=NV;kk++) {
-        w=VERBW_LIST[kk]
-        if (lastwordpos(substr(frag, 1, fpos-1), w) != best) continue
-        for (j=1;j<=NP;j++) if (PATHS[j] ~ ("(^| )" w "$")) { emit(ln, PATHS[j], fl); bind=1 }
-      }
-    }
-    if (bind == 0) {
-      for (j=1;j<=NP;j++) emit(ln, PATHS[j], fl)
-    }
-  }
-}
-function expand_slash(frag, ln,   np, parts, i, first, ok) {
-  np = split(frag, parts, / \/ /)
-  if (np > 1) {
-    ok=1
-    for (i=1;i<=np;i++) { first=parts[i]; sub(/^[ \t]+/,"",first); sub(/[ \t].*/,"",first); if (!(first in TOP)) ok=0 }
-    if (ok) { for (i=1;i<=np;i++) one_fragment(parts[i], ln); return }
-  }
-  one_fragment(frag, ln)
-}
-BEGIN {
-  n=split(tops, ta, " "); for (i=1;i<=n;i++) { gsub(/^[ \t]+|[ \t]+$/, "", ta[i]); if (ta[i]!="") TOP[ta[i]]=1 }
-  m=split(subs, sa, ";")
-  for (i=1;i<=m;i++) {
-    if (sa[i]=="") continue
-    if (split(sa[i], kv, ":") < 2) continue
-    p=kv[1]; gsub(/^[ \t]+|[ \t]+$/, "", p)
-    c=split(kv[2], sb, ",")
-    for (j=1;j<=c;j++) { gsub(/^[ \t]+|[ \t]+$/, "", sb[j]); if (sb[j]!="") SUB[p " " sb[j]]=1 }
-  }
-  inblock=0; lastindent=-1
-}
-{
-  line=$0
-  if (line ~ /^[ \t]*$/) next
-  if (line ~ /^[ \t]*──/) { inblock=1; lastindent=-1; next }
-  if (!inblock) next
-  m=match(line, /[^ \t]/); ind=m-1; rest=substr(line, m)
-  first=rest; sub(/[ \t].*/,"",first)
-  isentry = (first in TOP)
-  if (ind == 0) {
-    # 列 0 的行：命令块的正文一律缩进（对齐的续行更深）。
-    #   · 打旗标的 → 无法归属（修复前的 board 形状：列 0 + [--allow-dup]）→ 红；
-    #   · 首 token 是命令的 → 未缩进的条目（形状约定是 2 空格）→ 红；
-    #   · 其余（help 末尾的 配置：/协议： 页脚，不打印旗标）→ 块到此为止，忽略。
-    if (line ~ /--[a-z0-9-]+/) { fail(NR, "命令块里列 0 的行带着旗标（无法归属到任何条目）：" rest) }
-    else if (isentry) { fail(NR, "命令块里的命令条目没有缩进（列 0）：" rest) }
-    inblock=0; next
-  }
-  if (lastindent >= 0 && ind > lastindent) { next }   # 缩进更深的行是上一条目的续行（哪怕它首 token 像个命令）
-  if (!isentry) {
-    fail(NR, "这一行既不是命令条目，也没有比上一条目缩进更深（无法归属）：" rest)
-    next
-  }
-  lastindent=ind
-  printf "ENTRY\t%d\n", NR
-  # 全角分隔符在 bash 侧先换成 \x1f —— awk（mawk）按字节看字符类，直接写 [｜／] 会在
-  # 任何中文 UTF-8 字节上乱切（实测把一行劈成单字碎片）。
-  nf = split($0, frags, "\037")
-  for (i=1;i<=nf;i++) expand_slash(frags[i], NR)
-}
-AWK
-}
-
 # mr_probe_mode <path> → `run`（默认）或 `source:<file>:<reason>`。
 # `source` 只用于「这条命令只是 exec 另一个程序」的路径：跑它来验证一个旗标会真的把那个程序跑起来
 # （perf = 性能套件）—— 那时读它自己的参数表。声明必须带文件与理由。
@@ -485,25 +330,6 @@ mr_pages() {
   printf '%s\n' "${jobs[@]}"
 }
 
-# mr_page_usage <page-file> → the usage entries of a page, one per line (continuations joined)
-mr_page_usage() {
-  awk '
-    function indent(l) { m=match(l, /[^ ]/); return m-1 }
-    { l=$0
-      if (l ~ /^[ \t]*$/) next
-      ind=indent(l)
-      if (l ~ /^──/) { inblock=1; lastindent=-1; cur=""; next }
-      if (!inblock) next
-      if (ind == 0) { if (cur!="") { print cur; cur="" }; inblock=0; next }
-      if (lastindent >= 0 && ind > lastindent && ind < 6) { if (cur != "") cur = cur " " substr(l, ind+1); next }
-      if (lastindent >= 0 && ind > lastindent) { next }   # the description block: not part of the usage line
-      if (cur != "") print cur
-      cur=substr(l, ind+1); lastindent=ind
-    }
-    END { if (cur != "") print cur }
-  ' "$1"
-}
-
 # mr_manifest_claims → $tmp/walk-a.tsv: the manifest's usage lines, judged by the same parser.
 # The walk and its non-vacuity control both take their working set from here, so neither can drift
 # from the command manifest the renderer reads.
@@ -563,64 +389,15 @@ mr_walk_a() {
 
   # ③ 逐级渲染：每一页都必须真的打印清单声明的那几行，且每一页都要能被同一个解析器读
   local list; list="$(mr_pages)"
-  local spec kind label page n_pages=0 n_entries=0 n_claims=0 level_fail=0
+  local spec kind label page n_pages=0 n_entries=0 n_claims=0
   local -A LEVEL_OK=()
   while IFS=':' read -r kind label; do
     page="$tmp/pages/$kind--$label.txt"
-    [ -s "$page" ] || { finding "walk: 帮助面缺一页（$kind $label）"; level_fail=1; continue; }
-    n_pages=$((n_pages + 1))
-    if [ "$kind" = "command" ]; then
-      # the page's own usage header must be there (a deleted header is a defect, never a skip)
-      grep -qE '^── (Usage|用法)' "$page" || { finding "walk: $label 的页没有用法头部（Usage:/用法：）"; level_fail=1; }
-      local declared printed
-      declared="$(awk -F'\t' -v c="$label" '$1==c {print $2}' < <(mr_fragments) | sort)"
-      printed="$(mr_page_usage "$page" | sort)"
-      if [ "$declared" != "$printed" ]; then
-        local extra; extra="$(comm -13 <(printf '%s\n' "$declared") <(printf '%s\n' "$printed") | head -3 | paste -sd ' ' -)"
-        local gone; gone="$(comm -23 <(printf '%s\n' "$declared") <(printf '%s\n' "$printed") | head -3 | paste -sd ' ' -)"
-        finding "walk: $label 的页与清单不一致（页上多出：${extra:-无}；页上缺少：${gone:-无}）"
-        level_fail=1
-      fi
-      if printf '%s\n' "$printed" | grep -q -- '--ghost-probe\|--frobnicate-probe'; then
-        finding "walk: $label 的页打印了清单没有的旗标（$(printf '%s\n' "$printed" | grep -- '--ghost-probe\|--frobnicate-probe' | head -1)）"
-        level_fail=1
-      fi
-      LEVEL_OK[command]=1
-    elif [ "$kind" = "group" ]; then
-      local want got
-      want="$(awk -F'\t' -v g="$label" '$1=="cmd" && $3==g {n=split($4,f," ;; "); print f[1]}' "$manifest" | sort)"
-      got="$(mr_page_usage "$page" | sort)"
-      if [ "$want" != "$got" ]; then
-        finding "walk: 组页 $label 与清单不一致（$(diff <(printf '%s\n' "$want") <(printf '%s\n' "$got") | grep '^[<>]' | head -2 | tr '\n' ' ')）"
-        level_fail=1
-      fi
-      LEVEL_OK[group]=1
-    else
-      local want got
-      want="$(mr_begin | tr ' ' '\n' | grep -v '^$' | sort)"
-      got="$(mr_page_usage "$page" | awk '{print $1}' | sort)"
-      if [ "$want" != "$got" ]; then
-        finding "walk: 菜单的上手命令与清单的 begin 行不一致（$(diff <(printf '%s\n' "$want") <(printf '%s\n' "$got") | grep '^[<>]' | head -2 | tr '\n' ' ')）"
-        level_fail=1
-      fi
-      LEVEL_OK[menu]=1
-    fi
-    # the same parser reads every level (block rules unchanged)
-    awk -v tops="$MRI_TOPS" -v subs="$MRI_SUBS" -f "$tmp/walk-a.awk" "$page" > "$tmp/page-claims.tsv" 2>/dev/null
-    local ln rest
-    while IFS=$'\t' read -r _ ln rest; do
-      finding "walk: $kind $label 的第 $ln 行无法归属（解析器拒绝静默跳过）：$rest"
-      level_fail=1
-    done < <(grep -a '^FAIL' "$tmp/page-claims.tsv")
-    n_entries=$((n_entries + $(grep -ac '^ENTRY' "$tmp/page-claims.tsv" || true)))
-    n_claims=$((n_claims + $(grep -ac '^CLAIM' "$tmp/page-claims.tsv" || true)))
-    ok "walk: $kind $label 判过（$(grep -ac '^ENTRY' "$tmp/page-claims.tsv" || true) 条用法行，$(grep -ac '^CLAIM' "$tmp/page-claims.tsv" || true) 条断言）"
+    # Same shell: the shared operation owns ok/finding/FIND; this call site preserves failed=1.
+    mr_page_judge "$kind" "$label" "$page" || failed=1
   done <<< "$list"
-  [ "$level_fail" = "1" ] && failed=1
-  local lv
-  for lv in menu group command; do
-    [ -n "${LEVEL_OK[$lv]:-}" ] || { finding "walk: $lv 这一级一条都没被判到（静默漏读）"; failed=1; }
-  done
+  # Same shell: only pages actually read above can satisfy a level.
+  mr_level_finish || failed=1
 
   # ④ 每条 (命令, 旗标) 断言喂真解析器；探针结果按 (命令,旗标) 去重
   local fixture
@@ -1637,6 +1414,108 @@ mr_flip_require() {
   return 1
 }
 
+# ── pages: shared file judgement replacing exactly three complete walks ─────────────────────────────
+mr_pages_render() { # <tree> <label> <output>: one bounded real renderer call
+  local root="$1" label="$2" out="$3" rc bytes
+  MR_SAMPLE_WHY=""
+  [ -n "$TIMEOUT_BIN" ] || { MR_SAMPLE_WHY="没有 timeout，不能执行有界渲染"; return 1; }
+  mkdir -p "$(dirname "$out")"
+  ( cd "$tmp" && env -u TMUX -u TMUX_PANE "$TIMEOUT_BIN" "$timeout_sec" \
+      bash "$root/skills/teamsmith/scripts/team" help "$label" >"$out" ) </dev/null 2>"$out.err"
+  rc=$?; bytes="$(wc -c <"$out" 2>/dev/null || printf 0)"
+  printf 'tree=%s command=team help %s rc=%s bytes=%s output=%s\n' \
+    "$root" "$label" "$rc" "$bytes" "$out" >>"$tmp/pages-renders.log"
+  if [ "$rc" -ne 0 ] || [ ! -s "$out" ]; then
+    MR_SAMPLE_WHY="team help $label 渲染失败或为空（rc=$rc bytes=$bytes；$out.err）"; return 1
+  fi
+}
+
+# Expected negatives have their own counters and cannot contaminate the sample's FIND.
+mr_pages_child() { # <log> <finish-levels:0|1> [<kind> <label> <file>]…
+  local logf="$1" levels="$2"; shift 2
+  (
+    PASS=0; FIND=0; SKIP=0
+    local n_pages=0 n_entries=0 n_claims=0 failed=0 kind label page
+    local -A LEVEL_OK=()
+    while [ "$#" -gt 0 ]; do
+      kind="$1"; label="$2"; page="$3"; shift 3
+      mr_page_judge "$kind" "$label" "$page" || failed=1
+    done
+    [ "$levels" != "1" ] || mr_level_finish || failed=1
+    printf 'SAMPLE_STATE pages=%d menu=%s group=%s command=%s findings=%d failed=%d\n' \
+      "$n_pages" "${LEVEL_OK[menu]:-0}" "${LEVEL_OK[group]:-0}" "${LEVEL_OK[command]:-0}" "$FIND" "$failed"
+    [ "$FIND" -eq 0 ] && [ "$failed" -eq 0 ]
+  ) >"$logf" 2>&1
+  MR_SAMPLE_RC=$?
+}
+
+mr_pages_log_has() { local f="$1" p; shift; for p in "$@"; do grep -qF -- "$p" "$f" || return 1; done; }
+mr_pages_log_clean() { ! grep -qF $'\033[31m✗' "$1"; }
+mr_pages_finding_count() { grep -cF $'\033[31m✗' "$1" 2>/dev/null || true; }
+
+mr_sample_unattributable() {
+  local s damaged normal bad_log good_log bad_rc good_rc
+  MR_SAMPLE_WHY=""; s="$(mr_scratch_tree pages-unattributable)"
+  python3 - "$s/skills/teamsmith/scripts/lib/cmd-help.sh" <<'MUT'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+old = '  local plain="${_TH_USAGE[$i]// ;; /;;;}"'
+new = old + '\n  [ "$name" != "board" ] || team_help_flow 0 4 "board add <ID> [--allow-dup]"'
+assert s.count(old) == 1, 'the usage renderer must match exactly once'
+open(p, 'w', encoding='utf-8').write(s.replace(old, new, 1))
+MUT
+  if ! mr_flip_require "替代④" "$s" scripts/lib/cmd-help.sh - 'team_help_flow 0 4 "board add <ID> [--allow-dup]"'; then
+    MR_SAMPLE_WHY="$MR_FLIP_WHY"; return 1
+  fi
+  damaged="$tmp/page-samples/board-damaged.txt"; normal="$tmp/page-samples/board-normal.txt"
+  mr_pages_render "$s" board "$damaged" || return 1
+  mr_pages_render "$tree" board "$normal" || return 1
+  bad_log="$tmp/page-samples/board-damaged.judge.log"; good_log="$tmp/page-samples/board-normal.judge.log"
+  mr_pages_child "$bad_log" 0 command board "$damaged"; bad_rc="$MR_SAMPLE_RC"
+  mr_pages_child "$good_log" 0 command board "$normal"; good_rc="$MR_SAMPLE_RC"
+  if [ "$bad_rc" -ne 0 ] && mr_pages_log_has "$bad_log" '列 0 的行' '无法归属' 'board add <ID> [--allow-dup]' && \
+     [ "$good_rc" -eq 0 ] && mr_pages_log_clean "$good_log"; then return 0; fi
+  MR_SAMPLE_WHY="受损页 rc=$bad_rc，正常页 rc=$good_rc；需要列 0 归属诊断且正常页无 finding（$bad_log；$good_log）"
+  return 1
+}
+
+mr_sample_page_ghost() {
+  local s damaged normal bad_log good_log bad_rc good_rc
+  MR_SAMPLE_WHY=""; MR_SAMPLE_NORMAL_DISPATCH=""; s="$(mr_scratch_tree pages-ghost)"
+  python3 - "$s/skills/teamsmith/scripts/lib/cmd-help.sh" <<'MUT'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+old = '  local plain="${_TH_USAGE[$i]// ;; /;;;}"'
+new = old + '\n  [ "$name" != "dispatch" ] || team_help_flow 2 4 "dispatch --ghost-probe"'
+assert s.count(old) == 1, 'the usage renderer must match exactly once'
+open(p, 'w', encoding='utf-8').write(s.replace(old, new, 1))
+MUT
+  if ! mr_flip_require "替代⑪" "$s" scripts/lib/cmd-help.sh - 'team_help_flow 2 4 "dispatch --ghost-probe"'; then
+    MR_SAMPLE_WHY="$MR_FLIP_WHY"; return 1
+  fi
+  damaged="$tmp/page-samples/dispatch-damaged.txt"; normal="$tmp/page-samples/dispatch-normal.txt"
+  mr_pages_render "$s" dispatch "$damaged" || return 1
+  mr_pages_render "$tree" dispatch "$normal" || return 1
+  MR_SAMPLE_NORMAL_DISPATCH="$normal"
+  bad_log="$tmp/page-samples/dispatch-damaged.judge.log"; good_log="$tmp/page-samples/dispatch-normal.judge.log"
+  mr_pages_child "$bad_log" 0 command dispatch "$damaged"; bad_rc="$MR_SAMPLE_RC"
+  mr_pages_child "$good_log" 0 command dispatch "$normal"; good_rc="$MR_SAMPLE_RC"
+  if [ "$bad_rc" -ne 0 ] && mr_pages_log_has "$bad_log" 'dispatch' '页与清单不一致' '页上多出' 'dispatch --ghost-probe' && \
+     [ "$good_rc" -eq 0 ] && mr_pages_log_clean "$good_log"; then return 0; fi
+  MR_SAMPLE_WHY="受损页 rc=$bad_rc，正常页 rc=$good_rc；需要集合差/页上多出诊断，特例字面量不算（$bad_log；$good_log）"
+  return 1
+}
+
+mr_sample_file_variant() { # <name> <file> <required-literal>…
+  local name="$1" file="$2" logf; shift 2
+  logf="$tmp/page-samples/$name.judge.log"
+  mr_pages_child "$logf" 0 command dispatch "$file"
+  if [ "$MR_SAMPLE_RC" -ne 0 ] && mr_pages_log_has "$logf" '页与清单不一致' "$@"; then return 0; fi
+  MR_SAMPLE_WHY="$name 没有给出要求的集合差诊断（rc=$MR_SAMPLE_RC；$logf）"; return 1
+}
+
 # 嵌套 run 的根：本轮台账里 kind=routes 且 pid 不是本进程的存活根，加上文件系统里新于本夹具根的
 # owned 家族目录（兜住「不用助手、裸 mkdir」的形状）。台账是主来源（父/子共享 run 台账，每个嵌套
 # 根都在册，与 mtime 无关）；find 是次要来源（原始形状，保留不放松）。
@@ -1649,6 +1528,88 @@ mr_nested_leftovers() { # [<base>]
     # P287：根名带 ns（`teamsmith-routes-<ns>.<rand>`）—— 两种形状都认（[.-] 覆盖平铺与带 ns）
     find "$base" -maxdepth 1 -name 'teamsmith-routes[.-]*' -newer "$tmp" 2>/dev/null | grep -v "^$tmp\$" || true
   } | sed '/^$/d' | sort -u
+}
+
+mr_sample_levels() {
+  local group menu group_page command_page missing_log restored_log missing_rc restored_rc n frag
+  MR_SAMPLE_WHY=""; command_page="${MR_SAMPLE_NORMAL_DISPATCH:-$tmp/page-samples/dispatch-normal.txt}"
+  [ -s "$command_page" ] || { MR_SAMPLE_WHY="没有已渲染的正常 dispatch 文件输入"; return 1; }
+  group="$(mr_groups | head -1)"; [ -n "$group" ] || { MR_SAMPLE_WHY="清单没有组"; return 1; }
+  menu="$tmp/page-samples/menu-file.txt"; group_page="$tmp/page-samples/group-file.txt"
+  {
+    printf '── 用法 ──\n'
+    for n in $(mr_begin); do frag="$(mr_field "$n" 4)"; printf '  %s\n' "${frag%% ;;*}"; done
+  } >"$menu"
+  {
+    printf '── 用法 ──\n'
+    awk -F'\t' -v g="$group" '$1=="cmd" && $3==g {n=split($4,f," ;; "); print "  " f[1]}' "$(mr_manifest)"
+  } >"$group_page"
+  # Planned is not read: this existing group file is not supplied to the first child.
+  missing_log="$tmp/page-samples/levels-missing-group.log"
+  mr_pages_child "$missing_log" 1 menu "" "$menu" command dispatch "$command_page"; missing_rc="$MR_SAMPLE_RC"
+  restored_log="$tmp/page-samples/levels-restored-group.log"
+  mr_pages_child "$restored_log" 1 menu "" "$menu" group "$group" "$group_page" command dispatch "$command_page"; restored_rc="$MR_SAMPLE_RC"
+  if [ "$missing_rc" -ne 0 ] && [ "$(mr_pages_finding_count "$missing_log")" -eq 1 ] && \
+     mr_pages_log_has "$missing_log" 'group 这一级一条都没被判到' 'walk: menu' 'walk: command dispatch' \
+       'SAMPLE_STATE pages=2 menu=1 group=0 command=1 findings=1 failed=1' && \
+     [ "$restored_rc" -eq 0 ] && mr_pages_log_clean "$restored_log" && \
+     mr_pages_log_has "$restored_log" 'SAMPLE_STATE pages=3 menu=1 group=1 command=1 findings=0 failed=0'; then return 0; fi
+  MR_SAMPLE_WHY="缺组 rc=$missing_rc/findings=$(mr_pages_finding_count "$missing_log")，恢复 rc=$restored_rc；需要缺组为唯一 finding 且恢复全绿（$missing_log；$restored_log）"
+  return 1
+}
+
+mr_sample_empty_page() {
+  local empty="$tmp/page-samples/dispatch-empty.txt" logf="$tmp/page-samples/dispatch-empty.judge.log"
+  : >"$empty"; mr_pages_child "$logf" 0 command dispatch "$empty"
+  if [ "$MR_SAMPLE_RC" -ne 0 ] && [ "$(mr_pages_finding_count "$logf")" -eq 1 ] && \
+     mr_pages_log_has "$logf" '帮助面缺一页' 'SAMPLE_STATE pages=0 menu=0 group=0 command=0 findings=1 failed=1'; then return 0; fi
+  MR_SAMPLE_WHY="空文件必须发原缺页 finding 且不得计作已读（rc=$MR_SAMPLE_RC；$logf）"; return 1
+}
+
+mr_page_samples() {
+  section "pages · 文件判定样本（替代④ / 替代⑪ / 替代⑬）"
+  mr_known_tables; mr_write_parser
+  local named=0 usage continuation duplicate missing
+  if mr_sample_unattributable; then
+    ok "替代④：列 0 归属诊断 + 未变异 board 正常页（两次渲染均 rc=0 且非空）"; named=$((named + 1))
+  else finding "替代④没有兑现：$MR_SAMPLE_WHY"; fi
+  if mr_sample_page_ghost; then
+    ok "替代⑪：集合差页上多出诊断 + 未变异 dispatch 正常页（两次渲染均 rc=0 且非空）"; named=$((named + 1))
+  else finding "替代⑪没有兑现：$MR_SAMPLE_WHY"; fi
+
+  usage="$(mr_field dispatch 4)"; usage="${usage%% ;;*}"
+  continuation="$tmp/page-samples/dispatch-continuation.txt"
+  duplicate="$tmp/page-samples/dispatch-duplicate.txt"; missing="$tmp/page-samples/dispatch-missing.txt"
+  if [ -n "$usage" ]; then
+    python3 - "$usage" "$continuation" "$duplicate" "$missing" <<'PY'
+import pathlib, sys
+usage, continuation, duplicate, missing = sys.argv[1:]
+line = "  " + usage
+assert " [--fresh]" in line, "continuation split anchor must exist"
+continued = line.replace(" [--fresh]", "\n    [--fresh]", 1)
+pathlib.Path(continuation).write_text("── Usage ──\n" + continued + "\n")
+pathlib.Path(duplicate).write_text("── Usage ──\n" + line + "\n" + line + "\n")
+pathlib.Path(missing).write_text("── Usage ──\n")
+PY
+    mr_pages_child "$tmp/page-samples/dispatch-continuation.judge.log" 0 command dispatch "$continuation"
+    if [ "$MR_SAMPLE_RC" -eq 0 ] && mr_pages_log_clean "$tmp/page-samples/dispatch-continuation.judge.log"; then
+      ok "文件判定：缩进续行拼回原用法，正常输入无 finding"
+    else finding "文件判定：续行没有按原规则拼回（$tmp/page-samples/dispatch-continuation.judge.log）"; fi
+    if mr_sample_file_variant duplicate "$duplicate" '页上多出' "$usage"; then
+      ok "文件判定：重复用法按 sort 多重集比较，不被 sort -u 吞掉"
+    else finding "文件判定：重复用法没有兑现（$MR_SAMPLE_WHY）"; fi
+    if mr_sample_file_variant missing "$missing" '页上缺少' "$usage"; then
+      ok "文件判定：缺失用法进入集合差并点名完整行"
+    else finding "文件判定：缺失用法没有兑现（$MR_SAMPLE_WHY）"; fi
+  else
+    finding "文件判定：没有正常 dispatch 文件，续行/重复/缺失用例不能跳过"
+  fi
+  if mr_sample_levels; then
+    ok "替代⑬：菜单/命令文件通过，缺 group 是唯一 finding，恢复 group 后无 finding"; named=$((named + 1))
+  else finding "替代⑬没有兑现：$MR_SAMPLE_WHY"; fi
+  if mr_sample_empty_page; then ok "文件判定：空文件发原缺页 finding，且不计作已读"
+  else finding "文件判定：空文件没有兑现（$MR_SAMPLE_WHY）"; fi
+  [ "$named" -ge 3 ] || finding "pages 样本缺少具名成功结果（替代④/⑪/⑬只有 $named/3）"
 }
 
 mr_flips() {
@@ -1760,25 +1721,6 @@ MUT
       ok "翻转③：ps 吞掉未知旗标 → 控制臂红并点名 ps"
     else
       finding "翻转③没有兑现（rc=$MR_FLIP_RC）：$(mr_flip_evidence)"
-    fi
-  fi
-  # ④ 无法归属的行：命令块里列 0 的行（把一条用法行渲染到列 0）
-  s="$(mr_scratch_tree flip-unattributable)"
-  python3 - "$s/skills/teamsmith/scripts/lib/cmd-help.sh" <<'MUT'
-import sys
-p = sys.argv[1]
-s = open(p, encoding='utf-8').read()
-old = '  local plain="${_TH_USAGE[$i]// ;; /;;;}"'
-new = old + '\n  [ "$name" != "board" ] || team_help_flow 0 4 "board add <ID> [--allow-dup]"'
-assert s.count(old) == 1, 'the usage renderer must match exactly once'
-open(p, 'w', encoding='utf-8').write(s.replace(old, new, 1))
-MUT
-  if mr_flip_require "翻转④" "$s" scripts/lib/cmd-help.sh - 'team_help_flow 0 4 "board add <ID> [--allow-dup]"'; then
-    mr_flip_run "$s" walk
-    if [ "$MR_FLIP_RC" != "0" ] && mr_flip_log_has '列 0 的行'; then
-      ok "翻转④：命令块里的列 0 行 → walk 红并点名该行（修复前的 board 形状）"
-    else
-      finding "翻转④没有兑现（rc=$MR_FLIP_RC）：$(mr_flip_evidence)"
     fi
   fi
   # ⑤ schema 注释点名不存在的命令
@@ -1906,43 +1848,18 @@ PY
       finding "翻转⑩对照：修坏的树上 Walk A/控制臂不该变红（rc=$MR_FLIP_RC）"
     fi
   fi
-  # ⑪ 第 2 级页面打印一条清单没有声明的用法行（旧走查看不到这里）
-  s="$(mr_scratch_tree flip-page-ghost)"
-  python3 - "$s/skills/teamsmith/scripts/lib/cmd-help.sh" <<'MUT'
-import sys
-p = sys.argv[1]
-s = open(p, encoding='utf-8').read()
-old = '  local plain="${_TH_USAGE[$i]// ;; /;;;}"'
-new = old + '\n  [ "$name" != "dispatch" ] || team_help_flow 2 4 "dispatch --ghost-probe"'
-assert s.count(old) == 1, 'the usage renderer must match exactly once'
-open(p, 'w', encoding='utf-8').write(s.replace(old, new, 1))
-MUT
-  if mr_flip_require "翻转⑪" "$s" scripts/lib/cmd-help.sh - 'team_help_flow 2 4 "dispatch --ghost-probe"'; then
-    mr_flip_run "$s" walk
-    if [ "$MR_FLIP_RC" != "0" ] && mr_flip_log_has 'dispatch' && mr_flip_log_has 'ghost-probe'; then
-      ok "翻转⑪：第 2 级页面多出一条清单没有的用法行 → walk 红并点名该页与旗标"
-    else
-      finding "翻转⑪没有兑现（rc=$MR_FLIP_RC）：$(mr_flip_evidence)"
-    fi
-  fi
   # ⑫ 清单漏掉一个 CLI 仍然接受的命令 —— 与帮助面夹具的 coverage 红侧同形（那条更便宜），
   #    这里不重复跑一遍 Walk A。
-  # ⑬ 一级没有被判到（组表空了 → 一个组页都渲染不出来）
-  s="$(mr_scratch_tree flip-level-unread)"
-  python3 - "$s/skills/teamsmith/scripts/strings/commands.tsv" <<'MUT'
-import sys
-p = sys.argv[1]
-s = open(p, encoding='utf-8').read()
-s = "\n".join(l for l in s.split("\n") if not l.startswith("group\t"))
-open(p, 'w', encoding='utf-8').write(s)
-MUT
-  if mr_flip_require "翻转⑬" "$s" scripts/strings/commands.tsv "$(printf 'group\tstart')" -; then
-    mr_flip_run "$s" walk
-    if [ "$MR_FLIP_RC" != "0" ] && mr_flip_log_has '这一级一条都没被判到'; then
-      ok "翻转⑬：一级一条都没被判到 → walk 红并点名该级"
-    else
-      finding "翻转⑬没有兑现（rc=$MR_FLIP_RC）：$(mr_flip_evidence)"
-    fi
+  # 旧④/⑪/⑬的完整 walk 已由同一脚本的 pages 样本替代；非 FAST 到这里无条件执行一次。
+  mr_flip_run "$tree" pages
+  local page_name page_missing=""
+  for page_name in '替代④' '替代⑪' '替代⑬'; do
+    grep -aF $'\033[32m✓\033[0m '"$page_name" "$MR_FLIP_LOGF" >/dev/null || page_missing="$page_missing $page_name"
+  done
+  if [ "$MR_FLIP_RC" = "0" ] && [ -z "$page_missing" ]; then
+    ok "页面替代样本：pages rc=0，替代④/⑪/⑬三条具名成功结果齐全"
+  else
+    finding "页面替代样本没有兑现（rc=$MR_FLIP_RC；缺少具名成功结果：${page_missing:-无}）：$(mr_flip_evidence)"
   fi
   # 收尾：flips 自己的 scratch 树与嵌套 run 的根都不留下。
   # TEAM_TMP_KEEP=1（门禁的 --keep 让子进程都继承它）是**刻意的保留**，不是泄漏 —— 与 smoke §40
@@ -1980,6 +1897,9 @@ if want promises; then
 fi
 if want refusals; then
   if mr_refusals; then :; fi
+fi
+if want pages; then
+  if mr_page_samples; then :; fi
 fi
 if want flips; then
   if [ "${TEAM_ROUTES_NESTED:-0}" = "1" ]; then
