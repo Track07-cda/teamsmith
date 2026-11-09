@@ -7,7 +7,7 @@ phase: opsx-propose
 change: route-page-check-determinism
 specs: dispatch verification
 anchor: openspec/specs/dispatch/spec.md#The printed route is a route that works
-deltas: openspec/changes/route-page-check-determinism/specs/dispatch/spec.md openspec/changes/route-page-check-determinism/specs/verification/spec.md
+deltas: dispatch, verification
 branch: task/P429-route-page-check-proposal
 ---
 
