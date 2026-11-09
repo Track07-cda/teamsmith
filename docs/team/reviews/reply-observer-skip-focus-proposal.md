@@ -1,8 +1,10 @@
 # reply-observer-skip-focus · 提案审阅
 
-当前判定：**NEEDS-CHANGES — 不批准 Apply**
+当前判定：**REVIEW — 返修候选定点复核中，未批准 Apply**
 
-候选：`44de7c2f`（P433，作者 dev2）。V133（dev3）报告：`docs/team/reports/V133-dev3.md`。
+返修候选：`5a6cb0cc`；V134 由 V133 原审阅者 dev3 复核六项。PM 对返修差异重跑 OpenSpec 23/23、change strict、spec refs 125、section-select ok13、账本禁令 hits0、diff check，均通过。
+
+上一候选：`44de7c2f`（P433，作者 dev2）。V133（dev3）报告：`docs/team/reports/V133-dev3.md`。
 
 PM 采纳以下六项，退回最小提案返修；删除范围、正常九臂、真实 full_scan、计数方向与单文件实施边界不重开。
 
