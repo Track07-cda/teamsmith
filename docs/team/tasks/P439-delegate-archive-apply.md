@@ -54,3 +54,9 @@ git diff --check
 ## 交付
 
 小步提交，`docs/team/reports/P439-dev3.md` 先给结论，附真实命令、日志、十二文件映射、执行者记录样例和未跑范围。通知 PM 后由另一非作者复验。不合并、不归档、不发布、不推 main。
+
+## V144 阶段 A 的最小返修（只修 W1/S1）
+
+- `templates/DECISIONS.md.tmpl` 仍把复验执行写给 PM，会被 `team init` 渲染进每个新项目。改成 verifier 执行、PM 审阅接受；把该文件纳入 design/proposal/tasks 的清单与第19段既有断言，不加新段。
+- `workflows.md` 与 `openspec.md` 的自身 blocker 说明改为：brief 必须写字面 `phase: archive` 使行读作 archive；工具按任务 ID 排除自身。不得暗示工具按 phase 文本匹配。
+- 仅改这两类及相应规划计数/报告；其他已验内容不动。完成后通知 V144 做定点复核，再进入合并后阶段。
