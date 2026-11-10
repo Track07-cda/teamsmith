@@ -254,6 +254,20 @@ team_init_model_policy_resolve() { # <cfg> <task_models|''> <pm_model|''> <task_
   return 0
 }
 
+# PROTOCOL 是公开账本：命令路径从项目根解析，不记录运行 CLI 的绝对家目录。
+# 源仓直接使用随仓库提交的技能；普通项目使用 init 随后安装的项目副本；跳过安装时只给明确占位。
+team_init_protocol_skill_dir() { # <install-mode>
+  case "$1" in
+    --no-skills) printf '<skill-dir>\n'; return 0 ;;
+  esac
+  if [ -f "$TEAM_MAIN_ROOT/skills/teamsmith/SKILL.md" ] \
+     && [ -f "$TEAM_MAIN_ROOT/skills/teamsmith/scripts/team" ]; then
+    printf 'skills/teamsmith\n'
+  else
+    printf '.pi/skills/teamsmith\n'
+  fi
+}
+
 team_cmd_init() {
   local session="" agents="" vcs="" gates="" docs="" pmwin="" force=0 install_mode=""
   local task_models="" pm_model="" task_models_set=0 pm_model_set=0
@@ -399,6 +413,7 @@ team_cmd_init() {
 
   # 2) 文档骨架
   local tdir; tdir="$(team_tmpl_dir)"
+  local docs_skill_dir; docs_skill_dir="$(team_init_protocol_skill_dir "$install_mode")"
   TEAM_DOCS_ABS="$TEAM_MAIN_ROOT/$docs"
   mkdir -p "$TEAM_DOCS_ABS"/{tasks,reports,threads,inbox,reviews}
   team_render_to "$tdir/BOARD.md.tmpl"          "$TEAM_DOCS_ABS/BOARD.md"          "$force" "PROJECT=$project" "TODAY=$(date +%F)"
@@ -408,7 +423,7 @@ team_cmd_init() {
   team_render_to "$tdir/threads-README.md"      "$TEAM_DOCS_ABS/threads/README.md" "$force" "PROJECT=$project" "AGENTS=$agents"
   team_render_to "$tdir/PROTOCOL.md.tmpl"       "$TEAM_DOCS_ABS/PROTOCOL.md"       "$force" \
     "PROJECT=$project" "DOCS_DIR=$docs" "WORKTREES_DIR=$(basename "${TEAM_WORKTREES_DIR:-.worktrees}")" \
-    "SKILL_DIR=$TEAM_SKILL_DIR" "GATES=${gates:-<未配置>}" "SESSION=$session"
+    "SKILL_DIR=$docs_skill_dir" "GATES=${gates:-<未配置>}" "SESSION=$session"
   for d in tasks reports reviews; do
     [ -f "$TEAM_DOCS_ABS/$d/.gitkeep" ] || : > "$TEAM_DOCS_ABS/$d/.gitkeep"
   done

@@ -90,6 +90,42 @@ team_task_title() { # <ID> → 标题（BOARD 的「任务」列，其次任务�
 # 分支不是被判对象；其余任务仍是任务分支当前 tip。
 team_review_record_path() { printf '%s\n' "$TEAM_DOCS_ABS/reviews/$1.md"; }
 
+# root/ 一律替换；裸 root 的 ASCII 字母数字后缀，以及后随字母数字的 -_. 才算兄弟路径延续。
+# 句末 -_. 与其它右边界（含所有中文标点）都接受，不维护分隔符白名单，也不依赖 locale 的字符分类。
+team_review_ledger_display_root() { # <文本> <绝对根> <占位>
+  local rest="$1" root="$2" marker="$3" out="" before after right continuation skip
+  [ -n "$root" ] || { printf '%s' "$rest"; return 0; }
+  rest="${rest//"${root}/"/"${marker}/"}"
+  while [[ "$rest" == *"$root"* ]]; do
+    before="${rest%%"$root"*}"
+    after="${rest#*"$root"}"
+    right="${after:0:1}"
+    continuation=0
+    case "$right" in
+      [A-Za-z0-9]) continuation=1 ;;
+      [-_.]) case "${after:1:1}" in [A-Za-z0-9]) continuation=1 ;; esac ;;
+    esac
+    if [ "$continuation" = "1" ]; then
+      skip=$(( ${#before} + 1 ))
+      out="$out${rest:0:skip}"; rest="${rest:skip}"
+    else
+      out="$out$before$marker"; rest="$after"
+    fi
+  done
+  printf '%s' "$out$rest"
+}
+
+# 公开账本只保留可移植的显示路径。执行仍使用真实绝对路径；这里只净化最终 Markdown，
+# 因而模板字段、锁记录、报告摘录与门禁输出都走同一规则，独立 /var/tmp checkout 不受影响。
+team_review_ledger_display() {
+  local line main="${TEAM_MAIN_ROOT%/}" home="${HOME%/}"
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="$(team_review_ledger_display_root "$line" "$main" '<main-root>')"
+    line="$(team_review_ledger_display_root "$line" "$home" '<home>')"
+    printf '%s\n' "$line"
+  done
+}
+
 # 128+n → 信号名（写复验记录用；认不出来就给数字，不编名字）
 team_review_signal_name() { # <signal number> → SIGTERM / SIGKILL / SIG<n>
   local n="${1:-}" name=""
@@ -1449,7 +1485,7 @@ $(printf '%s\n' "$ignored_list" | head -5)
       TIMEOUT) printf -- '- [ ] 门禁被硬超时终止（TIMEOUT→按失败处理）：查门禁自己为何挂死，或调 `TEAM_REVIEW_TIMEOUT` 后重跑\n' ;;
       *)    printf -- '- [ ] 人工评审（门禁未跑/未配置：这不等于通过，digest 会继续把它列为待复验）\n' ;;
     esac
-  } > "$report"
+  } | team_review_ledger_display > "$report"
   team_scan_invalidate review   # M50：同进程里「写完再读」必须读到新记录
   [ -n "$queue_marker" ] && rm -f "$queue_marker" 2>/dev/null
   team_ok "复验记录：${report#"$TEAM_MAIN_ROOT"/}（$verdict）"

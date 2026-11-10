@@ -5872,6 +5872,8 @@ section "9 · agent 提交 + 报告"
        '- 破坏实验：把实现改坏 → 守门测试退出码 1（red）' \
        '- 恢复实现：守门测试退出码 0，全部通过（green）' \
        '- 独立验证包（不复用被测夹具）：docs/team/reports/T1.1/verify.sh' \
+       "- 主工作树：$REPO" \
+       "- 当前家目录：$HOME" \
        '```' \
        '$ bash docs/team/reports/T1.1/verify.sh' \
        '```' \
@@ -5899,12 +5901,126 @@ review_record_has_verifier() { # 真实命令产生的记录必须绑定 verify 
   grep -q "HEAD: \`${want:0:9}\`" "$rec" || { printf 'reviewed HEAD mismatch\n'; return 1; }
   ! grep -q 'PM 独立复验' "$rec" || { printf 'hard-coded PM attribution\n'; return 1; }
 }
+P440_GATE="$TMP/p440-review-gate.sh"
+printf '#!/usr/bin/env bash\nprintf '\''gate main=%%s home=%%s\\n'\'' '%s' "$HOME"\n' "$REPO" > "$P440_GATE"
+review_record_ledger_clean() { # P440：所有动态片段都不能把 main/home 绝对路径写进公开 Markdown
+  local rec="$REPO/docs/team/reviews/T1.1.md" checkout_display="$REV_WT" gate_display="$P440_GATE"
+  case "$REV_WT" in
+    "$REPO"/*) checkout_display="<main-root>/${REV_WT#"$REPO"/}" ;;
+    "$HOME"/*) checkout_display="<home>/${REV_WT#"$HOME"/}" ;;
+  esac
+  case "$P440_GATE" in
+    "$REPO"/*) gate_display="<main-root>/${P440_GATE#"$REPO"/}" ;;
+    "$HOME"/*) gate_display="<home>/${P440_GATE#"$HOME"/}" ;;
+  esac
+  [ -f "$rec" ] || { printf 'missing record\n'; return 1; }
+  ! grep -qF "$REPO" "$rec" || { printf 'absolute main root remains\n'; return 1; }
+  if [ "${HOME:-}" != "/" ]; then
+    ! grep -qF "$HOME" "$rec" || { printf 'absolute home remains\n'; return 1; }
+  fi
+  grep -qF "独立 checkout：\`$checkout_display\`" "$rec" || { printf 'independent checkout display mismatch\n'; return 1; }
+  grep -qF 'agent 报告：`<main-root>/.worktrees/dev/docs/team/reports/T1.1-dev.md`' "$rec" \
+    || { printf 'agent report is not project-relative display text\n'; return 1; }
+  grep -qF '门禁锁：`<main-root>/.pi/team/state/p440-review.lock`' "$rec" \
+    || { printf 'lock path was not sanitised\n'; return 1; }
+  grep -qF '主工作树：<main-root>' "$rec" || { printf 'report excerpt main path remains\n'; return 1; }
+  grep -qF '当前家目录：<home>' "$rec" || { printf 'report excerpt home path remains\n'; return 1; }
+  grep -qF 'gate main=<main-root> home=<home>' "$rec" || { printf 'gate output was not sanitised\n'; return 1; }
+  grep -qF "门禁命令：\`bash $gate_display\`" "$rec" || { printf 'real gate command missing\n'; return 1; }
+  grep -qF '判定: **PASS**' "$rec" || { printf 'real gate result missing\n'; return 1; }
+}
 touch "$TMP/review-write-set-start"
-( cd "$REPO/.worktrees/verify" && $TEAM review T1.1 --dir "$REV_WT" ) >"$TMP/review.log" 2>&1 \
+( cd "$REPO/.worktrees/verify" && TEAM_GATES="bash $P440_GATE" \
+    TEAM_SMOKE_LOCK="$REPO/.pi/team/state/p440-review.lock" $TEAM review T1.1 --dir "$REV_WT" ) >"$TMP/review.log" 2>&1 \
   && ok "review 门禁 PASS 退出码 0（verify 席位实际执行）" || { bad "review 失败"; cat "$TMP/review.log"; }
 review_record_has_verifier >"$TMP/review-identity-green.log" 2>&1 \
   && ok "真实 verifier 记录：neutral 标题 + verify 身份 + reviewed SHA + 指定 record/log" \
   || { bad "真实 verifier 记录不完整"; cat "$TMP/review-identity-green.log"; }
+review_record_ledger_clean >"$TMP/p440-review-green.log" 2>&1 \
+  && ok "P440 review 绿：执行者/SHA/真实命令/结果保留，模板+锁+摘录+门禁尾部均无 main/home 绝对路径" \
+  || { bad "P440 review 绿失败"; cat "$TMP/p440-review-green.log"; }
+
+# V146/W1：与 main root 共享字符串前缀的兄弟 checkout 不是 main root 的子路径，显示必须逐字保留。
+P440_SIBLING="$REPO-ledger/checkout"
+git -C "$REPO" worktree add --detach "$P440_SIBLING" "$T1_BRANCH" >/dev/null 2>&1
+P440_SIBLING_RC=0
+( cd "$REPO/.worktrees/verify" && TEAM_GATES=true \
+    TEAM_SMOKE_LOCK="$REPO/.pi/team/state/p440-review.lock" $TEAM review T1.1 --dir "$P440_SIBLING" ) >"$TMP/p440-review-sibling.log" 2>&1 \
+  || P440_SIBLING_RC=$?
+assert_eq "P440 兄弟前缀 checkout 的真实 review rc=0" "$P440_SIBLING_RC" "0"
+assert_has "$REPO/docs/team/reviews/T1.1.md" '判定: **PASS**' "P440 兄弟前缀 checkout 的记录是 PASS"
+P440_SIBLING_DISPLAY="$P440_SIBLING"
+case "$P440_SIBLING" in
+  "$HOME"/*) P440_SIBLING_DISPLAY="<home>/${P440_SIBLING#"$HOME"/}" ;;
+esac
+assert_has "$REPO/docs/team/reviews/T1.1.md" "独立 checkout：\`$P440_SIBLING_DISPLAY\`" "P440 兄弟前缀路径逐字保留，不改成不存在的占位拼接"
+assert_not "$REPO/docs/team/reviews/T1.1.md" '<main-root>-ledger' "P440 不再把 main-root 的兄弟前缀吞成占位"
+git -C "$REPO" worktree remove --force "$P440_SIBLING" >/dev/null 2>&1
+
+# V146/W2：HOME 下的独立 checkout 显示为 <home>/…，不要求夹具必须放在 /var/tmp。
+P440_HOME="$TMP/p440-home"; mkdir -p "$P440_HOME"
+P440_HOME_WT="$P440_HOME/checkout"
+git -C "$REPO" worktree add --detach "$P440_HOME_WT" "$T1_BRANCH" >/dev/null 2>&1
+P440_HOME_RC=0
+( cd "$REPO/.worktrees/verify" && HOME="$P440_HOME" TEAM_GATES=true \
+    TEAM_SMOKE_LOCK="$P440_HOME/review.lock" $TEAM review T1.1 --dir "$P440_HOME_WT" ) >"$TMP/p440-review-home-checkout.log" 2>&1 \
+  || P440_HOME_RC=$?
+assert_eq "P440 HOME 下 checkout 的真实 review rc=0" "$P440_HOME_RC" "0"
+assert_has "$REPO/docs/team/reviews/T1.1.md" '判定: **PASS**' "P440 HOME 下 checkout 的记录是 PASS"
+assert_has "$REPO/docs/team/reviews/T1.1.md" '独立 checkout：`<home>/checkout`' "P440 HOME 下 checkout 按显示规则写成 <home>/…"
+git -C "$REPO" worktree remove --force "$P440_HOME_WT" >/dev/null 2>&1
+
+# V147：边界不是分隔符白名单。C 与 UTF-8 locale 输出必须逐字一致；中文冒号、引号和
+# ；！？，。）：都结束裸 root，而 ASCII 的 -_. 兄弟后缀仍然原样保留。
+P440_MATRIX_INPUT=$'主工作树：/a/b/pm-skills\n当前家目录：/srv/u\n路径：/a/b/pm-skills；家目录：/srv/u！\n引用「/a/b/pm-skills」与「/srv/u」？\n标点：/a/b/pm-skills，/srv/u。/a/b/pm-skills）：/srv/u；\n子路径：/a/b/pm-skills/review，家目录：/srv/u/.cache。\n句末点：/a/b/pm-skills. /srv/u.\n句末横线：/a/b/pm-skills- /srv/u-\n句末下线：/a/b/pm-skills_ /srv/u_\n兄弟：/a/b/pm-skills-ledger /a/b/pm-skills_other /a/b/pm-skills.cache'
+P440_MATRIX_EXPECTED=$'主工作树：<main-root>\n当前家目录：<home>\n路径：<main-root>；家目录：<home>！\n引用「<main-root>」与「<home>」？\n标点：<main-root>，<home>。<main-root>）：<home>；\n子路径：<main-root>/review，家目录：<home>/.cache。\n句末点：<main-root>. <home>.\n句末横线：<main-root>- <home>-\n句末下线：<main-root>_ <home>_\n兄弟：/a/b/pm-skills-ledger /a/b/pm-skills_other /a/b/pm-skills.cache'
+for P440_LOCALE in C C.UTF-8; do
+  P440_MATRIX_OUT="$(printf '%s\n' "$P440_MATRIX_INPUT" | LC_ALL="$P440_LOCALE" TEAM_MAIN_ROOT=/a/b/pm-skills HOME=/srv/u \
+    bash -c '. "$1"; team_review_ledger_display' _ "$SKILL_DIR/scripts/lib/cmd-review.sh")"
+  assert_eq "P440 C/UTF-8 标点矩阵（$P440_LOCALE）：净化一致且兄弟前缀保留" "$P440_MATRIX_OUT" "$P440_MATRIX_EXPECTED"
+done
+
+# P440 红侧：只在私有 skill 副本恢复旧的直接写盘，真实 review 必须重新带出绝对路径；随后同副本还原转绿。
+P440_REVIEW_MUT="$TMP/p440-review-absolute-paths"; rm -rf "$P440_REVIEW_MUT"; cp -a "$SKILL_DIR" "$P440_REVIEW_MUT"
+python3 - "$P440_REVIEW_MUT/scripts/lib/cmd-review.sh" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+old = '  } | team_review_ledger_display > "$report"'
+assert s.count(old) == 1, 'P440 review write pipeline not found exactly once'
+open(p, 'w', encoding='utf-8').write(s.replace(old, '  } > "$report"', 1))
+PY
+rm -f "$REPO/docs/team/reviews/T1.1.md" "$REPO/docs/team/reviews/T1.1-verify.log"
+P440_RED_REVIEW_RC=0
+( cd "$REPO/.worktrees/verify" && TEAM_GATES="bash $P440_GATE" \
+    TEAM_SMOKE_LOCK="$REPO/.pi/team/state/p440-review.lock" \
+    bash "$P440_REVIEW_MUT/scripts/team" review T1.1 --dir "$REV_WT" ) >"$TMP/p440-review-mutant.log" 2>&1 \
+  || P440_RED_REVIEW_RC=$?
+P440_RED_REC="$REPO/docs/team/reviews/T1.1.md"
+assert_eq "P440 红侧前提：变异体真实 review rc=0" "$P440_RED_REVIEW_RC" "0"
+assert_file "$P440_RED_REC" "P440 红侧前提：记录真的生成"
+assert_has "$P440_RED_REC" '判定: **PASS**' "P440 红侧前提：变异门禁结果仍是 PASS"
+if [ "$P440_RED_REVIEW_RC" -ne 0 ] || [ ! -f "$P440_RED_REC" ] || ! grep -qF '判定: **PASS**' "$P440_RED_REC"; then
+  bad "P440 review 红侧前提不成立：不能用缺失记录或失败 review 充当路径翻转"
+elif ! grep -qF "$REPO" "$P440_RED_REC"; then
+  bad "P440 review 红侧失效：变异记录里没有绝对 main root"
+elif ! grep -qF "$HOME" "$P440_RED_REC"; then
+  bad "P440 review 红侧失效：变异记录里没有绝对 HOME"
+elif review_record_ledger_clean >"$TMP/p440-review-red.log" 2>&1; then
+  bad "P440 review 红侧失效：恢复绝对路径写盘仍通过账本路径断言"
+elif [ "$(tr -d '\r' < "$TMP/p440-review-red.log")" != 'absolute main root remains' ]; then
+  bad "P440 review 红侧失败原因不是绝对路径：$(tr '\n' ' ' < "$TMP/p440-review-red.log")"
+else
+  ok "P440 review 红：rc=0/PASS/记录存在后，仅因绝对 main/home 路径判红"
+fi
+cp "$SKILL_DIR/scripts/lib/cmd-review.sh" "$P440_REVIEW_MUT/scripts/lib/cmd-review.sh"
+rm -f "$REPO/docs/team/reviews/T1.1.md" "$REPO/docs/team/reviews/T1.1-verify.log"
+( cd "$REPO/.worktrees/verify" && TEAM_GATES="bash $P440_GATE" \
+    TEAM_SMOKE_LOCK="$REPO/.pi/team/state/p440-review.lock" \
+    bash "$P440_REVIEW_MUT/scripts/team" review T1.1 --dir "$REV_WT" ) >"$TMP/p440-review-restored.log" 2>&1
+review_record_ledger_clean >"$TMP/p440-review-restore-green.log" 2>&1 \
+  && ok "P440 review 还原绿：同一私有副本恢复显示净化后断言通过" \
+  || { bad "P440 review 还原后仍红"; cat "$TMP/p440-review-restore-green.log"; }
 REVIEW_DOCS_WRITES="$(cd "$REPO" && find docs/team -type f -newer "$TMP/review-write-set-start" -printf '%P\n' | LC_ALL=C sort)"
 assert_eq "review 在主检出的文档写集只有指定 record/log" "$REVIEW_DOCS_WRITES" $'reviews/T1.1-verify.log\nreviews/T1.1.md'
 if $TEAM review T1.1 >"$TMP/review-nodir.log" 2>&1; then bad "review 缺 --dir 应报错"; else ok "review 缺 --dir 明确报错（skill 不碰 git）"; fi
@@ -11076,6 +11192,68 @@ rm -f "$M71R/AGENTS.md"
 ( cd "$M71R" && $TEAM init --session m71-fixture --agents "dev verify" --vcs local --gates "true" --docs docs/team "${P235_MODELS[@]}" ) >"$TMP/m71r-create.log" 2>&1
 cmp -s "$TMP/m71-block.md" "$M71R/AGENTS.md" \
   && ok "文件缺失：建出来的就是那一块渲染段" || bad "文件缺失：建出来的不是渲染段"
+
+# ②f P440：PROTOCOL 是公开账本，三种安装形状分别使用可移植且不虚构的命令路径。
+p440_new_repo() { rm -rf "$1"; mkdir -p "$1"; ( cd "$1" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke && git commit -q --allow-empty -m init ); }
+p440_protocol_paths_ok() { # <repo> <skills/teamsmith|.pi/skills/teamsmith|<skill-dir>>
+  local repo="$1" expected="$2" f="$1/docs/team/PROTOCOL.md"
+  [ -f "$f" ] || { printf 'PROTOCOL missing\n'; return 1; }
+  ! grep -qF "$repo" "$f" || { printf 'absolute main root remains\n'; return 1; }
+  if [ "${HOME:-}" != "/" ]; then
+    ! grep -qF "$HOME" "$f" || { printf 'absolute home remains\n'; return 1; }
+  fi
+  grep -qF "bash $expected/scripts/team help" "$f" || { printf 'expected team command missing\n'; return 1; }
+  if [ "$expected" = '<skill-dir>' ]; then
+    ! grep -qF '.pi/skills/teamsmith' "$f" || { printf 'no-skills invented an install path\n'; return 1; }
+  else
+    [ -f "$repo/$expected/scripts/team" ] || { printf 'rendered team command does not exist\n'; return 1; }
+    [ -f "$repo/$expected/tests/smoke.sh" ] || { printf 'rendered smoke command does not exist\n'; return 1; }
+  fi
+}
+P440_NORMAL="$TMP/p440-normal-project"; p440_new_repo "$P440_NORMAL"
+( cd "$P440_NORMAL" && $TEAM init --session p440-normal --agents dev --vcs local --gates true "${P235_MODELS[@]}" ) >"$TMP/p440-normal-init.log" 2>&1 \
+  || { bad "P440 普通项目 init 失败"; tail -8 "$TMP/p440-normal-init.log"; }
+p440_protocol_paths_ok "$P440_NORMAL" '.pi/skills/teamsmith' >"$TMP/p440-normal-protocol.log" 2>&1 \
+  && ok "P440 init 普通项目：PROTOCOL 用真实存在的 .pi/skills 相对路径，不含 main/home 绝对路径" \
+  || { bad "P440 init 普通项目路径断言失败"; cat "$TMP/p440-normal-protocol.log"; }
+
+P440_SOURCE="$TMP/p440-source-project"; p440_new_repo "$P440_SOURCE"; mkdir -p "$P440_SOURCE/skills"
+cp -a "$SKILL_DIR" "$P440_SOURCE/skills/teamsmith"; cp -a "$SKILL_INIT_DIR" "$P440_SOURCE/skills/teamsmith-init"
+( cd "$P440_SOURCE" && bash skills/teamsmith/scripts/team init --session p440-source --agents dev --vcs local --gates true "${P235_MODELS[@]}" ) >"$TMP/p440-source-init.log" 2>&1 \
+  || { bad "P440 源仓 init 失败"; tail -8 "$TMP/p440-source-init.log"; }
+p440_protocol_paths_ok "$P440_SOURCE" 'skills/teamsmith' >"$TMP/p440-source-protocol.log" 2>&1 \
+  && ok "P440 init 源仓：PROTOCOL 用真实存在的 skills/teamsmith 相对路径，不含 main/home 绝对路径" \
+  || { bad "P440 init 源仓路径断言失败"; cat "$TMP/p440-source-protocol.log"; }
+
+P440_NOSKILLS="$TMP/p440-no-skills-project"; p440_new_repo "$P440_NOSKILLS"
+( cd "$P440_NOSKILLS" && $TEAM init --no-skills --session p440-no-skills --agents dev --vcs local --gates true "${P235_MODELS[@]}" ) >"$TMP/p440-no-skills-init.log" 2>&1 \
+  || { bad "P440 --no-skills init 失败"; tail -8 "$TMP/p440-no-skills-init.log"; }
+p440_protocol_paths_ok "$P440_NOSKILLS" '<skill-dir>' >"$TMP/p440-no-skills-protocol.log" 2>&1 \
+  && ok "P440 init --no-skills：只写明确占位，不伪造 .pi/skills 安装路径" \
+  || { bad "P440 init --no-skills 路径断言失败"; cat "$TMP/p440-no-skills-protocol.log"; }
+
+# P440 init 红/绿/恢复：源仓私有副本恢复绝对 SKILL_DIR 后同一行为断言必须红，还原后再绿。
+cp "$P440_SOURCE/skills/teamsmith/scripts/lib/cmd-project.sh" "$TMP/p440-cmd-project.backup"
+python3 - "$P440_SOURCE/skills/teamsmith/scripts/lib/cmd-project.sh" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+old = '"SKILL_DIR=$docs_skill_dir" "GATES=${gates:-<未配置>}" "SESSION=$session"'
+assert s.count(old) == 1, 'P440 PROTOCOL render binding not found exactly once'
+new = '"SKILL_DIR=$TEAM_SKILL_DIR" "GATES=${gates:-<未配置>}" "SESSION=$session"'
+open(p, 'w', encoding='utf-8').write(s.replace(old, new, 1))
+PY
+( cd "$P440_SOURCE" && bash skills/teamsmith/scripts/team init --force --session p440-source --agents dev --vcs local --gates true "${P235_MODELS[@]}" ) >"$TMP/p440-source-mutant.log" 2>&1
+if p440_protocol_paths_ok "$P440_SOURCE" 'skills/teamsmith' >"$TMP/p440-source-red.log" 2>&1; then
+  bad "P440 init 红侧失效：恢复绝对 SKILL_DIR 仍通过 PROTOCOL 路径断言"
+else
+  ok "P440 init 红：恢复绝对 SKILL_DIR → 断言红（$(tr '\n' ' ' < "$TMP/p440-source-red.log")）"
+fi
+cp "$TMP/p440-cmd-project.backup" "$P440_SOURCE/skills/teamsmith/scripts/lib/cmd-project.sh"
+( cd "$P440_SOURCE" && bash skills/teamsmith/scripts/team init --force --session p440-source --agents dev --vcs local --gates true "${P235_MODELS[@]}" ) >"$TMP/p440-source-restored.log" 2>&1
+p440_protocol_paths_ok "$P440_SOURCE" 'skills/teamsmith' >"$TMP/p440-source-restore-green.log" 2>&1 \
+  && ok "P440 init 还原绿：源仓相对路径与真实命令恢复" \
+  || { bad "P440 init 还原后仍红"; cat "$TMP/p440-source-restore-green.log"; }
 
 # ③ P417：会话新旧改成推导 —— PM 进程启动时刻 vs skill 文件最近 mtime；没有记录可读，也没有记录要维护。
 #     夹具：一份 skill 副本（真树在门禁期间不写；mtime 全钉在 2020）+ 一个真活进程当 PM（本段自己）。
