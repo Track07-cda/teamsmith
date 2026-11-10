@@ -14,7 +14,7 @@ inventoried and preserved outside first -- the PM's job, recipe in `/home/yikdat
 
 | Role | Owns | Must not |
 |---|---|---|
-| PM | Briefs / roadmap / decision log, dispatch, independent verification, merging, wrap-up | Treat "the agent says it passed" as evidence |
+| PM | Briefs / roadmap / decision log, dispatch, evidence acceptance, merging, wrap-up | Treat "the agent says it passed" as evidence; execute verification or archive gates |
 | agent:<name> | Exactly the brief, tests and reports, opening PR/MRs | push `main`, force-push, merge PR/MRs, touch other people's directories |
 
 Before starting, in this order: this file (especially this section), your own thread
@@ -31,9 +31,11 @@ the spec root). Read the change's proposal in `openspec/changes/<id>/` and the c
 lists, spec copies or design sections in task briefs or docs -- if it must hold, it goes into a spec.
 
 A change runs as **five phases, one brief and one owner each**: `opsx-explore`, then `opsx-propose` (planning only);
-a dev runs `opsx-apply`; a **different** agent runs `opsx-verify`; the PM runs `opsx-archive`. Two hard rules: **no
-`apply` brief before the PM's proposal review (`docs/team/reviews/<change>-proposal.md`) is ACCEPTED**, and no
-agent verifies its own work; the PM archives only after independent verification **and the user's confirmation**.
+a dev runs `opsx-apply`; a **different** agent runs `opsx-verify`; a non-implementer worker (possibly that verifier) runs
+`opsx-archive`. Two hard rules: **no `apply` brief before the PM's proposal review
+(`docs/team/reviews/<change>-proposal.md`) is ACCEPTED**, and no agent verifies its own work. The PM dispatches and
+accepts archive only after the same verifier's merged-revision evidence passes and the user confirms, or the PM records
+a narrowly qualified proxy confirmation (small, reversible and already covered by the approved approach).
 Phase names go in the brief's `phase:` line; flags, phase-command source and pinned-toolchain caveat are in
 `/home/yikdata/Documents/syncthing/Work/Projects/pm-skills/skills/teamsmith/references/openspec.md`.
 
@@ -54,12 +56,11 @@ last three take `--force` + one audited line). `team change status <id>` shows t
   + report written + branch settled), **hard-blocked** (notify the PM + `BLOCKED:` in the report), or
   **suspended on background jobs** (this session's jobs still running, every step that does not depend on them
   done; the turn's last line names every awaited job id). The lane rule is the suspend default: `team_bg_run`
-  starts a long job and the turn ends -- the completion wake-up is the normal harvest point -- and in-turn waiting
-  is the bounded exception, only inside the inline-wait budget (about 2 minutes), when the result blocks the next
-  step and nothing else can advance. A previous session's wake-ups died with its process: find its jobs on disk
+  starts a long job and the turn ends; the completion wake-up is the normal harvest point. Do not wait inside the
+  turn (`sleep`, `team wait`, a blocking harvest): the user cannot type while the PM waits. A previous session's wake-ups died with its process: find its jobs on disk
   (`state/bg.log`, `team bg list`) before awaiting or re-running them (`/home/yikdata/Documents/syncthing/Work/Projects/pm-skills/skills/teamsmith/references/workflows.md` §E2).
-- **Never claim tests passed without having run them.** The PM re-runs in an independent worktree; a false report
-  fails the task.
+- **Never claim tests passed without having run them.** The assigned non-implementer verifier runs the gates on the
+  PM-prepared independent checkout; the PM accepts that evidence rather than executing the gates. A false report fails the task.
 - Never write tokens/secrets into code, config, logs or commit messages; never read credential files
   (e.g. `~/.pi/agent/auth.json`).
 - **A brief declares one task category; models belong to the project, not to your seat.** The `category:` line
@@ -81,7 +82,7 @@ last three take `--force` + one audited line). `team change status <id>` shows t
 
 ### Delivering
 
-Gates are `openspec validate --all --strict && bash skills/teamsmith/tests/smoke.sh`; a brief may require stricter commands and then the brief wins. One gate at a time -- the full
+Gates are `openspec validate --all && bash skills/teamsmith/tests/smoke.sh </dev/null`; a brief may require stricter commands and then the brief wins. One gate at a time -- the full
 suite is the machine's shared resource, and `TEAM_SMOKE_FAST=1` runs a bounded batch. A selected run covers only
 the sections it executed and names the ones it did not run; a full run stays a milestone/delivery check, not a
 claim attached to a selected run. Review queues on the gate lock before its own timeout starts.
@@ -89,8 +90,9 @@ claim attached to a selected run. Review queues on the gate lock before its own 
 Implement in scope, small commits, run the brief's acceptance commands, then write
 `docs/team/reports/<ID>-<agent>.md` with the real commands and output tails (plus flip evidence for a defect
 fix) and settle the branch: a local branch stays local, and a remote push/PR follows only the PM's authorized
-route. The PM verifies in an independent worktree, merges itself, sets the board and closes the task. Messages are
-not deliverables -- evidence lives in `docs/team/reports/`, `docs/team/reviews/` and the commits (recipes:
+route. A non-implementer verifier runs `team review` on the PM-prepared independent checkout and, after the PM merges,
+resumes on the merged SHA. The PM accepts that evidence, merges, and only then sets the board and closes the task.
+Messages are not deliverables -- evidence lives in `docs/team/reports/`, `docs/team/reviews/` and the commits (recipes:
 `/home/yikdata/Documents/syncthing/Work/Projects/pm-skills/skills/teamsmith/references/workflows.md` §B dispatch, §E verification, §F merge). `docs/team/inbox/<agent>.md`
 and the knock on `teamsmith:pm` happen at turn end automatically. Blocked, or someone else's bug:
 `bash /home/yikdata/Documents/syncthing/Work/Projects/pm-skills/skills/teamsmith/scripts/team notify <agent> "<one line>"` and a report that says `BLOCKED:`.
