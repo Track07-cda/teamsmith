@@ -1257,9 +1257,9 @@ The correctness gate SHALL distinguish a product-only checkout, which deliberate
 
 Only a check whose named prerequisite is one of those deliberately absent internal surfaces SHALL skip on a product-only checkout. Each such attribution MUST print `SKIP（条件不满足）`, the affected check and missing prerequisite, be counted as a skip rather than a pass, and reach the gate's output and per-section/run accounting. Missing product files, unavailable required tools, a failed executed assertion, and corruption of a present internal surface MUST retain their existing failure/degradation rules; the checkout classification MUST NOT swallow them. An executed check's verdict MUST rest on evidence the subject itself carries: when the call's command word is the wrapped command itself (`tmux`), an isolation wrapper defined in one file MUST NOT certify a mutation call made by another file, while a dedicated wrapper name defined alongside the caller MAY keep its directory-level meaning; a check MUST NOT be reported as satisfied on evidence the subject does not have. A run with prerequisite skips and no failures SHALL exit 0, without claiming the skipped checks passed; a real failure alongside skips MUST still exit non-zero.
 
-The same correctness command SHALL run on both shapes, with no second public suite. The product's static checks, skill loading, published-spec validation, container-build checks and every ledger-independent fixture MUST remain eligible exactly as before (including the existing FAST/full and tool-premise rules). A fixture that provisions its own ledger MUST still run in the product-only checkout. For an internal checkout, except for the three route-page control replacements specified below, every pre-existing assertion MUST still execute with its original verdict and at least its pre-change per-section pass count under identical run settings; replacing an existing assertion with a new one MUST NOT satisfy that coverage comparison. CI's correctness step MUST retain its blocking failure semantics, and it SHALL run the product floor the way `verification#CI runs the two gates separately and performance does not block` states: a failing applicable product assertion in that step fails the job, and the selection it makes is disclosed in the output tail rather than presented as the full gate.
+The same correctness command SHALL run on both shapes, with no second public suite. The product's static checks, skill loading, published-spec validation, container-build checks and every ledger-independent fixture MUST remain eligible exactly as before (including the existing FAST/full and tool-premise rules). A fixture that provisions its own ledger MUST still run in the product-only checkout. For an internal checkout, except for the three route-page control replacements and the reply-observer duplicate-execution retirement specified below, every pre-existing assertion MUST still execute with its original verdict and at least its pre-change per-section pass count under identical run settings; replacing an existing assertion with a new one MUST NOT satisfy that coverage comparison. CI's correctness step MUST retain its blocking failure semantics, and it SHALL run the product floor the way `verification#CI runs the two gates separately and performance does not block` states: a failing applicable product assertion in that step fails the job, and the selection it makes is disclosed in the output tail rather than presented as the full gate.
 
-The sole replacement exception is the three complete nested walks in the route-page controls for a column-zero
+The route-page replacement exception is the three complete nested walks in the route-page controls for a column-zero
 command line, an undeclared command-page usage and an unread group level, as specified by
 `dispatch#The printed route is a route that works`. Their shared file judgement and the two single-page
 damaged/normal renderer experiments SHALL replace those executions, not skip their content obligations.
@@ -1279,6 +1279,15 @@ MUST retain their original assertions/count obligations, with the unchanged norm
 under identical settings. Replacement assertions SHALL count only when executed; neither an assumed old count,
 duplicate success lines nor a retired assertion reported as passed SHALL make the new total resemble the old one.
 This exception permits no new prerequisite skip or permanent deletion-policing guard.
+
+The separate reply-observer exception SHALL retire only the forced-missing-observer replay of complete
+bounded/flip groups, its failure-only trace replay, the bounded notice predicting a later full_scan skip, and
+the seven old skip-path checks replaced by focused diagnostic/outcome checks and their negative controls.
+Only those retired executions SHALL be removed from the comparison inventory; no other assertion, normal
+bounded run or original mutation arm SHALL be retired under that exception. Child replay counters MUST NOT
+be subtracted from parent counters that never included them. The replacement SHALL report its actual checks
+and distinct skipped observation identities, never pad passes to preserve an obsolete raw total. This exception
+does not modify the route-page obligations above or permit a new prerequisite skip.
 
 #### Scenario: The release export skips only unavailable internal checks
 
@@ -1312,8 +1321,9 @@ This exception permits no new prerequisite skip or permanent deletion-policing g
 
 - **GIVEN** pre-change and post-change independent internal checkouts with identical tools and FAST settings
 - **WHEN** `TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh </dev/null` runs in each
-- **THEN** every pre-existing assertion outside the three named route-page replacements is present in the post-change executed assertion inventory with its original verdict, each unaffected section's pass count is at least its baseline, and no new checkout-prerequisite skip appears
+- **THEN** every pre-existing assertion outside the three named route-page replacements and the identified reply-observer retired executions is present in the post-change executed assertion inventory with its original verdict, each unaffected section's pass count is at least its baseline, and no new checkout-prerequisite skip appears
 - **AND** this FAST run does not produce the route-page replacement evidence; that separate source-attributed baseline, retained non-FAST record/manual undeclared-usage receipt and explicit non-FAST `routes.sh pages` inventory are judged by the named scenario below, without relaxing any retained assertion or count obligation
+- **AND** reply-observer replacement evidence comes from its focused absence sample and normal §62 run, with only the named duplicate executions retired and with parent/child counts kept separate
 - **AND** a scratch mutation that replaces any retained internal assertion with a prerequisite skip still fails the inventory/count comparison, even if new assertions keep the aggregate pass total unchanged
 
 #### Scenario: Partial internal trees and broken installs remain red
@@ -1369,7 +1379,7 @@ This exception permits no new prerequisite skip or permanent deletion-policing g
   CLI claim, counts FAST/smoke output as the sample evidence, or labels a retired nested walk as an executed pass
 - **WHEN** that evidence is compared with the named replacement scope and executed assertion inventory
 - **THEN** it fails the coverage comparison even if the reported total equals or exceeds the baseline;
-  only the three specified complete-walk replacements are allowed
+  only the three specified route-page complete-walk replacements and the separately named reply-observer retirement are allowed
 
 ### Requirement: The gate lock's holder record names its kind, its owner, its elapsed time and its bound
 
@@ -1822,3 +1832,61 @@ The evidence SHALL include real busy and unconfirmed writer paths; crash/fault b
 - **WHEN** private Pi emits the actual complete marker in pieces, a protected example, an aborted prefix and a final eligible answer
 - **THEN** raw logs show the known streamed-marker positive and the cleaned final states or documented literal-prefix boundary, without a timing threshold
 - **AND** private task/inbox/outbox/notification/pending snapshots remain unchanged by publication, while legitimate runtime/journal/reply artifacts are identified separately
+
+### Requirement: Reply observer absence is proved without replaying unrelated checks
+
+The reply fixture SHALL prove observer absence through the same diagnostic, bounded-observation, full_scan and result-consumption paths used normally. It MUST replace the complete forced-absence bounded/flip replay and failure trace replay with a focused sample. The sample MUST require named absence evidence and completion status, not a total SKIP threshold, and its failures MUST reach the invoking fixture's non-zero exit.
+
+#### Scenario: A focused sample actually takes the normal absence paths
+- **GIVEN** the existing test-only observer-absence input makes the real process-I/O capability check unavailable
+- **WHEN** the focused sample invokes the normal driver notice, bounded-observation entry and full_scan probe with its normal skip-result consumer
+- **THEN** its output names all three facts: unavailable `/proc/<pid>/io` with the reason, skipped bounded read-volume assertions with the reason, and skipped `flip/full_scan` with the reason and no conclusion
+- **AND** those paths run before observer-specific large-store preparation, without executing the complete bounded/flip groups, unrelated mutations, or a second trace run
+- **AND** the sample uses its own result-line identity, never the parent's `== P234 key-replies 结果 ==` prefix; smoke's parent-summary reader still selects only the real parent result
+
+#### Scenario: Observer-specific preparation is absent, not merely unused
+- **GIVEN** the absence sample's own empty projects and private temporary root contain no reply indexes
+- **WHEN** the bounded observation entry and full_scan probe return, before any sample cleanup
+- **THEN** neither project's `.pi/team/state/key-replies/index.v1` exists and no second prepared index exists elsewhere in that owned root, including a 60-slot or 100000-slot store
+- **AND** a subshell control that moves capability handling after preparation is rejected for the unexpected index and its restoration is accepted; a tiny real index suffices for this damaged-order control, while the healthy sample calls the real unoverridden functions
+
+#### Scenario: Skipped observations remain distinct from passed or failed observations
+- **WHEN** that unmodified focused sample completes
+- **THEN** it has exactly two skipped observation identities, bounded read-volume and full_scan, neither earns a pass or product failure, and its real process exits 0 with a complete zero-failure result
+- **AND** the driver's capability notice is not a third skipped observation, the bounded prediction of a later full_scan skip is absent, and the enclosing fixture reports verification of that classification rather than successful read-volume measurement
+
+#### Scenario: Unrelated skips cannot substitute for a missing diagnosis
+- **GIVEN** subshell-only function overrides remove respectively the driver, bounded, or full_scan absence diagnosis, including a variant that emits unrelated skips instead
+- **WHEN** the same short sample and its normal evidence judgement run for each mutation and restoration
+- **THEN** every mutated case is rejected naming the missing fact even if total SKIP is three or more, and each restoration is accepted
+- **AND** matching a phrase in a hand-authored expected log cannot satisfy the judgement; each negative control calls only the sample collector and shared judgement in its subshell, never launches `--select skip-path` or recursively enters the group, and the healthy/restored sample uses the real functions
+
+#### Scenario: A missing observer cannot earn a success
+- **GIVEN** subshell-only function overrides respectively turn bounded absence and full_scan absence into successful observation results
+- **WHEN** the same short sample and evidence judgement run for each mutation and restoration
+- **THEN** each mutated case is rejected for its wrong result classification, even if the capability notice remains, and each restoration is accepted
+- **AND** no normal success line or increment can count the unobserved read bound as verified
+
+#### Scenario: A missing observer cannot become a product failure
+- **GIVEN** subshell-only function overrides respectively turn bounded absence and full_scan absence into a failing result
+- **WHEN** the same short sample and evidence judgement run for each mutation and restoration
+- **THEN** the unmodified requirement for non-failing absence rejects both mutations and accepts each restoration
+- **AND** a real unrelated product failure still retains its existing failing status; absence handling does not convert failures to skips
+
+#### Scenario: The actual caller cannot discard an observation outcome
+- **GIVEN** an external one-off scratch copy with broken shared bounded or full_scan absence handling and a second copy with that same damage which also discards the failed sample judgement
+- **WHEN** each copy is invoked once through the existing `key-replies.sh --select skip-path` entry, without an internal negative control relaunching that entry
+- **THEN** the first parent exits 1 and its ordinary sample-consumption branch emits a named `✗ skip-path` assertion identifying the missing diagnosis or wrong classification; the discard copy still exits 1 from negative controls' failed restoration sides but that specific parent assertion is absent, and internal controls cannot emit that parent-only assertion
+- **AND** restoration completes successfully; non-zero exit alone, or a helper-only red result, cannot prove parent consumption
+
+#### Scenario: Normal coverage stays in the ordinary reply section
+- **GIVEN** an available process-I/O observer and the normal reply section selection
+- **WHEN** §62 invokes the reply fixture's ordinary all-groups entry once
+- **THEN** normal bounded checks and the nine original bad-source/restored-source mutation controls run once each, including real kernel full_scan evidence, while only the focused sample simulates observer absence
+- **AND** real storage, concurrency, receipts, interruption, paging, FIFO, permissions, read-only behavior, Pi capture and UI coverage retain their existing locations and verdicts; none is transferred to a nightly or alternative mode
+
+#### Scenario: Accounting retires only the identified repeat
+- **WHEN** the before/after execution inventories and parent/child summaries for the affected reply fixture are compared under identical settings
+- **THEN** the only retired whole-group runs are the forced-absence bounded/flip replay and its failure-only trace replay, alongside the replaced skip-path checks and redundant predictive notice; all normal assertions remain
+- **AND** the focused child's two skipped observations are not counted as product successes or merged twice into parent totals, new negative controls are identified as such, and no fixed global pass total or elapsed-time saving is claimed
+- **AND** PM-only trial integration of the two complete verification modifications in route-page-then-reply order preserves both reply retirement exceptions once each; reverse-order copies lose both exceptions even though the added reply requirement remains, so checking only the added requirement is insufficient
