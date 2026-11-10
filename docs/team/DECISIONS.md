@@ -2223,3 +2223,11 @@ V133 的六项已关闭：准备顺序有文件事实，父级证据具名且有
 接受 `delegate-openspec-archive` 最终规划 `a5c82971`：非实现者执行 verify、archive 和相应门禁，PM 只做派单、证据审阅、接受与合并；同一 verifier 在合并后验证 merged SHA。verify 任务自己的记录是 PM 接受记录，不冒充执行证据。
 
 保留现有限定 PM-proxy，不扩大用户裁定。归档 brief 使用字面 `phase: archive`，自身 blocker 只认该值与同 ID；依赖归档串行，Purpose 在 native archive 后单独明确提交。Apply 由非提案作者执行，完成后独立复验。
+
+### D241 · 用户授权 PM 决定归档，按验证顺序执行（2026-11-09）
+
+用户明确“归档由你决策，根据验证归档流程”。PM 接受已披露的 WARNING 作为归档边界，不再逐项追问；实际 verify/archive 仍由非实现者席位执行，PM 审阅和合并。
+
+接受的理由：帮助页有真实走查255行一致性；缺观测器有独立复验、实现 blob 同一性和最终短入口/反例；严格校验漂移是既有文档问题。上述边界均写入归档记录，不声称未跑检查已通过。
+
+顺序：route-page-check-determinism → reply-observer-skip-focus → delegate-openspec-archive；panel-symlink-inside-project 在 V145 最终验证通过后另行归档。依赖前一归档合并后才开始后一项。
