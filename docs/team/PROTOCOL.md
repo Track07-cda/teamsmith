@@ -2,7 +2,7 @@
 
 > **A short operational summary, not the rule book.** The shared constitution is the teamsmith section of
 > `AGENTS.md`; detailed procedures live in the skill's `references/`. Tooling entry point:
-> `bash /home/yikdata/Documents/syncthing/Work/Projects/pm-skills/skills/teamsmith/scripts/team help`
+> `bash skills/teamsmith/scripts/team help`
 
 ## Roles
 
@@ -42,9 +42,9 @@
   non-implementer verifier runs `team review <ID> --dir <checkout>` and the tool writes the named central record/log.
 - A brief may require stricter commands than the project gates; the brief wins. A selected run says which sections it
   did not run instead of claiming the full suite.
-- **Correctness on every change**: `openspec validate --all --strict && bash /home/yikdata/Documents/syncthing/Work/Projects/pm-skills/skills/teamsmith/tests/smoke.sh </dev/null`.
-  **Performance separately, before a release**: `bash /home/yikdata/Documents/syncthing/Work/Projects/pm-skills/skills/teamsmith/tests/perf.sh` (front door `team perf`) — reference
-  readings only, never part of a review verdict. Gate policy and its queue: `/home/yikdata/Documents/syncthing/Work/Projects/pm-skills/skills/teamsmith/references/protocol.md` §9b-2.
+- **Correctness on every change**: `openspec validate --all --strict && bash skills/teamsmith/tests/smoke.sh </dev/null`.
+  **Performance separately, before a release**: `bash skills/teamsmith/tests/perf.sh` (front door `team perf`) — reference
+  readings only, never part of a review verdict. Gate policy and its queue: `skills/teamsmith/references/protocol.md` §9b-2.
 
 ## Model policy: task categories, not seats
 
@@ -56,7 +56,7 @@
 - Shared-token concurrency: strong models are the scarce resource (`TEAM_MODEL_LIMITS`); `team ps` shows occupancy.
 - Changing the project's own contract, launching a fresh PM, landing source on a shared branch/skill path and adopting
   a shared source are **distinct gates**: preview the exact command and get authorization per operation.
-- Full policy: `/home/yikdata/Documents/syncthing/Work/Projects/pm-skills/skills/teamsmith/references/protocol.md` §6 and `references/config.md`.
+- Full policy: `skills/teamsmith/references/protocol.md` §6 and `references/config.md`.
 
 ## Specs (OpenSpec)
 
@@ -72,7 +72,7 @@ explorer, planning only) → `opsx-apply` (a dev) → `opsx-verify` (a **differe
 non-implementer worker, possibly that verifier). Two hard rules: no `apply` brief before the PM's proposal review
 (`docs/team/reviews/<change>-proposal.md`) is **ACCEPTED**, and no agent verifies its own work. The PM dispatches and
 accepts archive only after the same verifier's merged-revision evidence and valid confirmation.
-Phase table, gates and the PM's review checklist: `/home/yikdata/Documents/syncthing/Work/Projects/pm-skills/skills/teamsmith/references/openspec.md`.
+Phase table, gates and the PM's review checklist: `skills/teamsmith/references/openspec.md`.
 
 **The change is the assignment unit** (`1 change : N tasks`, `1 task : 0..1 change`): the brief's header is the
 foreign key — `change:`, `specs:`/`anchor:` and `deltas:` — and `team dispatch` refuses more than one change id, a
@@ -82,8 +82,8 @@ authored the change. `team change status <id>` shows readiness and exits 0 only 
 ## Bootstrap and pulse
 
 ```bash
-bash /home/yikdata/Documents/syncthing/Work/Projects/pm-skills/skills/teamsmith/scripts/team bootstrap     # new project: config + docs skeleton + worktrees + pulse window
-bash /home/yikdata/Documents/syncthing/Work/Projects/pm-skills/skills/teamsmith/scripts/team pulse up      # the pulse window runs the monitor and patrols
+bash skills/teamsmith/scripts/team bootstrap     # new project: config + docs skeleton + worktrees + pulse window
+bash skills/teamsmith/scripts/team pulse up      # the pulse window runs the monitor and patrols
 ```
 
 - The pulse is a **metronome that wakes the PM**: every 15 minutes by default it checks for work and wakes the PM only
@@ -94,6 +94,6 @@ bash /home/yikdata/Documents/syncthing/Work/Projects/pm-skills/skills/teamsmith/
   resolved temp root and the worktree), refusing below `TEAM_MIN_AVAIL_MB` / `TEAM_MIN_TOTAL_MB` /
   `TEAM_MIN_FREE_SWAP_MB` / `TEAM_TMP_MIN_FREE_MB` / `TEAM_TMP_MIN_FREE_INODES`, and refusing a temp root it cannot
   use. Model quotas are a separate limit. `team ps` shows the headroom; thresholds and overrides:
-  `/home/yikdata/Documents/syncthing/Work/Projects/pm-skills/skills/teamsmith/references/config.md` §2.
-- Mechanism and boundaries: `/home/yikdata/Documents/syncthing/Work/Projects/pm-skills/skills/teamsmith/references/protocol.md` §8; patrol steps:
-  `/home/yikdata/Documents/syncthing/Work/Projects/pm-skills/skills/teamsmith/references/workflows.md` §§D/§I.
+  `skills/teamsmith/references/config.md` §2.
+- Mechanism and boundaries: `skills/teamsmith/references/protocol.md` §8; patrol steps:
+  `skills/teamsmith/references/workflows.md` §§D/§I.
