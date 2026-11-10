@@ -5,9 +5,9 @@ agent: dev
 category: analysis
 phase: opsx-propose
 change: agent-self-reminder
-specs: agent-self-reminder pm-lifecycle
+specs: agent-self-reminder pm-lifecycle watchdog
 anchor: openspec/changes/agent-self-reminder/proposal.md
-deltas: agent-self-reminder, pm-lifecycle
+deltas: agent-self-reminder, pm-lifecycle, watchdog
 branch: task/P441-remind-tool-proposal-revision
 ---
 
@@ -42,7 +42,7 @@ branch: task/P441-remind-tool-proposal-revision
 
 ## 同步修订
 
-1. proposal/design 中把限额决策替换为“无额度的最小工具”，说明用户最新决定；
+1. proposal/design 中把限额决策替换为“无额度的最小工具”，说明用户最新决定；同时删除 `specs/watchdog/spec.md` 中残留的 `and its own batch spacing`，保留 ordinary nudge gap 不变；
 2. delta specs 删除额度场景，保留有效时间、完整正文、身份和恢复场景；
 3. tasks 将 2.2 改为无配置键的最小输入校验，3.3 保持工具注入；按已有证据重整已完成勾选项，不把未做工作勾掉；
 4. 明确本 revision 不影响已落地的 CLI、状态、Standby、最小投递代码；
