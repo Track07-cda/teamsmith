@@ -1,7 +1,7 @@
 ---
 id: P441
 title: 自我提醒：修订 PM 工具提案，取消额度限制
-agent: dev2
+agent: dev
 category: analysis
 phase: opsx-propose
 change: agent-self-reminder
@@ -46,6 +46,6 @@ branch: task/P441-remind-tool-proposal-revision
 2. delta specs 删除额度场景，保留有效时间、完整正文、身份和恢复场景；
 3. tasks 将 2.2 改为无配置键的最小输入校验，3.3 保持工具注入；按已有证据重整已完成勾选项，不把未做工作勾掉；
 4. 明确本 revision 不影响已落地的 CLI、状态、Standby、最小投递代码；
-5. 报告 `docs/team/reports/P441-dev2.md`，列出删除项、保留项和结构校验。
+5. 报告 `docs/team/reports/P441-dev.md`，列出删除项、保留项和结构校验。
 
 运行 `openspec validate --all`、change strict、`spec-refs --check`、`section-select --check`、账本禁令和 `git diff --check`。由非作者做定点审阅后再派 Apply；不跑长测试、不合并、不归档。
