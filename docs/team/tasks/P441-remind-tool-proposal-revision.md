@@ -35,7 +35,7 @@ branch: task/P441-remind-tool-proposal-revision
 
 - 时间必须有效且在未来；相对时间在同一创建事务计算一次；
 - 正文非空、合法 UTF-8、无 NUL，完整保存/显示/投递，不截断；
-- key 幂等与冲突处理、单调 ID、状态一致；
+- key 幂等与冲突处理、单调 ID、状态一致；周期提醒采用“每次叫醒后用同一 key 安排下一次”，上一次观察后释放 key，下一次获得新 ID；活动中的同 key 重试返回原 ID 且不推迟到期；
 - 一个批次在结果未知时不盲目重发；确认/恢复不改变；
 - PM-only `team_remind` add/list/show/cancel，每次调用重新验证身份，worker/ordinary/forged/reload 后隐藏或拒绝且零状态访问；
 - 诚实 doctor 证据与现有 Pi/Pulse/Standby 行为。
