@@ -5,7 +5,9 @@
 The PM's independent check of an agent's claim: gates run on a checkout the agent never touched, a hard timeout, and
 a written record that future readers can audit. Why a report is only a claim and the review is the evidence:
 `references/philosophy.md` (principle 1, "a false green is worse than nothing") and `references/protocol.md`.
+
 ## Requirements
+
 ### Requirement: Reviewing needs an independent checkout
 
 `team review <ID> --dir <path>` SHALL run only against a checkout the PM prepared and SHALL refuse when `--dir` is
@@ -1255,7 +1257,28 @@ The correctness gate SHALL distinguish a product-only checkout, which deliberate
 
 Only a check whose named prerequisite is one of those deliberately absent internal surfaces SHALL skip on a product-only checkout. Each such attribution MUST print `SKIP（条件不满足）`, the affected check and missing prerequisite, be counted as a skip rather than a pass, and reach the gate's output and per-section/run accounting. Missing product files, unavailable required tools, a failed executed assertion, and corruption of a present internal surface MUST retain their existing failure/degradation rules; the checkout classification MUST NOT swallow them. An executed check's verdict MUST rest on evidence the subject itself carries: when the call's command word is the wrapped command itself (`tmux`), an isolation wrapper defined in one file MUST NOT certify a mutation call made by another file, while a dedicated wrapper name defined alongside the caller MAY keep its directory-level meaning; a check MUST NOT be reported as satisfied on evidence the subject does not have. A run with prerequisite skips and no failures SHALL exit 0, without claiming the skipped checks passed; a real failure alongside skips MUST still exit non-zero.
 
-The same correctness command SHALL run on both shapes, with no second public suite. The product's static checks, skill loading, published-spec validation, container-build checks and every ledger-independent fixture MUST remain eligible exactly as before (including the existing FAST/full and tool-premise rules). A fixture that provisions its own ledger MUST still run in the product-only checkout. For an internal checkout, every pre-existing assertion MUST still execute with its original verdict and at least its pre-change per-section pass count under identical run settings; replacing an existing assertion with a new one MUST NOT satisfy that coverage comparison. CI's correctness step MUST retain its blocking failure semantics, and it SHALL run the product floor the way `verification#CI runs the two gates separately and performance does not block` states: a failing applicable product assertion in that step fails the job, and the selection it makes is disclosed in the output tail rather than presented as the full gate.
+The same correctness command SHALL run on both shapes, with no second public suite. The product's static checks, skill loading, published-spec validation, container-build checks and every ledger-independent fixture MUST remain eligible exactly as before (including the existing FAST/full and tool-premise rules). A fixture that provisions its own ledger MUST still run in the product-only checkout. For an internal checkout, except for the three route-page control replacements specified below, every pre-existing assertion MUST still execute with its original verdict and at least its pre-change per-section pass count under identical run settings; replacing an existing assertion with a new one MUST NOT satisfy that coverage comparison. CI's correctness step MUST retain its blocking failure semantics, and it SHALL run the product floor the way `verification#CI runs the two gates separately and performance does not block` states: a failing applicable product assertion in that step fails the job, and the selection it makes is disclosed in the output tail rather than presented as the full gate.
+
+The sole replacement exception is the three complete nested walks in the route-page controls for a column-zero
+command line, an undeclared command-page usage and an unread group level, as specified by
+`dispatch#The printed route is a route that works`. Their shared file judgement and the two single-page
+damaged/normal renderer experiments SHALL replace those executions, not skip their content obligations.
+The delivery evidence SHALL map each retired control to its replacement's intended-rule finding and no-finding
+normal result. Its counted objects SHALL be routes.sh's own `✓/✗` totals and per-case named result inventory,
+not smoke's single successful-child section count; nested-walk log lines MUST NOT be added to parent counts.
+Pre-change evidence SHALL identify each old parent assertion and count from source, retain the existing non-FAST
+51m record and manually reproduce only the undeclared-usage control once with unchanged test source. The other
+two old controls SHALL be labelled source-attributed, not rerun; no modified baseline test or selector is allowed.
+Post-change evidence SHALL come from non-FAST `bash skills/teamsmith/tests/routes.sh pages`, including actual
+`替代④`, `替代⑪`, `替代⑬` results and its own totals. FAST/default smoke does not produce this sample evidence.
+Old parent, nested-walk, new sample and any retained full-flips totals MUST retain their separate provenance,
+not be summed or presented as comparable measurements of identical execution scope.
+
+Only counts attributable to these named replacements MAY differ; the real route walk and all other controls
+MUST retain their original assertions/count obligations, with the unchanged normal real-walk command compared
+under identical settings. Replacement assertions SHALL count only when executed; neither an assumed old count,
+duplicate success lines nor a retired assertion reported as passed SHALL make the new total resemble the old one.
+This exception permits no new prerequisite skip or permanent deletion-policing guard.
 
 #### Scenario: The release export skips only unavailable internal checks
 
@@ -1289,8 +1312,9 @@ The same correctness command SHALL run on both shapes, with no second public sui
 
 - **GIVEN** pre-change and post-change independent internal checkouts with identical tools and FAST settings
 - **WHEN** `TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh </dev/null` runs in each
-- **THEN** every pre-existing assertion is present in the post-change executed assertion inventory, each pre-existing section's pass count is at least its baseline, and no new checkout-prerequisite skip appears
-- **AND** a scratch mutation that replaces an existing internal assertion with a prerequisite skip fails the inventory/count comparison, even if new assertions keep the aggregate pass total unchanged
+- **THEN** every pre-existing assertion outside the three named route-page replacements is present in the post-change executed assertion inventory with its original verdict, each unaffected section's pass count is at least its baseline, and no new checkout-prerequisite skip appears
+- **AND** this FAST run does not produce the route-page replacement evidence; that separate source-attributed baseline, retained non-FAST record/manual undeclared-usage receipt and explicit non-FAST `routes.sh pages` inventory are judged by the named scenario below, without relaxing any retained assertion or count obligation
+- **AND** a scratch mutation that replaces any retained internal assertion with a prerequisite skip still fails the inventory/count comparison, even if new assertions keep the aggregate pass total unchanged
 
 #### Scenario: Partial internal trees and broken installs remain red
 
@@ -1323,6 +1347,29 @@ The same correctness command SHALL run on both shapes, with no second public sui
 - **THEN** the command is `openspec validate --all --strict && bash skills/teamsmith/tests/smoke.sh --floor --keep </dev/null --paths "$@"` with the changed paths as its own arguments, without FAST or correctness `continue-on-error`, and it succeeds when all applicable checks succeed
 - **AND** a failing applicable product assertion makes that same command fail; performance remains a separate non-blocking conclusion
 - **AND** a changed-path list naming a fixture meta-mutation's own sources adds that self-check, one naming only product routing sources adds §61 and not the matrix, and the same command with no resolvable base runs the full suite instead of a narrower selection
+
+#### Scenario: Route-page replacement evidence does not manufacture the old pass total
+
+- **GIVEN** pre-change source identities/counts for all three old parent controls, a retained non-FAST 51m
+  record and one actual undeclared-usage receipt without test-source edits, followed by the candidate's explicit
+  non-FAST `routes.sh pages` run and identical-setting normal real-walk inventories before/after extraction
+- **WHEN** the delivery evidence is read
+- **THEN** ④/⑬ are marked source-attributed and not rerun; each replacement has a successful named `替代④`,
+  `替代⑪` or `替代⑬` result grounded in its intended-rule finding and no-finding normal/restored result;
+  both damaged-renderer experiments retain rc=0/nonempty outputs and unmutated-tree normal renderers
+- **AND** actual routes `✓/✗` totals and per-case outcomes retain their execution scope and provenance;
+  smoke's one-pass section total, FAST output or nested log counts cannot substitute or pad them. Unchanged
+  real-walk assertions/counts are retained; any changed sample total is explained only by this exact mapping,
+  and the partial old baseline is not reported as three measured runs or an elapsed saving
+
+#### Scenario: The named replacement cannot hide a lost CLI or renderer assertion
+
+- **GIVEN** delivery evidence that substitutes hand-written files for a required damaged-renderer experiment,
+  accepts only the special-literal diagnosis instead of the required multiset difference, omits a retained real
+  CLI claim, counts FAST/smoke output as the sample evidence, or labels a retired nested walk as an executed pass
+- **WHEN** that evidence is compared with the named replacement scope and executed assertion inventory
+- **THEN** it fails the coverage comparison even if the reported total equals or exceeds the baseline;
+  only the three specified complete-walk replacements are allowed
 
 ### Requirement: The gate lock's holder record names its kind, its owner, its elapsed time and its bound
 
@@ -1775,4 +1822,3 @@ The evidence SHALL include real busy and unconfirmed writer paths; crash/fault b
 - **WHEN** private Pi emits the actual complete marker in pieces, a protected example, an aborted prefix and a final eligible answer
 - **THEN** raw logs show the known streamed-marker positive and the cleaned final states or documented literal-prefix boundary, without a timing threshold
 - **AND** private task/inbox/outbox/notification/pending snapshots remain unchanged by publication, while legitimate runtime/journal/reply artifacts are identified separately
-

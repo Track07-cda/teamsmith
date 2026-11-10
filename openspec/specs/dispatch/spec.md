@@ -5,7 +5,9 @@
 Hand one work slice to one worker agent: a self-contained brief, its own git worktree and tmux window, and the
 guards that stop a dispatch from corrupting another task's work or the machine. Why each guard exists:
 `references/protocol.md` (safety model) and `references/philosophy.md` (verifiability, capacity awareness).
+
 ## Requirements
+
 ### Requirement: A brief is self-contained and names its evidence
 
 `team task <ID> --title <title> --agent <a> --category <category>` SHALL render `templates/task.md.tmpl` into
@@ -926,6 +928,32 @@ line, per probe and per refusal route (never a silent skip) and exits 0 only whe
 route is green. It prints one line per level and per page it judged, so a level that was never read is visible
 as a missing group of lines rather than as silence.
 
+The page-content controls for a column-zero command line, an undeclared command-page usage and an unread group
+level SHALL use the same complete file judgement as this real walk: usage parser, continuation rules,
+menu/group/command comparisons, attribution, page/level read state, `ok`/`finding` accounting and failure status.
+The shared operations SHALL emit the findings and update the executing harness's `FIND`, not just return a value
+for a caller to translate. The real walk SHALL invoke them in the current shell, preserve failure propagation at
+its page/level call sites, and still render/read every real-manifest page before finishing level judgement.
+A planned render job or empty file MUST NOT count as a page read. CLI claims, controls, promise probes and refusal
+routes SHALL remain unchanged.
+
+For exactly those three controls, the gate SHALL replace, not supplement or defer, each control's complete
+nested `walk`. The column-zero and undeclared-usage controls SHALL each render the relevant single page with
+the real damaged renderer and with the unmutated-tree renderer, then use that shared judgement. Each render
+MUST exit 0 and produce a nonempty file. The negative result MUST carry the intended rule's finding, not another
+rule's matching literal; each normal result MUST exit 0 without findings. The unread-group control SHALL judge
+valid menu/command pages with no group read record, then with a valid group page restored; missing group MUST be
+its sole negative finding. Real manifest-to-page wiring remains in the unshortened real walk. Missing files,
+syntax errors, renderer failure or timeouts MUST NOT stand in for the expected named content failure.
+
+These replacements SHALL run through the same script's explicit `bash skills/teamsmith/tests/routes.sh pages`
+section. Executing non-FAST `mr_flips` SHALL unconditionally call that entry once, require child exit 0 and at
+least the three distinct successful case-result lines `替代④`, `替代⑪`, `替代⑬`; a missing command, helper or
+named case MUST fail, never skip. The sample itself SHALL fail if one of those named results is absent or failed.
+Acceptance SHALL use that identical entry and environment scaffold; no independent runner, second parser,
+product test mode, new smoke section or deletion-policing guard SHALL be introduced. Default/FAST/meta section
+selection remains unchanged.
+
 #### Scenario: The committed tree is green
 
 - **WHEN** `bash skills/teamsmith/tests/routes.sh` runs on this tree, and the correctness gate runs
@@ -1043,6 +1071,52 @@ as a missing group of lines rather than as silence.
 - **WHEN** the walk runs on the committed tree
 - **THEN** it prints an `ok` line for the menu, for each group page and for each command page it judged, its
   summary carries the number of commands and usage lines it judged, and the level-0 menu's own scale check runs
+
+#### Scenario: The replacement controls still catch real renderer defects
+
+- **GIVEN** separate scratch renderer copies with the original column-zero `board add <ID> [--allow-dup]`
+  defect and undeclared `dispatch --ghost-probe` usage, and normal renderers from the unmutated tree
+- **WHEN** each renders only its corresponding `help board` or `help dispatch` page and the shared complete
+  file judgement used by the real walk reads it
+- **THEN** all four render commands exit 0 with nonempty output; the damaged board's shared attribution finding
+  contains `列 0 的行`, `无法归属` and that complete board line; the damaged dispatch's shared multiset-difference
+  finding contains `dispatch`, `页与清单不一致`, `页上多出` and complete `dispatch --ghost-probe`
+- **AND** the special `ghost-probe` literal finding alone cannot satisfy the dispatch case; both normal pages
+  exit 0 without findings, and successful `替代④`/`替代⑪` results identify the retired controls without CLI probes;
+  the real walk continues to probe every manifest claim separately
+
+#### Scenario: The unread-level replacement judges pages read rather than pages planned
+
+- **GIVEN** valid menu and command files but no actual group read record, even if a group file is planned
+- **WHEN** each supplied nonempty file passes the shared per-page judgement and level judgement finishes,
+  and then the otherwise identical input is judged with a valid group file/read record restored
+- **THEN** the menu and command pages emit no findings; the first level finish emits exactly one finding,
+  `group 这一级一条都没被判到`, while the restored input exits 0 without findings and yields `替代⑬`
+- **AND** a separately supplied empty page emits the original `帮助面缺一页` finding and does not register as
+  read; this cannot substitute for the sole-missing-group witness. This control runs no renderer or complete
+  walk; the real walk still derives all pages from the real manifest and judges the files it actually reads
+
+#### Scenario: A damaged shared judgement makes its own negative control fail
+
+- **GIVEN** a scratch copy that silently skips the shared column-zero attribution failure, and another that
+  removes the shared command-page multiset-difference finding while leaving the special-literal check intact,
+  without a load, syntax or renderer error
+- **WHEN** `bash skills/teamsmith/tests/routes.sh pages` runs against each copy
+- **THEN** the first run fails `替代④` for the missing attribution diagnosis, and the second fails `替代⑪`
+  for the missing difference diagnosis even if a different finding still names `ghost-probe`; normal inputs
+  still pass without findings
+- **AND** restoring the shared judgement makes the identical sample command succeed again
+
+#### Scenario: Three redundant complete walks are retired rather than rescheduled
+
+- **WHEN** the explicit `routes.sh pages` controls run and their commands are inspected, and the non-FAST
+  `mr_flips` call site is reviewed
+- **THEN** the gate unconditionally invokes the identical sample entry with checks of exit and all three
+  successful named results; the column-zero and undeclared-usage cases execute their single-page renderer
+  experiments and shared judgement, and the unread-group case executes only its file judgement
+- **AND** none of these three controls performs a complete nested walk, fixture-project initialization or
+  whole-manifest CLI claim loop, through either the old call site or a replacement helper or later schedule;
+  the real walk and every other route control retain their previous execution scope
 
 ### Requirement: A refused dispatch hands over every blocker, once, with a fix that runs
 
@@ -1323,4 +1397,3 @@ existing rule (`templates/pm-prompt.md.tmpl`) is the reference phrasing and SHAL
 - **THEN** the printed prompt's resume guidance names `state/bg.log` and `team bg list` as the way to find
   jobs a previous session left running, and states that the previous session's wake-ups died with its
   process
-
