@@ -232,6 +232,8 @@ function admitReminders(snapshot, request, nowMs) {
     ok: true, now: iso(nowMs),
     admitted, overdue, swept,
     queue: snapshot.reminders.filter(record => record.phase === 'queued').length,
+    queuedIds: snapshot.reminders.filter(record => record.phase === 'queued')
+      .sort((a, b) => ((a.queueSeq ?? 0) - (b.queueSeq ?? 0)) || (a.seq - b.seq)).map(record => record.id),
     outstanding: outstandingBatch(snapshot)?.id ?? null,
   };
 }
@@ -305,7 +307,13 @@ function observeBatch(snapshot, request, nowMs) {
   const batch = findBatch(snapshot, id);
   if (!batch) {
     const parsed = parseBatchId(id, snapshot.project.id);
-    return { ok: false, refusal: parsed ? 'history-pruned' : 'unknown-batch', reason: `'${id}' is not a batch of this project` };
+    if (!parsed || parsed.seq >= snapshot.sequences.batch) {
+      return { ok: false, refusal: 'unknown-batch', reason: `'${id}' is not a batch issued by this project` };
+    }
+    return {
+      ok: false, refusal: 'history-pruned',
+      reason: `'${id}' left the retained batch history (issued high-water ${snapshot.sequences.batch - 1}); it cannot be reopened or resent`,
+    };
   }
   if (typeof request.nonce !== 'string' || request.nonce !== batch.nonce) {
     return { ok: false, refusal: 'nonce-mismatch', reason: `the observed message does not carry the nonce of ${batch.id} (identity unknown; no right consumed)` };
@@ -547,26 +555,50 @@ function parseId(id, projectId) {
 function endedMs(record) { return msOf(record.endedAt ?? record.createdAt); }
 
 function pruneHistory(snapshot, nowMs) {
-  const terminal = snapshot.reminders.filter(record => isTerminal(record.phase));
-  const ranked = terminal.slice().sort((a, b) => (endedMs(b) - endedMs(a)) || (b.seq - a.seq));
+  // A retained batch needs every member for validation and late-event correlation, so batches and
+  // their terminal members compact as one unit. Intent/unknown batches and every unspent right stay.
+  const terminalBatches = snapshot.batches.filter(batch =>
+    (batch.phase === 'observed' || batch.phase === 'resolved') && batch.right === 'spent' &&
+    batch.members.every(id => {
+      const record = snapshot.reminders.find(item => item.id === id);
+      return record && isTerminal(record.phase);
+    }));
+  const batchEndedMs = batch => msOf(batch.observedAt ?? batch.resolvedAt ?? batch.intentAt);
+  const rankedBatches = terminalBatches.slice().sort((a, b) => (batchEndedMs(b) - batchEndedMs(a)) || (b.seq - a.seq));
+  const keepBatches = new Set();
+  for (let i = 0; i < rankedBatches.length; i++) {
+    if (i < TERMINAL_KEEP && nowMs - batchEndedMs(rankedBatches[i]) <= RETENTION_MS) keepBatches.add(rankedBatches[i].id);
+  }
+  const droppedBatches = terminalBatches.filter(batch => !keepBatches.has(batch.id));
+  const droppedBatchIds = new Set(droppedBatches.map(batch => batch.id));
+
+  const standalone = snapshot.reminders.filter(record => isTerminal(record.phase) && !record.batchId);
+  const ranked = standalone.slice().sort((a, b) => (endedMs(b) - endedMs(a)) || (b.seq - a.seq));
   const keep = new Set();
   for (let i = 0; i < ranked.length; i++) {
     if (i < TERMINAL_KEEP && nowMs - endedMs(ranked[i]) <= RETENTION_MS) keep.add(ranked[i].id);
   }
-  const dropped = terminal.filter(record => !keep.has(record.id));
-  if (dropped.length) {
-    const ids = new Set(dropped.map(record => record.id));
-    snapshot.reminders = snapshot.reminders.filter(record => !ids.has(record.id));
-    snapshot.pruned += dropped.length;
+  const droppedStandalone = standalone.filter(record => !keep.has(record.id));
+  const droppedStandaloneIds = new Set(droppedStandalone.map(record => record.id));
+  const droppedCount = droppedStandalone.length + droppedBatches.reduce((n, batch) => n + batch.members.length, 0);
+  if (droppedCount) {
+    const droppedIds = [
+      ...droppedStandalone,
+      ...droppedBatches.flatMap(batch => batch.members.map(id => snapshot.reminders.find(record => record.id === id)).filter(Boolean)),
+    ];
+    snapshot.reminders = snapshot.reminders.filter(record =>
+      record.batchId ? !droppedBatchIds.has(record.batchId) : !droppedStandaloneIds.has(record.id));
+    snapshot.batches = snapshot.batches.filter(batch => !droppedBatchIds.has(batch.id));
+    snapshot.pruned += droppedCount;
     snapshot.audit.push({
-      at: iso(nowMs), op: 'retention-prune', count: dropped.length,
-      ids: dropped.slice().sort((a, b) => b.seq - a.seq).slice(0, 20).map(record => record.id),
-      detail: `kept the newest ${TERMINAL_KEEP} terminal outcomes inside 30 days; the sequence high-water never moves back`,
+      at: iso(nowMs), op: 'retention-prune', count: droppedCount,
+      ids: droppedIds.sort((a, b) => b.seq - a.seq).slice(0, 20).map(record => record.id),
+      detail: `kept the newest ${TERMINAL_KEEP} terminal outcomes inside 30 days; active/unknown rights stay and sequence high-water never moves back`,
     });
   }
   const audit = snapshot.audit.filter(entry => nowMs - msOf(entry.at) <= RETENTION_MS);
   snapshot.audit = audit.length > AUDIT_KEEP ? audit.slice(audit.length - AUDIT_KEEP) : audit;
-  return dropped.length;
+  return droppedCount;
 }
 
 function note(snapshot, nowMs, op, fields) {

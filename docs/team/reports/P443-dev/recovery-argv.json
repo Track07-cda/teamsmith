@@ -1,0 +1,23 @@
+[
+  "--provider",
+  "p442",
+  "--model",
+  "controlled",
+  "-e",
+  "<home>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev/skills/teamsmith/extension/team-bg.ts",
+  "-e",
+  "<home>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev/skills/teamsmith/extension/team-inbox-watch.ts",
+  "-e",
+  "<home>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev/skills/teamsmith/extension/team-reply.ts",
+  "-e",
+  "<home>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev/skills/teamsmith/extension/team-remind.ts",
+  "--skill",
+  "<home>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev/skills/teamsmith",
+  "-c",
+  "--offline",
+  "--no-extensions",
+  "--no-skills",
+  "--no-context-files",
+  "-e",
+  "<home>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev/skills/teamsmith/tests/fixtures/remind-tool-provider.ts"
+]

@@ -1,0 +1,13 @@
+Command: bash skills/teamsmith/tests/smoke.sh --select 3,6i,7,11b,26,65,66,67,68 </dev/null
+Background job: p443-selected-gates, exit=0 after 353.2s
+Selected result: 18 sections, ✓657 ✗0 SKIP0
+§67: P409 ✓112, P423 ✓94, P442 real Pi 8 groups
+§68: lifecycle ✓32, recovery unit ✓20, Pulse ✓8, recovery real Pi 3 groups
+Not run: the other 122 keys; no full suite, night run or 61b.
+
+V151 repair run:
+Command: bash skills/teamsmith/tests/smoke.sh --select 68 </dev/null
+Background job: p443-v151-selected68-r2, exit=0 after 156.6s
+Selected result: 12 sections, ✓331 ✗0 SKIP0
+§68: lifecycle ✓32, recovery unit ✓20, Pulse ✓11, recovery real Pi 3 groups
+Not run: the other 128 keys; no full suite, night run or 61b.

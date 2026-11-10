@@ -17,7 +17,11 @@ export default function (pi: ExtensionAPI) {
     handler: async (action, ctx) => {
       await ctx.waitForIdle()
       if (action === 'reload') await ctx.reload()
-      else if (action === 'stop') ctx.shutdown()
+      else if (action === 'new') await ctx.newSession()
+      else if (action === 'fork') {
+        const entry = ctx.sessionManager.getBranch().find((e: any) => e.type === 'message' && e.message.role === 'assistant')!
+        await ctx.fork(entry.id, { position: 'at' })
+      } else if (action === 'stop') ctx.shutdown()
       else throw new Error(`unknown fixture action ${action}`)
       log({ type: 'command_done', action })
     },

@@ -59,7 +59,7 @@ server = createServer(async (req, res) => {
   if (!plan) { res.writeHead(404); res.end(); return }
   const n = plan.requests++
   appendFileSync(join(plan.dir, 'requests.jsonl'), JSON.stringify(body) + '\n')
-  if (n === 0 && plan.gate) await plan.gate
+  if (n === (plan.gateN ?? 0) && plan.gate) await plan.gate
   await plan.respond({ body, n, res, plan })
 })
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
@@ -111,6 +111,7 @@ async function start(name, respond, opts = {}) {
   plans.set(name, { requests: 0, dir, state, respond, gate })
   const window = opts.invalid === 'forged' ? 'not-pm' : 'pm'
   tmux('new-session', '-d', '-s', session, '-n', window, '-c', root, 'sleep 600')
+  tmux('set-option', '-t', session, 'remain-on-exit', 'on')
   const pane = tmux('display-message', '-p', '-t', `${session}:${window}`, '#{pane_id}').trim(); info.pane = pane
   info.serverPid = tmux('display-message', '-p', '-t', pane, '#{pid}').trim()
   const script = join(root, 'launch.sh')
@@ -129,13 +130,35 @@ async function start(name, respond, opts = {}) {
   info.ticker = ticker
   return info
 }
-async function stop(info) {
+async function stopPi(info) {
   clearInterval(info.ticker)
   if (!existsSync(info.done)) {
     tmux('send-keys', '-t', info.pane, '-l', '/p442-control stop'); tmux('send-keys', '-t', info.pane, 'Enter')
     await until(() => existsSync(info.done), `${info.name} shutdown`)
   }
-  tmux('kill-session', '-t', info.session)
+}
+async function stop(info) {
+  const alive = spawnSync('tmux', ['-S', socket, '-f', '/dev/null', 'has-session', '-t', info.session], { env: base, encoding: 'utf8' })
+  if (alive.status === 0) {
+    await stopPi(info)
+    tmux('kill-session', '-t', info.session)
+  } else clearInterval(info.ticker)
+}
+function team(info, args, label = 'team') {
+  const result = spawnSync('bash', [join(info.skill, 'scripts/team'), '--root', info.root, ...args], {
+    cwd: info.root, env: { ...info.env, TMUX: `${socket},${info.serverPid},0`, TMUX_PANE: info.pane }, encoding: 'utf8' })
+  writeFileSync(join(info.dir, `${label}.txt`), (result.stdout ?? '') + (result.stderr ?? ''))
+  return result
+}
+function recover(info) {
+  // tmux respawn inherits the private server's environment, not spawnSync's. Publish the same
+  // controlled fixture environment the initial launch.sh supplied explicitly.
+  for (const [key, value] of Object.entries(info.env)) tmux('set-environment', '-t', info.session, key, String(value))
+  const source = `source ${sh(join(info.skill, 'scripts/lib/common.sh'))}; source ${sh(join(info.skill, 'scripts/lib/cmd-config.sh'))}; source ${sh(join(info.skill, 'scripts/lib/cmd-remind.sh'))}; team_load_config; team_remind_recovery`
+  const result = spawnSync('bash', ['-c', source], { cwd: info.root,
+    env: { ...info.env, TMUX: `${socket},${info.serverPid},0`, TMUX_PANE: info.pane }, encoding: 'utf8' })
+  writeFileSync(join(info.dir, `recovery-${Date.now()}.txt`), (result.stdout ?? '') + (result.stderr ?? ''))
+  return result
 }
 async function test(name, body) {
   try { await body(); console.log(`PASS real Pi ${name}`); passed++ }
@@ -244,6 +267,96 @@ try {
     })
   }
 
+  if (selection.includes('recovery')) await test('stopped PM resumes without a generic prompt; Reminder arrives before ordinary backlog', async () => {
+    const info = await start('recovery', async ({ n, res }) => sse(res, { name: 'recovery', ...final(`controlled response ${n}`) }), { deferFirstResponse: true })
+    try {
+      await until(() => requests(info).length === 1 && events(info).some(e => e.type === 'agent_settled'), 'seed PM response')
+      const seedSession = events(info).find(e => e.type === 'session_start').sessionId
+      await stopPi(info)
+      const before = requests(info).length
+      const promptBefore = readFileSync(join(info.state, 'pm-prompt.md'), 'utf8')
+      const wrapper = join(info.dir, 'pi-argv-wrapper.sh'), argvBytes = join(info.dir, 'argv.bin')
+      writeFileSync(wrapper, `#!/usr/bin/env bash\nprintf '%s\\0' "$@" >${sh(argvBytes)}\nexec ${sh(pi)} "$@"\n`)
+      command('chmod', ['+x', wrapper])
+      writeFileSync(info.config, readFileSync(info.config, 'utf8').replace(/^TEAM_PI_BIN=.*$/m, `TEAM_PI_BIN=${sh(wrapper)}`))
+      let result = team(info, ['notify', 'pm', 'P443_ORDINARY_BACKLOG'], 'ordinary-backlog')
+      assert.equal(result.status, 0, 'ordinary backlog is pending before recovery')
+      result = team(info, ['standby', 'on', '--reason', 'P443 stopped recovery'], 'standby-on')
+      assert.equal(result.status, 0, 'Standby on succeeds')
+      result = team(info, ['remind', 'add', '--after', '1s', '--message', 'P443_RECOVERY_ONLY', '--key', 'recovery'], 'add-recovery')
+      assert.equal(result.status, 0, 'recovery Reminder is created')
+      await delay(1200)
+      result = recover(info)
+      assert.equal(result.status, 0, `prompt-free recovery: ${result.stdout}${result.stderr}`)
+      assert.match(result.stdout, /result=started/)
+      await delay(500)
+      const pane = spawnSync('tmux', ['-S', socket, '-f', '/dev/null', 'capture-pane', '-p', '-t', `${info.session}:pm`, '-S', '-100'], { env: base, encoding: 'utf8' })
+      writeFileSync(join(info.dir, 'recovery-pane.txt'), (pane.stdout ?? '') + (pane.stderr ?? ''))
+      const pid = readFileSync(join(info.state, 'pm.pid'), 'utf8').trim()
+      const argv = readFileSync(argvBytes).toString('utf8').split('\0').filter(Boolean)
+      writeFileSync(join(info.dir, 'recovery-argv.json'), JSON.stringify(argv, null, 2))
+      assert(!argv.some(arg => arg.startsWith('@') || arg.includes('pm-prompt')), 'actual PM argv has no generic or replacement initial prompt')
+      assert((argv.includes('-c') || argv.includes('--continue')) && argv.some(arg => arg.endsWith('team-inbox-watch.ts')) && argv.some(arg => arg.endsWith('team-remind.ts')))
+      assert.equal(readFileSync(join(info.state, 'pm-prompt.md'), 'utf8'), promptBefore, 'the previous prompt file is untouched')
+      await until(() => snapshot(info.state).reminders[0]?.phase === 'observed' && requests(info).length === before + 1 &&
+        events(info).filter(e => e.type === 'agent_settled').length >= 2, 'Reminder observation and one controlled response')
+      assert.equal(snapshot(info.state).standby.on, false, 'only the correlated wake exits Standby')
+      const newRequests = requests(info).slice(before)
+      assert.equal(newRequests.length, 1, 'there is no generic startup model turn before the Reminder')
+      assert(newRequests.every(request => JSON.stringify(request).includes('P443_RECOVERY_ONLY')))
+      assert(newRequests.every(request => !JSON.stringify(request).includes('P443_ORDINARY_BACKLOG')), 'ordinary backlog did not run first')
+      assert(events(info).filter(e => e.type === 'custom_start').every(e => e.customType === 'team-reminder'), 'no ordinary inbox wake preceded the Reminder')
+      const recoveredSession = events(info).filter(e => e.type === 'session_start').at(-1).sessionId
+      assert.equal(recoveredSession, seedSession, 'usual resume arguments preserve the PM session')
+
+      // A second Reminder holds the controlled response open. Recovery during that busy turn must not respawn.
+      const plan = plans.get('recovery')
+      plan.gateN = plan.requests
+      let releaseBusy
+      plan.gate = new Promise(resolve => { releaseBusy = resolve; info.releaseBusy = resolve })
+      result = team(info, ['remind', 'add', '--after', '1s', '--message', 'P443_BUSY_FOLLOW_UP'], 'add-busy')
+      assert.equal(result.status, 0)
+      await delay(1200)
+      result = recover(info)
+      assert.equal(result.status, 0)
+      assert.match(result.stdout, /result=running/)
+      await until(() => requests(info).length === plan.gateN + 1, 'busy controlled response is pending')
+      const restartsBeforeBusyCheck = readFileSync(join(info.state, 'pm-restarts.log'), 'utf8')
+      result = recover(info)
+      assert.equal(result.status, 0)
+      assert.doesNotMatch(result.stdout, /result=started/, 'an in-flight Reminder never causes another PM start')
+      assert.equal(readFileSync(join(info.state, 'pm-restarts.log'), 'utf8'), restartsBeforeBusyCheck)
+      assert.equal(readFileSync(join(info.state, 'pm.pid'), 'utf8').trim(), pid, 'running/busy recovery keeps the same PM process')
+      releaseBusy()
+      await until(() => snapshot(info.state).reminders[1]?.phase === 'observed', 'busy follow-up observation')
+      writeFileSync(join(info.dir, 'recovery-receipt.json'), JSON.stringify({ pid, argv, seedSession, recoveredSession,
+        genericTurns: 0, ordinaryBacklogTurns: 0, final: snapshot(info.state) }, null, 2))
+    } finally { info.releaseBusy?.(); await stop(info) }
+  })
+
+  if (selection.includes('withdrawal')) {
+    for (const action of ['new', 'fork']) await test(`${action}: invalid replacement session immediately loses ready evidence`, async () => {
+      const name = `${action}-hide`
+      const info = await start(name, async ({ n, res }) => sse(res, { name, ...final(`${action} response ${n}`) }), { deferFirstResponse: true })
+      try {
+        await until(() => requests(info).length === 1 && events(info).some(e => e.type === 'agent_settled'), `${action} initial response`)
+        const added = team(info, ['remind', 'add', '--after', '1h', '--message', `before ${action}`], `add-before-${action}`)
+        assert.equal(added.status, 0)
+        const before = readFileSync(join(info.state, 'reminders/state.json'), 'utf8')
+        tmux('rename-window', '-t', info.pane, 'not-pm')
+        tmux('send-keys', '-t', info.pane, '-l', `/p442-control ${action}`); tmux('send-keys', '-t', info.pane, 'Enter')
+        await until(() => events(info).filter(e => e.type === 'session_start').length >= 2, `${action} replacement session`)
+        const current = events(info).filter(e => e.type === 'session_start').at(-1)
+        assert.equal(current.reminderTools[0]?.exposure, 'hidden')
+        assert.equal(current.activeTools.length, 0)
+        const evidencePath = join(info.state, 'remind-tool/current.json')
+        if (existsSync(evidencePath)) assert.equal(json(evidencePath).status, 'hidden')
+        assert(!/PM 提醒工具\s+.*ready/.test(doctor(info)), 'doctor is not ready in the same replacement, without a 20s wait')
+        assert.equal(readFileSync(join(info.state, 'reminders/state.json'), 'utf8'), before)
+      } finally { await stop(info) }
+    })
+  }
+
   if (selection.includes('doctor')) {
     await test('running PM with no entry is unknown, not a load failure', async () => {
       const info = await start('noentry', async ({ n, res }) => sse(res, { name: 'noentry', ...final('no entry') }), { invalid: 'no-entry', deferFirstResponse: true })
@@ -277,7 +390,8 @@ try {
   const remaining = spawnSync('tmux', ['-S', socket, 'list-sessions'], { env: base, encoding: 'utf8' })
   if (remaining.status === 0) tmux('kill-server')
   else assert.match(remaining.stderr, /no server running|error connecting/, 'only the private server may already be gone')
-  rmSync(temporary, { recursive: true, force: true })
+  if (!process.env.P442_KEEP) rmSync(temporary, { recursive: true, force: true })
+  else console.log(`kept private fixture root=${temporary}`)
 }
 console.log(`remind-tool-real: passed=${passed} failed=${failed} evidence=${evidence}`)
 if (failed) process.exitCode = 1

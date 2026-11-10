@@ -70,13 +70,14 @@ async function main() {
   const context = { cwd: opts.root, mainRoot: opts.root, stateRoot: opts.stateDir };
   const seen = await peek(context);
   if (!seen.pinned) {
-    if (opts.json) process.stdout.write(`${JSON.stringify({ ok: true, pinned: false, admitted: [] })}\n`);
+    if (opts.json) process.stdout.write(`${JSON.stringify({ ok: true, pinned: false, admitted: [], recoveryRequired: false, recoveryIds: [] })}\n`);
     return;
   }
   const due = seen.reminders.due.length;
   const stale = seen.reminders.staleIntent.length;
   if (!due && !stale) {
-    if (opts.json) process.stdout.write(`${JSON.stringify({ ok: true, pinned: true, admitted: [], swept: [] })}\n`);
+    const recoveryRequired = seen.reminders.queued.length > 0 && !seen.outstanding;
+    if (opts.json) process.stdout.write(`${JSON.stringify({ ok: true, pinned: true, admitted: [], swept: [], queue: seen.reminders.queued.length, recoveryRequired, recoveryIds: recoveryRequired ? seen.reminders.queued : [] })}\n`);
     return;
   }
   const result = await request({ ...context, stateRoot: seen.stateRoot }, {
@@ -89,6 +90,8 @@ async function main() {
     log(seen.stateRoot, `admit n=${admitted.length} overdue=${(result.overdue ?? []).length} ` +
       `ids=${admitted.join('|') || '-'} unknown=${swept.join('|') || '-'} queue=${result.queue}`);
   }
+  result.recoveryRequired = (result.queue ?? 0) > 0 && !result.outstanding;
+  result.recoveryIds = result.recoveryRequired ? (result.queuedIds ?? []) : [];
   if (opts.json) process.stdout.write(`${JSON.stringify(result)}\n`);
   else if (!opts.quiet && admitted.length) {
     process.stdout.write(`remind: 到点入队 ${admitted.length} 条（${admitted.join(' ')}）\n`);

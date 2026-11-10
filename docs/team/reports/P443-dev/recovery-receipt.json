@@ -1,0 +1,233 @@
+{
+  "pid": "1436699",
+  "argv": [
+    "--provider",
+    "p442",
+    "--model",
+    "controlled",
+    "-e",
+    "<home>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev/skills/teamsmith/extension/team-bg.ts",
+    "-e",
+    "<home>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev/skills/teamsmith/extension/team-inbox-watch.ts",
+    "-e",
+    "<home>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev/skills/teamsmith/extension/team-reply.ts",
+    "-e",
+    "<home>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev/skills/teamsmith/extension/team-remind.ts",
+    "--skill",
+    "<home>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev/skills/teamsmith",
+    "-c",
+    "--offline",
+    "--no-extensions",
+    "--no-skills",
+    "--no-context-files",
+    "-e",
+    "<home>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev/skills/teamsmith/tests/fixtures/remind-tool-provider.ts"
+  ],
+  "seedSession": "01a1c594-0126-707d-ae3b-38d10547d15d",
+  "recoveredSession": "01a1c594-0126-707d-ae3b-38d10547d15d",
+  "genericTurns": 0,
+  "ordinaryBacklogTurns": 0,
+  "final": {
+    "version": 1,
+    "project": {
+      "id": "5b94f284-aedf-47f3-82cf-30b0c7a06aa5",
+      "mainRoot": "<fixture>/recovery",
+      "stateRoot": "<fixture>/recovery/.pi/team/state"
+    },
+    "sequences": {
+      "reminder": 3,
+      "batch": 3,
+      "queue": 3
+    },
+    "pruned": 0,
+    "standby": {
+      "on": false,
+      "generation": 1,
+      "reason": null,
+      "since": "2026-11-10T13:09:37.060Z",
+      "migrated": true
+    },
+    "pulse": {
+      "startedAt": "2026-11-10T13:09:38Z",
+      "lastAdmitAt": "2026-11-10T13:09:38.722Z"
+    },
+    "reminders": [
+      {
+        "id": "rem-5b94f284-aedf-47f3-82cf-30b0c7a06aa5-1",
+        "seq": 1,
+        "owner": "pm",
+        "source": "cli",
+        "task": null,
+        "key": "recovery",
+        "phase": "observed",
+        "createdAt": "2026-11-10T13:09:35.036Z",
+        "request": {
+          "form": "after",
+          "value": "1s"
+        },
+        "dueAt": "2026-11-10T13:09:36.036Z",
+        "message": "P443_RECOVERY_ONLY",
+        "endedAt": "2026-11-10T13:09:37.060Z",
+        "queuedAt": "2026-11-10T13:09:36.367Z",
+        "queueSeq": 1,
+        "overdue": false,
+        "batchId": "bat-5b94f284-aedf-47f3-82cf-30b0c7a06aa5-1",
+        "intentAt": "2026-11-10T13:09:37.015Z",
+        "observedAt": "2026-11-10T13:09:37.060Z"
+      },
+      {
+        "id": "rem-5b94f284-aedf-47f3-82cf-30b0c7a06aa5-2",
+        "seq": 2,
+        "owner": "pm",
+        "source": "cli",
+        "task": null,
+        "key": null,
+        "phase": "observed",
+        "createdAt": "2026-11-10T13:09:37.391Z",
+        "request": {
+          "form": "after",
+          "value": "1s"
+        },
+        "dueAt": "2026-11-10T13:09:38.391Z",
+        "message": "P443_BUSY_FOLLOW_UP",
+        "endedAt": "2026-11-10T13:09:39.002Z",
+        "queuedAt": "2026-11-10T13:09:38.722Z",
+        "queueSeq": 2,
+        "overdue": false,
+        "batchId": "bat-5b94f284-aedf-47f3-82cf-30b0c7a06aa5-2",
+        "intentAt": "2026-11-10T13:09:38.961Z",
+        "observedAt": "2026-11-10T13:09:39.002Z"
+      }
+    ],
+    "batches": [
+      {
+        "id": "bat-5b94f284-aedf-47f3-82cf-30b0c7a06aa5-1",
+        "seq": 1,
+        "nonce": "4a178e1c-f0a5-4f90-806b-2b98b5bc07a5",
+        "phase": "observed",
+        "intentAt": "2026-11-10T13:09:37.015Z",
+        "generation": 1,
+        "target": {
+          "session": "01a1c594-0126-707d-ae3b-38d10547d15d",
+          "pid": 1436699
+        },
+        "members": [
+          "rem-5b94f284-aedf-47f3-82cf-30b0c7a06aa5-1"
+        ],
+        "right": "spent",
+        "rightSpentBy": "wake",
+        "attempts": 1,
+        "lastError": null,
+        "observedAt": "2026-11-10T13:09:37.060Z",
+        "unknownAt": null,
+        "resolvedAt": null,
+        "outcome": {
+          "standby": "auto-off"
+        }
+      },
+      {
+        "id": "bat-5b94f284-aedf-47f3-82cf-30b0c7a06aa5-2",
+        "seq": 2,
+        "nonce": "2fb7ebeb-e6b4-4c0a-9f8f-ad6f42767400",
+        "phase": "observed",
+        "intentAt": "2026-11-10T13:09:38.961Z",
+        "generation": "off",
+        "target": {
+          "session": "01a1c594-0126-707d-ae3b-38d10547d15d",
+          "pid": 1436699
+        },
+        "members": [
+          "rem-5b94f284-aedf-47f3-82cf-30b0c7a06aa5-2"
+        ],
+        "right": "spent",
+        "rightSpentBy": "wake",
+        "attempts": 1,
+        "lastError": null,
+        "observedAt": "2026-11-10T13:09:39.002Z",
+        "unknownAt": null,
+        "resolvedAt": null,
+        "outcome": {
+          "standby": "already-off"
+        }
+      }
+    ],
+    "audit": [
+      {
+        "at": "2026-11-10T13:09:35.036Z",
+        "op": "remind-add",
+        "ids": [
+          "rem-5b94f284-aedf-47f3-82cf-30b0c7a06aa5-1"
+        ],
+        "source": "cli",
+        "detail": "key=recovery"
+      },
+      {
+        "at": "2026-11-10T13:09:36.367Z",
+        "op": "remind-admit",
+        "ids": [
+          "rem-5b94f284-aedf-47f3-82cf-30b0c7a06aa5-1"
+        ],
+        "detail": "due <= 2026-11-10T13:09:36.367Z; overdue 0"
+      },
+      {
+        "at": "2026-11-10T13:09:37.015Z",
+        "op": "remind-intent",
+        "batch": "bat-5b94f284-aedf-47f3-82cf-30b0c7a06aa5-1",
+        "ids": [
+          "rem-5b94f284-aedf-47f3-82cf-30b0c7a06aa5-1"
+        ],
+        "detail": "standby generation 1; session 01a1c594-0126-707d-ae3b-38d10547d15d"
+      },
+      {
+        "at": "2026-11-10T13:09:37.060Z",
+        "op": "remind-observed",
+        "batch": "bat-5b94f284-aedf-47f3-82cf-30b0c7a06aa5-1",
+        "ids": [
+          "rem-5b94f284-aedf-47f3-82cf-30b0c7a06aa5-1"
+        ],
+        "sources": [
+          "cli"
+        ],
+        "detail": "standby auto-off (bound generation 1)"
+      },
+      {
+        "at": "2026-11-10T13:09:37.391Z",
+        "op": "remind-add",
+        "ids": [
+          "rem-5b94f284-aedf-47f3-82cf-30b0c7a06aa5-2"
+        ],
+        "source": "cli",
+        "detail": null
+      },
+      {
+        "at": "2026-11-10T13:09:38.722Z",
+        "op": "remind-admit",
+        "ids": [
+          "rem-5b94f284-aedf-47f3-82cf-30b0c7a06aa5-2"
+        ],
+        "detail": "due <= 2026-11-10T13:09:38.722Z; overdue 0"
+      },
+      {
+        "at": "2026-11-10T13:09:38.961Z",
+        "op": "remind-intent",
+        "batch": "bat-5b94f284-aedf-47f3-82cf-30b0c7a06aa5-2",
+        "ids": [
+          "rem-5b94f284-aedf-47f3-82cf-30b0c7a06aa5-2"
+        ],
+        "detail": "standby generation off; session 01a1c594-0126-707d-ae3b-38d10547d15d"
+      },
+      {
+        "at": "2026-11-10T13:09:39.002Z",
+        "op": "remind-observed",
+        "batch": "bat-5b94f284-aedf-47f3-82cf-30b0c7a06aa5-2",
+        "ids": [
+          "rem-5b94f284-aedf-47f3-82cf-30b0c7a06aa5-2"
+        ],
+        "sources": [
+          "cli"
+        ],
+        "detail": "standby already-off (bound generation off)"
+      }
+    ]
+  }
+}

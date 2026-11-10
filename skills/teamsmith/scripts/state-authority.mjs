@@ -708,7 +708,8 @@ async function main(argv) {
       if (requestData.op === 'remind-add') {
         const message = await readMessageFromStdin();
         if (message.error) {
-          process.stdout.write(renderRemind(requestData.op, { ok: false, refusal: 'bad-message', reason: message.error }));
+          const refusal = { ok: false, refusal: 'bad-message', reason: message.error };
+          process.stdout.write(json ? JSON.stringify(refusal, null, 2) + '\n' : renderRemind(requestData.op, refusal));
           process.exitCode = 1;
           return;
         }

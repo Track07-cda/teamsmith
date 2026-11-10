@@ -731,10 +731,27 @@ team_cmd_watch() {
 
   team_require_cmd tmux "pulse 需要 tmux 来拉起 PM/agent"
   team_watch_lock || return 1
-  trap 'team_watch_unlock' EXIT
-  # INT/TERM 必须立刻生效：sleep 放后台 + wait（被捕获的信号会立刻打断 wait），handler 里 exit 走 EXIT trap 解锁。
-  # 原来是 trap '…' EXIT INT TERM 一把抓：bash 会把前台的 sleep 跑完才执行 handler，解了锁还继续巡 ——
-  # Ctrl-C 和 kill 都停不下巡检循环（P8 实测：kill TERM 后 wait 永久阻塞）。
+  local patrol_pid='' recovery_pid='' sleep_pid='' recovery_pending=0 recovery_seen=''
+  team_watch_loop_alive() { # <pid>：kill -0 对等待 wait 的僵尸仍为真，不能拿它当“还在跑”
+    local stat; stat="$(ps -o stat= -p "$1" 2>/dev/null | tr -d '[:space:]')"
+    [ -n "$stat" ] && [[ "$stat" != Z* ]]
+  }
+  team_watch_loop_cleanup() {
+    local pid child
+    for pid in "$patrol_pid" "$recovery_pid" "$sleep_pid"; do
+      [ -n "$pid" ] || continue
+      # The patrol/recovery is a shell child; stop its current external command too (for example a
+      # patrol sleep), then wait for the direct child. A process that already exited is expected here.
+      for child in $(ps -o pid= --ppid "$pid" 2>/dev/null); do
+        kill "$child" 2>/dev/null || true  # 留：外部命令可能已先退出；仍须继续回收其余子进程
+      done
+      kill "$pid" 2>/dev/null || true  # 留：登记的子进程可能已先退出；继续解锁
+      wait "$pid" 2>/dev/null || true  # 留：被 TERM 的子进程 wait 返回 143（或已被回收），这不是清理失败
+    done
+    team_watch_unlock
+  }
+  trap 'team_watch_loop_cleanup' EXIT
+  # INT/TERM 必须立刻生效：sleep 放后台 + wait（被捕获的信号会立刻打断 wait），handler 里 exit 走 EXIT trap。
   trap 'exit 130' INT
   trap 'exit 143' TERM
   fp0="$(team_watch_code_fp)"
@@ -748,15 +765,35 @@ team_cmd_watch() {
   case "$slice" in ''|*[!0-9]*|0) slice=10 ;; esac
   pulse_started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   while :; do
-    now="$(date +%s)"
+    # Reap first: a finished child must never look like an in-flight reason to skip the coalesced recheck.
+    if [ -n "$patrol_pid" ] && ! team_watch_loop_alive "$patrol_pid"; then
+      wait "$patrol_pid"; patrol_pid=''; next_patrol=$(( $(date +%s) + interval )); recovery_seen=''
+    fi
+    if [ -n "$recovery_pid" ] && ! team_watch_loop_alive "$recovery_pid"; then
+      wait "$recovery_pid"; recovery_pid=''
+    fi
+
+    # The lightweight child is synchronous and independent of the long patrol below. Queueing can
+    # therefore commit during that patrol; one bit coalesces every recovery need until it ends.
     team_remind_due_tick "$pulse_started"
-    if [ "$now" -ge "$next_patrol" ]; then
+    if [ "${TEAM_REMIND_RECOVERY_REQUIRED:-0}" = "1" ] && [ "${TEAM_REMIND_RECOVERY_SIGNATURE:-}" != "$recovery_seen" ]; then
+      recovery_pending=1
+    fi
+
+    # A due ordinary patrol goes first; recovery runs in the gap after it. Without this priority a
+    # permanently refused recovery would consume every free slot and starve the ordinary patrol.
+    now="$(date +%s)"
+    if [ "$now" -ge "$next_patrol" ] && [ -z "$patrol_pid" ] && [ -z "$recovery_pid" ]; then
       # M9.8：判定必须用磁盘上的代码（漂移就重启本进程）—— 否则唤醒理由可能比 digest 旧
       team_watch_reexec_if_stale "$fp0" watch ${argv[@]+"${argv[@]}"}
-      team_watch_once
-      next_patrol=$(( $(date +%s) + interval ))
+      team_watch_once & patrol_pid=$!
     fi
-    sleep "$slice" & wait $!
+    if [ -z "$patrol_pid" ] && [ -z "$recovery_pid" ] && [ "$recovery_pending" = "1" ]; then
+      recovery_pending=0; recovery_seen="${TEAM_REMIND_RECOVERY_SIGNATURE:-}"
+      team_remind_recovery "$pulse_started" & recovery_pid=$!
+    fi
+    sleep "$slice" & sleep_pid=$!
+    wait "$sleep_pid"; sleep_pid=''
   done
 }
 

@@ -36,7 +36,7 @@ for arg in "$@"; do
   case "$arg" in
     --flip=*)
       case "${arg#--flip=}" in
-        view-stored|no-prune|highwater-lax|past-time|key-conflict-gone|key-not-released|no-key-dedup) FLIPS+=("${arg#--flip=}") ;;
+        view-stored|no-prune|highwater-lax|past-time|key-conflict-gone|key-not-released|no-key-dedup|json-refusal) FLIPS+=("${arg#--flip=}") ;;
         *) printf 'remind-cli：不认识的 --flip 值 [%s]\n' "${arg#--flip=}" >&2; exit 2 ;;
       esac ;;
     -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
@@ -324,6 +324,15 @@ refuse "NUL 正文" "NUL byte" --after 2h --message-file "$ROOT/msg/nul.bin"
 refuse "非 UTF-8 正文" "not valid UTF-8" --after 2h --message-file "$ROOT/msg/bad.bin"
 refuse "key 用了非 ASCII" "outside printable ASCII" --after 2h --message-file "$ROOT/msg/x.txt" --key 有中文
 
+# V150：机器调用方带 --json 时，stdin 解码/NUL 拒绝也必须是结构化结果，不能退回人读行。
+for kind in nul bad; do
+  run_team "$B" "$ROOT/msg/none" "$ROOT/out/b-json-$kind.txt" remind add --after 2h --message-file "$ROOT/msg/$kind.bin" --json
+  assert_eq "B $kind 的 --json 拒绝：rc=1" "$RC" "1"
+  assert_eq "B $kind 的 --json 拒绝：refusal 字段" "$(jfield "$ROOT/out/b-json-$kind.txt" refusal)" "bad-message"
+  "$RUNNER" -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' "$ROOT/out/b-json-$kind.txt" \
+    && ok "B $kind 的 --json 拒绝：stdout 是可解析 JSON" || bad "B $kind 的 --json 拒绝混入了人读行"
+done
+
 run_team "$B" "$ROOT/msg/none" "$ROOT/out/b-flag.txt" remind add --after 2h --message x --frobnicate
 assert_eq "B 未知参数：rc（用法错误）" "$RC" "2"
 assert_has "B 未知参数：点名该参数" "$(cat "$ROOT/out/b-flag.txt")" "--frobnicate"
@@ -546,13 +555,15 @@ flip_prepare() { # <id> <helper>
     key-not-released) mutate "$store" "const KEY_HOLDING = new Set(['scheduled', 'queued', 'intent', 'unknown']);" \
       "const KEY_HOLDING = new Set(['scheduled', 'queued', 'intent', 'unknown', 'observed']);" ;;
     no-key-dedup) mutate "$store" "  if (key.key) {" "  if (true) {" ;;
+    json-refusal) mutate "$2" "process.stdout.write(json ? JSON.stringify(refusal, null, 2) + '\\n' : renderRemind(requestData.op, refusal));" \
+      "process.stdout.write(renderRemind(requestData.op, refusal));" ;;
     *) return 1 ;;
   esac
 }
 flip_probe() { # <id> <helper>
   local id="$1" helper="$2" repo rid out
   case "$id" in
-    view-stored|no-prune|highwater-lax|past-time|key-conflict-gone|key-not-released|no-key-dedup) repo="$(new_repo "flip-$id")" ;;
+    view-stored|no-prune|highwater-lax|past-time|key-conflict-gone|key-not-released|no-key-dedup|json-refusal) repo="$(new_repo "flip-$id")" ;;
     *) return 1 ;;
   esac
   case "$id" in
@@ -632,10 +643,17 @@ JS
       else
         bad "flip（无 key 也去重）：仍分配了两个 ID，这条红侧是橡皮章"
       fi ;;
+    json-refusal)
+      run_helper "$helper" "$repo" "$ROOT/msg/nul.bin" "$ROOT/out/p.txt" remind-add --after 2h --json
+      if ! "$RUNNER" -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' "$ROOT/out/p.txt" 2>/dev/null; then
+        ok "flip（--json 拒绝退回人读行）：JSON.parse 失败 —— B 的结构化拒绝断言会红"
+      else
+        bad "flip（--json 拒绝退回人读行）：输出仍是 JSON，这条红侧是橡皮章"
+      fi ;;
   esac
 }
 
-for flip_id in view-stored no-prune highwater-lax past-time key-conflict-gone key-not-released no-key-dedup; do
+for flip_id in view-stored no-prune highwater-lax past-time key-conflict-gone key-not-released no-key-dedup json-refusal; do
   arm_selected "$flip_id" || continue
   FLIPS_RUN="${FLIPS_RUN:+$FLIPS_RUN,}$flip_id"
   if ! helper="$(helper_copy "$flip_id")"; then

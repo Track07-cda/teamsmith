@@ -455,3 +455,16 @@ team mark-loaded                               # re-record what this session sho
 
 If something here does not match what `team doctor`, `team version --check` or `team smoke` actually print, that is a
 bug in the guide (or in the tool): report it with the command and the output rather than working around it.
+
+## 9. Reminder state and prompt-free recovery
+
+The Reminder/Standby authority adds one shared snapshot and an OS `flock` dependency. Upgrading or
+rolling back requires quiescing the writers, not just replacing the skill files. Back up state before
+upgrading; before rollback, export the snapshot, inspect outstanding intents and restore the legacy
+Standby marker from the authoritative generation. Do not let old marker writers run beside the new
+authority, and do not replay outstanding Reminders with old code.
+
+A stopped built-in Pi PM may be resumed for an eligible Reminder without `@pm-prompt`; custom PM
+adapters report `unsupported-adapter` instead of receiving the ordinary startup prompt. The complete
+upgrade/rollback sequence, state paths, unknown handling and recovery outcomes are in
+`skills/teamsmith/references/reminders.md`.

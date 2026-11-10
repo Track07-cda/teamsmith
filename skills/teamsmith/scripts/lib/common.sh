@@ -772,7 +772,7 @@ team_identity_env_prefix() { # [<目标目录>]
       root="$wt"
     fi
   fi
-  out="unset TEAM_ROOT TEAM_MAIN_ROOT TEAM_PROJECT TEAM_SESSION TEAM_SESSION_FROM TEAM_CONFIG_FILE"
+  out="unset TEAM_ROOT TEAM_MAIN_ROOT TEAM_PROJECT TEAM_SESSION TEAM_SESSION_FROM TEAM_CONFIG_FILE TEAM_REMINDER_ONLY_RECOVERY"
   out="$out TEAM_IDENTITY_LOCKED TEAM_IDENTITY_ROOT TEAM_IDENTITY_MAIN_ROOT TEAM_IDENTITY_PROJECT"
   out="$out TEAM_IDENTITY_INHERIT_ROOT TEAM_IDENTITY_INHERIT_MAIN_ROOT TEAM_IDENTITY_INHERIT_PROJECT TEAM_IDENTITY_INHERIT_SESSION; "
   for v in TEAM_ROOT TEAM_MAIN_ROOT TEAM_PROJECT TEAM_SESSION; do
@@ -3170,6 +3170,8 @@ team_pm_prompt() { # PM 开场/恢复提示词（模板在 skill 内，可随 sk
 # 优先级裁断（也写进 `team help` 的 up 行）：本次启动里 --fresh-pm **最优先** —— TEAM_PM_SESSION_ID /
 # TEAM_PM_RESUME_ARGS 这一次都不生效（显式的人造意图 > 持久配置键）。
 team_pm_fresh_launch() { [ "${TEAM_PM_FRESH_LAUNCH:-0}" = "1" ]; }
+# Only the eligible-Reminder recovery path sets this for the one start. Ordinary up/watch stays promptful.
+team_pm_reminder_only() { [ "${TEAM_REMINDER_ONLY_RECOVERY:-0}" = "1" ]; }
 
 # Required independent PM policy. No worker/default fallback, even when empty.
 team_pm_model_resolve() { printf '%s\n' "${TEAM_PM_MODEL:-}"; }
@@ -3636,11 +3638,22 @@ team_pm_launch_cmd() { # <prompt_file> <spawn_file> → respawn-pane 的 shell-c
   if [ -z "$(team_trim "${TEAM_PM_CMD:-}")" ]; then
     pi_bin="$(team_pm_bin_path)"
     # M40：启动前先清洗身份 env（继承的 TEAM_* 一律清掉，只写本命令推导出的身份）
-    printf '%s%sexport TEAM_STATE_DIR=%q TEAM_CONFIG_FILE=%q TEAM_PM_WINDOW=%q; cd %q && printf "%%s\\n" $$ > %q && exec %q %s @%q' \
-      "$(team_identity_env_prefix "$TEAM_MAIN_ROOT")" "$(team_tmux_shim_exports)" \
-      "$TEAM_STATE_DIR" "${TEAM_CONFIG:-${TEAM_CONFIG_FILE:-}}" "$TEAM_PM_WINDOW" \
-      "$TEAM_MAIN_ROOT" "$spawnfile" "$pi_bin" "$(team_pm_pi_args)" "$pf"
+    if team_pm_reminder_only; then
+      printf '%s%sexport TEAM_STATE_DIR=%q TEAM_CONFIG_FILE=%q TEAM_PM_WINDOW=%q TEAM_REMINDER_ONLY_RECOVERY=1; cd %q && printf "%%s\\n" $$ > %q && exec %q %s' \
+        "$(team_identity_env_prefix "$TEAM_MAIN_ROOT")" "$(team_tmux_shim_exports)" \
+        "$TEAM_STATE_DIR" "${TEAM_CONFIG:-${TEAM_CONFIG_FILE:-}}" "$TEAM_PM_WINDOW" \
+        "$TEAM_MAIN_ROOT" "$spawnfile" "$pi_bin" "$(team_pm_pi_args)"
+    else
+      printf '%s%sexport TEAM_STATE_DIR=%q TEAM_CONFIG_FILE=%q TEAM_PM_WINDOW=%q; cd %q && printf "%%s\\n" $$ > %q && exec %q %s @%q' \
+        "$(team_identity_env_prefix "$TEAM_MAIN_ROOT")" "$(team_tmux_shim_exports)" \
+        "$TEAM_STATE_DIR" "${TEAM_CONFIG:-${TEAM_CONFIG_FILE:-}}" "$TEAM_PM_WINDOW" \
+        "$TEAM_MAIN_ROOT" "$spawnfile" "$pi_bin" "$(team_pm_pi_args)" "$pf"
+    fi
     return 0
+  fi
+  if team_pm_reminder_only; then
+    team_err 'Reminder-only recovery supports the built-in Pi PM only; a custom adapter has no verified prompt-free watcher contract'
+    return 1
   fi
   expanded="$(team_agent_expand pm "$TEAM_PM_CMD" pm "${TEAM_PM_SESSION_ID:-}" \
     "$TEAM_MAIN_ROOT" "$pf" "" "" "$(team_pm_model_resolve)")" || return 1
@@ -3725,6 +3738,7 @@ team_pm_continuity_note() { # 打在启动成功之后：延续 or 明确说「�
 # 否则从 respawn 到拿到证据之间那一拍看起来像「没有 PM」，并发的另一拍会把刚刚起来的 PM 杀掉。
 team_pm_start() {
   local target state cmd pf i wait apid age
+  TEAM_PM_START_OUTCOME=''
   target="$(team_pm_target)"
   team_pm_window_exists || return 1
   # 已经有一次启动在飞行中（同一窗口、标记新鲜）→ 不重复拉起：再 respawn 一次会把
@@ -3733,11 +3747,12 @@ team_pm_start() {
   if team_pm_starting; then
     age="$(team_pm_starting_age || echo '?')"
     team_dim "  PM 正在启动（${age}s 前发起，证据：$(team_pm_evidence)）：不重复拉起"
+    TEAM_PM_START_OUTCOME='already-starting'
     return 0
   fi
   state="$(team_pm_state)"
   case "$state" in
-    running:*) team_dim "  PM 已在运行（${state#running:}）"; return 0 ;;
+    running:*) team_dim "  PM 已在运行（${state#running:}）"; TEAM_PM_START_OUTCOME='already-running'; return 0 ;;
     idle:*)    ;;
     unknown:*)
       local ucwd; ucwd="$(team_pane_cwd "$target" 2>/dev/null || echo '?')"   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
@@ -3756,8 +3771,12 @@ team_pm_start() {
   team_pm_identity_guard || return 1
   team_pm_check_launch
   team_pm_check_bin
+  if team_pm_reminder_only && [ -n "$(team_trim "${TEAM_PM_CMD:-}")" ]; then
+    team_err 'Reminder-only recovery 不支持自定义 PM adapter（没有 prompt-free Pi watcher 契约）'
+    return 1
+  fi
   local pm_nonce="$(date +%s)-$BASHPID-$RANDOM-$RANDOM"
-  pf="$(team_pm_write_prompt)"
+  if team_pm_reminder_only; then pf=''; else pf="$(team_pm_write_prompt)"; fi
   # spawn 证明（M6.3 F30）：让 pane 里的 shell 在 exec 之前把自己的 pid 写盘。
   # wrapper agent（脚本最后 exec 掉自己，用来钉环境变量/flags）会换掉进程映像，
   # 配置的 agent 名字就看不到了 —— 但那个 pid 仍然是我们启动的、还在本项目里。
@@ -3791,6 +3810,7 @@ team_pm_start() {
       }
       team_pm_starting_end
       team_pm_continuity_note   # 延续了就说怎么延续；没延续就明说 + 指出靠 docs/team/** 与 inbox 接手
+      TEAM_PM_START_OUTCOME='started'
       return 0
     fi
     apid="$(team_pm_spawn_pid 2>/dev/null || true)"   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
@@ -3802,6 +3822,7 @@ team_pm_start() {
       }
       team_pm_starting_end
       team_pm_continuity_note
+      TEAM_PM_START_OUTCOME='started'
       return 0
     fi
     i=$((i + 1))
@@ -3819,6 +3840,7 @@ team_pm_start() {
   team_dim "  手工复现：在隔离窗口跑诊断中的 render；或写绝对路径：TEAM_PM_BIN=/abs/path/<cli> $TEAM_CLI up" >&2
   team_dim "  常见原因：CLI 在窗口的登录 PATH 里不存在（本工具已把裸名字换成解析出的绝对路径）、参数/模型不认、未登录" >&2
   team_pm_abort_uncommitted "$target"
+  TEAM_PM_START_OUTCOME='failed'
   return 1
 }
 

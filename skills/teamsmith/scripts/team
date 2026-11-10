@@ -131,6 +131,7 @@ case "$CMD" in
   watchdog-status)    team_cmd_watchdog_status "$@" ;;     # 同上
   standby)            team_cmd_standby "$@" ;;
   remind)             team_cmd_remind "$@" ;;
+  __remind-recover)   team_remind_recovery "$@" ;;   # 内部：Pulse 的 prompt-free Reminder-only 恢复（不进 help）
   meeting)            team_cmd_meeting "$@" ;;
   version)            if [ "${1:-}" = "--check" ] || [ "${1:-}" = "check" ]; then team_cmd_version_check "$@"; else team_cmd_version_brief "$@"; fi ;;
   mark-loaded)        team_err "mark-loaded 已移除：会话新旧由推导得出——PM 进程启动时刻 vs skill 文件的最近改动时刻，跑 $TEAM_CLI version --check 或 $TEAM_CLI doctor"; exit 2 ;;

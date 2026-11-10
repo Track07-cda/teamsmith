@@ -621,6 +621,16 @@ export async function loadPanelData(opts: DataOptions): Promise<DataResult> {
   return res
 }
 
+/** Signal the child's own process group, so a timed-out/stopped patrol cannot orphan its sleep or helper. */
+export function signalPulseChild(child: ReturnType<typeof spawn>, signal: NodeJS.Signals): void {
+  try {
+    if (child.pid) process.kill(-child.pid, signal)
+    else child.kill(signal)
+  } catch {
+    try { child.kill(signal) } catch { /* already gone */ }
+  }
+}
+
 /**
  * One patrol tick: `team watch --once`, output appended to the tick log and the log trimmed at
  * 200 lines — the same tick (and the same trim) the bash loop performed, now owned by the run
@@ -632,6 +642,7 @@ export function runTick(
   root: string,
   tickLog: string,
   timeoutMs = 180000,
+  children?: Set<ReturnType<typeof spawn>>,
 ): Promise<{ ok: boolean; output: string }> {
   return new Promise((resolve) => {
     let child: ReturnType<typeof spawn>
@@ -640,7 +651,9 @@ export function runTick(
         cwd: root,
         env: cleanIdentityEnv(),
         stdio: ['ignore', 'pipe', 'pipe'],
+        detached: true,
       })
+      children?.add(child)
     } catch (e) {
       resolve({ ok: false, output: (e as Error).message })
       return
@@ -651,6 +664,7 @@ export function runTick(
       if (settled) return
       settled = true
       clearTimeout(timer)
+      children?.delete(child)
       try {
         appendFileSync(tickLog, out)
         const lines = readFileSync(tickLog, 'utf8').split('\n')
@@ -662,12 +676,8 @@ export function runTick(
       resolve({ ok, output: out })
     }
     const timer = setTimeout(() => {
-      try {
-        child.kill('SIGKILL')
-      } catch {
-        /* already gone */
-      }
-      done(false)
+      signalPulseChild(child, 'SIGKILL')
+      // close is the reaping point; killing is not evidence that the child exited.
     }, timeoutMs)
     child.stdout?.on('data', (d: Buffer) => {
       out += String(d)
@@ -693,13 +703,15 @@ export function runRemindTick(
   pulseStartedAt: string,
   tickLog: string,
   timeoutMs = 30000,
+  children?: Set<ReturnType<typeof spawn>>,
 ): Promise<{ ok: boolean; output: string }> {
   return new Promise((resolve) => {
     let child: ReturnType<typeof spawn>
     try {
       child = spawn(process.execPath, [
-        script, '--root', root, '--state-dir', stateDir, '--pulse-started', pulseStartedAt, '--quiet',
-      ], { cwd: root, env: cleanIdentityEnv(), stdio: ['ignore', 'pipe', 'pipe'] })
+        script, '--root', root, '--state-dir', stateDir, '--pulse-started', pulseStartedAt, '--quiet', '--json',
+      ], { cwd: root, env: cleanIdentityEnv(), stdio: ['ignore', 'pipe', 'pipe'], detached: true })
+      children?.add(child)
     } catch (e) {
       resolve({ ok: false, output: (e as Error).message })
       return
@@ -710,19 +722,63 @@ export function runRemindTick(
       if (settled) return
       settled = true
       clearTimeout(timer)
-      // Successful quiet ticks say nothing: only a failure (or an admission line) earns a log line.
-      if (out.trim()) {
+      children?.delete(child)
+      let meaningful = !ok
+      if (ok && out.trim()) {
+        try {
+          const result = JSON.parse(out)
+          meaningful = (result.admitted?.length ?? 0) > 0 || (result.swept?.length ?? 0) > 0
+        } catch { meaningful = true }
+      }
+      if (meaningful && out.trim()) {
         try { appendFileSync(tickLog, `${new Date().toISOString()} remind-tick: ${out}`) } catch { /* a log that cannot be written must not kill the panel */ }
       }
       resolve({ ok, output: out })
     }
     const timer = setTimeout(() => {
-      try {
-        child.kill('SIGKILL')
-      } catch {
-        /* already gone */
+      signalPulseChild(child, 'SIGKILL')
+      // Reap on close, not on the timeout callback.
+    }, timeoutMs)
+    child.stdout?.on('data', (d: Buffer) => { out += String(d) })
+    child.stderr?.on('data', (d: Buffer) => { out += String(d) })
+    child.on('error', () => done(false))
+    child.on('close', (code) => done(code === 0))
+  })
+}
+
+/** One serialized Reminder-only recovery decision. It never runs the ordinary project patrol. */
+export function runReminderRecovery(
+  cli: string,
+  root: string,
+  tickLog: string,
+  timeoutMs = 30000,
+  children?: Set<ReturnType<typeof spawn>>,
+): Promise<{ ok: boolean; output: string }> {
+  return new Promise((resolve) => {
+    let child: ReturnType<typeof spawn>
+    try {
+      child = spawn('bash', [cli, '--root', root, '__remind-recover'], {
+        cwd: root, env: cleanIdentityEnv(), stdio: ['ignore', 'pipe', 'pipe'], detached: true,
+      })
+      children?.add(child)
+    } catch (e) {
+      resolve({ ok: false, output: (e as Error).message })
+      return
+    }
+    let out = ''
+    let settled = false
+    const done = (ok: boolean): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      children?.delete(child)
+      if (out.trim()) {
+        try { appendFileSync(tickLog, `${new Date().toISOString()} reminder-recovery: ${out}`) } catch { /* logging must not kill the panel */ }
       }
-      done(false)
+      resolve({ ok, output: out })
+    }
+    const timer = setTimeout(() => {
+      signalPulseChild(child, 'SIGKILL')
     }, timeoutMs)
     child.stdout?.on('data', (d: Buffer) => { out += String(d) })
     child.stderr?.on('data', (d: Buffer) => { out += String(d) })

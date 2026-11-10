@@ -42,7 +42,9 @@ import {
   loadPanelData,
   panelDirOf,
   runRemindTick,
+  runReminderRecovery,
   runTick,
+  signalPulseChild,
   type BlockName,
 } from './data.js'
 import type { DataOptions, DataResult, PanelCache } from './data.js'
@@ -268,9 +270,17 @@ if (mode === 'palette') {
   process.exit(0)
 }
 
-// ---------------------------------------------------------------- the tick loop (owned here)
+// ---------------------------------------------------------------- Pulse scheduling (one patrol + one recovery)
 let lastTick = 0
 const tickLog = argOf('tick-log') || `${root}/.pi/team/state/watchdog.tick.log`
+const pulseChildren = new Set<ReturnType<typeof spawn>>()
+let patrolRun: ReturnType<typeof runTick> | null = null
+let recoveryRun: ReturnType<typeof runReminderRecovery> | null = null
+let admissionRun: ReturnType<typeof runRemindTick> | null = null
+let recoveryPending = false
+let recoverySeen = ''
+let pendingRecoverySignature = ''
+let pulseStopping: Promise<unknown> | null = null
 
 function tickDue(): boolean {
   if (noPulse || tickEvery <= 0) return false
@@ -282,16 +292,36 @@ function tickDue(): boolean {
   return false
 }
 
-async function runTickIfDue(): Promise<void> {
-  if (!tickDue()) return
-  if (!teamCli) return
-  await runTick(teamCli, root, tickLog)
+function scheduleRecovery(): void {
+  if (!teamCli || !recoveryPending) return
+  if (patrolRun || recoveryRun || admissionRun) return
+  recoveryPending = false
+  recoverySeen = pendingRecoverySignature
+  recoveryRun = runReminderRecovery(teamCli, root, tickLog, 30000, pulseChildren)
+  void recoveryRun.finally(() => {
+    recoveryRun = null
+    if (recoveryPending) scheduleRecovery()
+  })
 }
 
-// ---------------------------------------------------------------- the lightweight Reminder due tick
-// agent-self-reminder 4.1: apart from (and much more often than) the full patrol, both pulse shapes own a
-// ~10s due check. It reads one bounded snapshot and only takes the authority lock when something is due;
-// it never scans the project, never starts the patrol and never calls a model.
+function schedulePatrol(): void {
+  if (!teamCli || patrolRun || recoveryRun) return
+  patrolRun = runTick(teamCli, root, tickLog, 180000, pulseChildren)
+  void patrolRun.finally(() => {
+    patrolRun = null
+    recoverySeen = '' // at most one recheck for the same queued IDs after each full patrol
+    if (recoveryPending) scheduleRecovery()
+  })
+}
+
+async function runTickIfDue(): Promise<void> {
+  if (!tickDue() || !teamCli || patrolRun || recoveryRun) return
+  schedulePatrol()
+  if (patrolRun) await patrolRun
+}
+
+// The due tick remains independent of a long patrol. Its result sets one coalesced recovery bit;
+// recovery runs after the active patrol/recovery, never as an ordinary backlog nudge or second patrol.
 const remindEvery = Math.max(1, Number(process.env.TEAM_REMIND_TICK_SECS ?? 10) || 10)
 const remindStartedAt = new Date().toISOString()
 const remindScript = teamCli ? join(dirname(teamCli), 'remind-tick.mjs') : ''
@@ -308,8 +338,33 @@ function remindDue(): boolean {
 }
 
 async function runRemindIfDue(): Promise<void> {
-  if (!remindDue()) return
-  await runRemindTick(remindScript, root, stateDir, remindStartedAt, tickLog)
+  if (!remindDue() || admissionRun) return
+  admissionRun = runRemindTick(remindScript, root, stateDir, remindStartedAt, tickLog, 30000, pulseChildren)
+  try {
+    const result = await admissionRun
+    if (result.output.trim()) {
+      try {
+        const tick = JSON.parse(result.output)
+        const signature = Array.isArray(tick.recoveryIds) ? tick.recoveryIds.join(',') : ''
+        if (tick.recoveryRequired === true && signature !== recoverySeen) {
+          recoveryPending = true
+          pendingRecoverySignature = signature
+        }
+      }
+      catch { /* the child already logged a visible failure; the next interval re-reads the authority */ }
+    }
+  } finally { admissionRun = null }
+  scheduleRecovery()
+}
+
+async function stopPulseChildren(): Promise<void> {
+  recoveryPending = false
+  for (const child of pulseChildren) signalPulseChild(child, 'SIGTERM')
+  if (!pulseStopping) {
+    const runs = [patrolRun, recoveryRun, admissionRun].filter((run): run is NonNullable<typeof run> => Boolean(run))
+    pulseStopping = Promise.allSettled(runs).then(() => { pulseChildren.clear() })
+  }
+  await pulseStopping
 }
 
 function frameOf(res: DataResult, activity: boolean, scroll?: number): FrameInput {
@@ -418,11 +473,14 @@ async function main(): Promise<void> {
 
   if (mode === 'headless') {
     // The tick loop with no renderer. `team monitor --headless` is the bash loop (lock + drift
-    // reexec); this branch serves a direct bundle invocation and keeps the same cadence.
+    // reexec); this branch serves a direct bundle invocation and keeps the same non-overlap rules.
+    const stop = async (code: number): Promise<void> => { await stopPulseChildren(); process.exit(code) }
+    process.on('SIGTERM', () => { void stop(143) })
+    process.on('SIGHUP', () => { void stop(129) })
     for (;;) {
-      await runTickIfDue()
-      await runRemindIfDue()
-      sleepSync(Math.max(1, tickEvery || refresh) * 1000)
+      void runTickIfDue()
+      void runRemindIfDue()
+      await new Promise(resolve => setTimeout(resolve, remindEvery * 1000))
     }
   }
 
@@ -1002,18 +1060,22 @@ async function main(): Promise<void> {
     }
   }
   process.on('exit', restoreTerminal)
-  process.on('SIGTERM', () => {
+  let pulseShutdown = false
+  const shutdownPulse = async (code: number): Promise<void> => {
+    if (pulseShutdown) return
+    pulseShutdown = true
     restoreTerminal()
-    process.exit(143)
-  })
-  process.on('SIGHUP', () => {
-    restoreTerminal()
-    process.exit(129)
-  })
+    await stopPulseChildren()
+    cache.dispose()
+    process.exit(code)
+  }
+  process.on('SIGTERM', () => { void shutdownPulse(143) })
+  process.on('SIGHUP', () => { void shutdownPulse(129) })
 
   if (once) await runTickIfDue()
   await app.waitUntilExit()
   restoreTerminal()
+  await stopPulseChildren()
   cache.dispose()
   process.exit(0)
 }

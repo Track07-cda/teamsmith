@@ -1255,7 +1255,7 @@ export default function (pi: ExtensionAPI) {
   /** 读 spool 的新行并合并成一条唤醒（同一拍收到的多行只叫一次）。
    *  日志写不进去时 `deliverNormal` 返回 blocked：offset 不动，行保持未读（下一拍重读）。 */
   const flush = (): void => {
-    if (!spool) return
+    if (!spool || (reminderOnly && !reminderReleased)) return
     try { runRetryTick() } catch { /* ignore */ }
     try { runRecoveryTick() } catch { /* ignore */ }
     const res = readNewLines(spool, offset)
@@ -1334,6 +1334,8 @@ export default function (pi: ExtensionAPI) {
   let remindModule: any = null
   let remindBusy = false
   let remindWarned = ''
+  let reminderOnly = false
+  let reminderReleased = false
 
   const reminderPollMs = (): number => {
     const n = Number(process.env.TEAM_REMIND_POLL_MS ?? NaN)
@@ -1430,6 +1432,11 @@ export default function (pi: ExtensionAPI) {
         appendLedger(root, `reminder duplicate event batch=${res.batch}（right 已花掉；未再退待命）`)
       } else {
         appendLedger(root, `reminder observed batch=${res.batch} standby=${res.standby} generation=${res.generation} ids=${(res.ids ?? []).join('|')}`)
+        if (reminderOnly && !reminderReleased && res.outcome === 'observed' && (res.standby === 'auto-off' || res.standby === 'already-off')) {
+          reminderReleased = true
+          appendLedger(root, `reminder-only released batch=${res.batch} standby=${res.standby}（普通 watcher 恢复；启动前 backlog 仍按基线处理）`)
+          flush()
+        }
       }
     } catch (error) {
       appendLedger(root, `reminder observation failed: ${oneLine(shortError(error), 200)}`)
@@ -1438,6 +1445,8 @@ export default function (pi: ExtensionAPI) {
 
   pi.on('session_start', async (_event: any, ctx: any) => {
     stopAll()
+    reminderOnly = process.env.TEAM_REMINDER_ONLY_RECOVERY === '1'
+    reminderReleased = !reminderOnly
     root = findRoot(String(ctx?.cwd ?? process.cwd()))
     if (!root) return
     noteIdentityFileConflicts(root)
@@ -1535,7 +1544,8 @@ export default function (pi: ExtensionAPI) {
     }
     maybeCompact()
     baselineSwallowed()
-    runRecoveryTick()
+    if (!reminderOnly) runRecoveryTick()
+    else appendLedger(root, 'reminder-only ordinary delivery held（等待匹配的 Reminder 观察；不重放普通 recovery/backlog）')
     // M53 · 失败不再静默：errno + 额度观察 + 轮询间隔进账本，并写一条耐久降级记录（读的人看 pid+cwd）。
     // 夹具旋钮强制失败时同样走这条路径（evidence 里带 forced=1，免得测试事故被当成真事故）。
     const forced = forcedWatchErrno()
@@ -1571,6 +1581,6 @@ export default function (pi: ExtensionAPI) {
     journalPath = ''; journalEntries = new Map(); retryQueue = new Map(); recoveryQueue = new Map()
     delivered = new Set(); floorTs = null; floorId = ''; journalRecords = 0; abortAt = ''
     remindRoot = ''; remindState = ''; remindSession = ''; remindAuthority = null; remindModule = null
-    remindBusy = false; remindWarned = ''
+    remindBusy = false; remindWarned = ''; reminderOnly = false; reminderReleased = false
   })
 }

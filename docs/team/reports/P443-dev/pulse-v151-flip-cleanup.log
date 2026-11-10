@@ -1,0 +1,10 @@
+  [32m✓[0m headless 停止前登记了循环自己的 sleep 子进程
+  [32m✓[0m headless 由 TERM 正常收口
+  [31m✗[0m headless 停止后 watchdog.pid 不存在（期望 [absent]，实际 [present]）
+  [31m✗[0m headless 停止前登记的循环子进程全部消失（期望 [0]，实际 [1]）
+PASS headless: due queued during long patrol; one recovery followed before the next patrol
+  [32m✓[0m headless 长巡检中入队且不重叠、结束后一次恢复
+  [32m✓[0m headless 第一次长巡检与第二次巡检之间恰有一次恢复
+  [32m✓[0m headless 停止后巡检与其外部子进程都已回收
+
+== remind-pulse flip cleanup：旧清理应留下锁或循环子进程 == W1 failures=2

@@ -41,11 +41,18 @@ export default async function (pi: ExtensionAPI) {
       ;(pi as any).setActiveTools((pi as any).getActiveTools().filter((name: string) => name !== 'team_remind'))
     }
   }
-  const hide = () => {
+  const hide = (reason = 'session or PM identity changed') => {
+    const previous = expected
     active = false
     stopHeartbeat()
     pi.registerTool({ ...definition('hidden'), defaultActive: false } as any)
     removeFromModel()
+    if (previous) {
+      // Doctor must stop reporting ready in the same switch/fork/reload, not one TTL later. Evidence
+      // withdrawal is best effort: a failed write leaves the old record freshness-bounded.
+      try { capability.publishRemindCapability(previous, { generation, extensionVersion, status: 'hidden', exposure: 'hidden', reason }) }
+      catch { /* the previous evidence still expires by its existing TTL */ }
+    }
   }
   const publish = (status: string, exposure: string, reason: string | null = null) => {
     if (!expected) throw new Error('team_remind: no verified identity for capability evidence')
@@ -81,11 +88,11 @@ export default async function (pi: ExtensionAPI) {
     try {
       const current = capability.resolveRemindIdentity(context(ctx), process.env)
       if (expected.launchNonce === null && current.launchNonce !== null) expected = current
-      if (!capability.sameRemindIdentity(expected, current)) { hide(); return false }
+      if (!capability.sameRemindIdentity(expected, current)) { hide('PM project/process/tmux/session/launch identity changed'); return false }
       publish('registered', 'direct')
       return true
     } catch {
-      hide() // A stale context loses the tool; its old evidence expires instead of becoming a load failure.
+      hide('PM identity could not be revalidated')
       return false
     }
   }
@@ -95,7 +102,7 @@ export default async function (pi: ExtensionAPI) {
     const current = capability.resolveRemindIdentity(context(ctx), process.env, { requireLaunch: true })
     if (expected.launchNonce === null && current.launchNonce !== null) expected = current
     if (!capability.sameRemindIdentity(expected, current)) {
-      hide()
+      hide('PM project/process/tmux/session/launch identity changed')
       throw new Error('team_remind: PM project/process/tmux/session/launch identity changed; refused before Reminder-state access')
     }
     try { publish('registered', 'direct') }
@@ -145,15 +152,14 @@ export default async function (pi: ExtensionAPI) {
   // A discovered/global copy starts unreachable. Only session_start can prove a directed PM and activate it.
   pi.registerTool({ ...definition('hidden'), defaultActive: false } as any)
   pi.on('session_start', (_event, ctx) => {
-    stopHeartbeat()
-    active = false
+    hide('session reloaded or replaced')
     expected = null
     generation = randomUUID()
     hide()
     activate(ctx)
   })
   for (const event of ['session_before_switch', 'session_before_fork'] as const) {
-    pi.on(event, () => { if (active) hide() })
+    pi.on(event, () => { if (expected) hide(event === 'session_before_fork' ? 'session forked' : 'session switched') })
   }
   pi.on('before_agent_start', (_event, ctx) => { if (!active) activate(ctx) })
   pi.on('session_shutdown', () => {

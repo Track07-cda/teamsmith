@@ -27,15 +27,101 @@ team_remind_usage() {
 # tick：巡检窗口的**轻量**到期检查（agent-self-reminder 4.1）。两种巡检形态都调同一份入口：
 # 它只读一份有界快照，没到点就直接退出（不拿锁、不扫项目、不调模型）；到点才提交入队。
 # 失败必须看得见（不是静默跳过），但不能把巡检循环带走 —— 记一行 watchdog.log 后返回 0。
-team_remind_due_tick() { # <pulse 实例起点 ISO>
+team_remind_due_tick() { # <pulse 实例起点 ISO>；同时给出是否需要一个 Reminder-only 恢复决定
   local runner out rc
+  TEAM_REMIND_RECOVERY_REQUIRED=0; TEAM_REMIND_RECOVERY_SIGNATURE=''
   runner="$(team_js_runner)"
   [ -n "$runner" ] || { team_warn "remind: 缺 JS 运行时，到期检查没跑（显式失败，不是通过）"; return 0; }
   out="$("$runner" "${TEAM_SKILL_DIR:-$(team_skill_dir)}/scripts/remind-tick.mjs" \
-    --root "$TEAM_MAIN_ROOT" --state-dir "$TEAM_STATE_DIR" --pulse-started "${1:-}" 2>&1)"
+    --root "$TEAM_MAIN_ROOT" --state-dir "$TEAM_STATE_DIR" --pulse-started "${1:-}" --json 2>&1)"
   rc=$?
   if [ "$rc" -ne 0 ]; then
     team_wlog "remind tick 失败（rc=$rc）：$(printf '%s' "$out" | head -2 | tr '\n' ' ')"
+  elif printf '%s' "$out" | grep -q '"recoveryRequired":true'; then
+    TEAM_REMIND_RECOVERY_REQUIRED=1
+    TEAM_REMIND_RECOVERY_SIGNATURE="$(printf '%s' "$out" | sed -n 's/.*"recoveryIds":\[\([^]]*\)\].*/\1/p')"
+  fi
+  return 0
+}
+
+# Reminder-only 恢复：只处理权威里已 queued、尚未进入 intent 的提醒。它复用普通 PM 启动的
+# 身份、continuity、starting、窗口与重启额度判据，但不写/不带通用 pm-prompt，也不先处理 backlog。
+team_remind_recovery_log() { # <结果> [证据]
+  local line="$(team_timestamp) reminder-recovery $1${2:+ $2}"
+  printf '%s\n' "$line" >> "$TEAM_STATE_DIR/reminders.log"
+  printf '%s\n' "$line"
+}
+
+team_remind_recovery() { # [pulse 实例起点 ISO]
+  mkdir -p "$TEAM_STATE_DIR"
+  team_remind_due_tick "${1:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+  [ "${TEAM_REMIND_RECOVERY_REQUIRED:-0}" = "1" ] || return 0
+
+  if [ -n "$(team_trim "${TEAM_PM_CMD:-}")" ]; then
+    team_remind_recovery_log 'result=unsupported-adapter' 'reason=custom PM adapter has no prompt-free Pi watcher contract'
+    return 0
+  fi
+  local required
+  for required in extension/team-bg.ts extension/team-inbox-watch.ts extension/team-reply.ts extension/team-remind.ts \
+                  scripts/state-authority.mjs scripts/reminder-delivery.mjs; do
+    if [ ! -f "$TEAM_SKILL_DIR/$required" ]; then
+      team_remind_recovery_log 'result=missing-extension' "path=$TEAM_SKILL_DIR/$required"
+      return 0
+    fi
+  done
+
+  local st; st="$(team_pm_state)"
+  case "$st" in
+    running:*)
+      team_remind_recovery_log 'result=running' "evidence=$(team_pm_evidence "$st")"
+      return 0 ;;
+    starting:*)
+      team_remind_recovery_log 'result=starting' "evidence=$(team_pm_evidence "$st")"
+      return 0 ;;
+  esac
+
+  # 与普通 patrol 相同：缺窗口时默认只报告，不由 Pulse 改建 tmux；显式允许时才走同一组身份检查。
+  case "$st" in
+    idle:*|unknown:*) ;;
+    foreign:*)
+      team_remind_recovery_log 'result=foreign-window' "evidence=$(team_pm_evidence "$st")"
+      return 0 ;;
+    *)
+      if [ "$TEAM_PULSE_REBUILD_TMUX" != "1" ]; then
+        team_remind_recovery_log 'result=missing-window' "evidence=$(team_pm_evidence "$st")"
+        return 0
+      fi
+      if ! team_assert_own_session 'reminder recovery 重建 tmux'; then
+        team_remind_recovery_log 'result=foreign-session' 'reason=refused to rebuild a session owned by another project'
+        return 0
+      fi
+      if ! team_tmux_has_session "$TEAM_SESSION"; then
+        team_tmux_ensure_session || { team_remind_recovery_log 'result=start-failed' 'reason=tmux session creation failed'; return 0; }
+        team_tmux set-option -t "$TEAM_SESSION" destroy-unattached off >/dev/null 2>&1 || true
+      fi
+      if ! team_pm_window_exists; then
+        team_tmux_new_window "$TEAM_SESSION" "$TEAM_PM_WINDOW" || { team_remind_recovery_log 'result=start-failed' 'reason=PM window creation failed'; return 0; }
+      fi ;;
+  esac
+
+  if ! team_pm_identity_guard; then
+    team_remind_recovery_log 'result=identity-refused' 'reason=PM model/continuity/launch identity guard rejected the start'
+    return 0
+  fi
+  if ! team_pm_restart_allowed; then
+    team_remind_recovery_log 'result=quota-refused' "evidence=$(team_pm_evidence "$st")"
+    return 0
+  fi
+  team_pm_attempt_record "reason=reminder state=${st%%:*} evidence=$(team_pm_evidence "$st")"
+  if TEAM_REMINDER_ONLY_RECOVERY=1 team_pm_start; then
+    if [ "${TEAM_PM_START_OUTCOME:-}" = 'started' ]; then
+      team_pm_restart_record "reason=reminder state=${st%%:*} evidence=$(team_pm_evidence "$st")"
+      team_remind_recovery_log 'result=started' "pid=$(team_pm_recorded_pid) capacity=$(team_capacity_line)"
+    else
+      team_remind_recovery_log "result=${TEAM_PM_START_OUTCOME:-running}" 'reason=another start won the race; no second restart was recorded'
+    fi
+  else
+    team_remind_recovery_log 'result=start-failed' 'reason=PM did not obtain launch proof; Standby and Reminder outcome are unchanged'
   fi
   return 0
 }

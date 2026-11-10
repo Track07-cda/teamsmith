@@ -481,14 +481,17 @@ bash <skill>/scripts/team standby off                          # done, resume wa
 
 When it applies: there really is nothing to push forward, or a human has to step in (authorization/choice of stack/
 outside information). Going on standby loses nothing: the backlog still lands in `state/watchdog.log` and
-`team digest` still shows it.
+`team digest` still shows it. A due PM self-Reminder is the narrow exception: it may start the built-in Pi PM
+without the generic startup prompt, but ordinary backlog stays suppressed until the correlated wake. A newer
+Standby generation whose ordering is ambiguous stays on. See `skills/teamsmith/references/reminders.md`.
 
 ### Why it can pick up again after a restart
 
 All progress is on disk: `state/` (model/window/worktree/task/taskfile), `docs/team/` (briefs/reports/reviews/board/
-threads), git branches and worktrees. When the PM is brought back it continues its original session with `pi -c` (no
-history lost) and receives a kick-off prompt: run `team digest` → `team inbox --ack` → `team resume --dry-run`, and
-then carry on.
+threads), git branches and worktrees. An ordinary `team up` continues the original session with `pi -c` and receives
+a kick-off prompt: run `team digest` → `team inbox --ack` → `team resume --dry-run`, and then carry on. A
+Reminder-only recovery uses the same resume arguments but no kick-off prompt or ordinary backlog nudge; only its
+correlated Reminder starts the work.
 
 ### Maintenance downtime / shutting it down on purpose
 

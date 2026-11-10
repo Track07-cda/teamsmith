@@ -4569,13 +4569,13 @@ M36_REF_PREFIX="${M36_REF_PREFIX}export TEAM_SIGNAL_CALLS_LOG=$(printf '%q' "$RE
 # M40 起再带一段**身份环境前缀**（继承的 TEAM_* 身份先清掉，只写本命令现场推导出的身份）：
 # 前缀同样字面写死（值只取夹具已知量），前缀以外的历史部分保持逐字节一致。
 m40sq() { printf "'%s'" "${1//\'/\'\\\'\'}"; }
-M40_REF_PREFIX="unset TEAM_ROOT TEAM_MAIN_ROOT TEAM_PROJECT TEAM_SESSION TEAM_SESSION_FROM TEAM_CONFIG_FILE TEAM_IDENTITY_LOCKED TEAM_IDENTITY_ROOT TEAM_IDENTITY_MAIN_ROOT TEAM_IDENTITY_PROJECT TEAM_IDENTITY_INHERIT_ROOT TEAM_IDENTITY_INHERIT_MAIN_ROOT TEAM_IDENTITY_INHERIT_PROJECT TEAM_IDENTITY_INHERIT_SESSION; export TEAM_ROOT=$(m40sq "$REPO"); export TEAM_MAIN_ROOT=$(m40sq "$REPO"); export TEAM_PROJECT=$(m40sq "$(basename "$REPO")"); export TEAM_SESSION=$(m40sq "$SESSION"); "
+M40_REF_PREFIX="unset TEAM_ROOT TEAM_MAIN_ROOT TEAM_PROJECT TEAM_SESSION TEAM_SESSION_FROM TEAM_CONFIG_FILE TEAM_REMINDER_ONLY_RECOVERY TEAM_IDENTITY_LOCKED TEAM_IDENTITY_ROOT TEAM_IDENTITY_MAIN_ROOT TEAM_IDENTITY_PROJECT TEAM_IDENTITY_INHERIT_ROOT TEAM_IDENTITY_INHERIT_MAIN_ROOT TEAM_IDENTITY_INHERIT_PROJECT TEAM_IDENTITY_INHERIT_SESSION; export TEAM_ROOT=$(m40sq "$REPO"); export TEAM_MAIN_ROOT=$(m40sq "$REPO"); export TEAM_PROJECT=$(m40sq "$(basename "$REPO")"); export TEAM_SESSION=$(m40sq "$SESSION"); "
 # P396 起命令里再固定本次解析出的 state/config/window 三段（进程局部，不新增配置键、不写 tmux global）：
 # 同样字面写死，前缀以外的历史部分保持逐字节一致。
 P396_REF_PREFIX="export TEAM_STATE_DIR=$(printf '%q' "$REPO/.pi/team/state") TEAM_CONFIG_FILE=$(printf '%q' "$REPO/.pi/team/config.sh") TEAM_PM_WINDOW=pm; "
 LEGACY_REF="${M40_REF_PREFIX}${M36_REF_PREFIX}${P396_REF_PREFIX}cd $(printf '%q' "$REPO") && printf \"%s\\n\" \$\$ > $(printf '%q' "$PM_SPAWN") && exec $(printf '%q' "$FAKE/pi") --provider deepseek --model deepseek-flash -e $(printf '%q' "$SKILL_DIR/extension/team-bg.ts") -e $(printf '%q' "$SKILL_DIR/extension/team-inbox-watch.ts") -e $(printf '%q' "$SKILL_DIR/extension/team-reply.ts") -e $(printf '%q' "$SKILL_DIR/extension/team-remind.ts") --skill $(printf '%q' "$SKILL_DIR") -c  @$(printf '%q' "$PM_PF")"
 DEFAULT_CMD="$(pm_render "$PM_PF" "$PM_SPAWN" "TEAM_PI_BIN=$FAKE/pi")"
-assert_eq "M8.1 默认渲染与历史逐字节一致（TEAM_PM_CMD/BIN/RESUME_ARGS 全空；M27 起含 -e bg、M30 起再含 -e inbox-watch、P396 起再含 -e reply、P442 起再含 -e remind 与 state/config/window 前缀、M36 起带闸门 exports 前缀、M40 起带身份环境前缀）" "$DEFAULT_CMD" "$LEGACY_REF"
+assert_eq "M8.1 默认渲染与历史逐字节一致（TEAM_PM_CMD/BIN/RESUME_ARGS 全空；M27 起含 -e bg、M30 起再含 -e inbox-watch、P396 起再含 -e reply、P442 起再含 -e remind 与 state/config/window 前缀、P443 起清继承的 Reminder-only 标记、M36 起带闸门 exports 前缀、M40 起带身份环境前缀）" "$DEFAULT_CMD" "$LEGACY_REF"
 assert_has_echo "$DEFAULT_CMD" "extension/team-bg.ts" "M27：PM 默认命令加载 team-bg（后台门禁）"
 assert_has_echo "$DEFAULT_CMD" "extension/team-inbox-watch.ts" "M30：PM 默认命令加载 inbox-watch（投递换道）"
 assert_has_echo "$DEFAULT_CMD" "extension/team-reply.ts" "P396：PM 默认命令加载定向关键回复扩展"
@@ -25135,6 +25135,68 @@ else
   else
     bad "P442 真实 Pi 工具夹具红（rc=$P442_REAL_RC）"
     tail -16 "$TMP/p442-remind-tool-real.log" | sed 's/^/      /'
+  fi
+fi
+
+# ---------------------------------------------------------------- 68. Reminder 生命周期与恢复（P443）
+section "68 · 提醒：停止恢复 / 两种 Pulse / 并发与迟到生命周期（P443）"
+P443_LIFE="$SKILL_DIR/tests/remind-lifecycle.sh"
+if [ ! -f "$P443_LIFE" ]; then
+  bad "P443 缺 tests/remind-lifecycle.sh"
+else
+  bash "$P443_LIFE" >"$TMP/p443-lifecycle.log" 2>&1; P443_LIFE_RC=$?
+  if [ "$P443_LIFE_RC" -eq 0 ]; then
+    P443_LIFE_SUM="$(smoke_inner_summary "$TMP/p443-lifecycle.log" remind-lifecycle)" || P443_LIFE_SUM=""
+    [ -n "$P443_LIFE_SUM" ] && ok "P443 生命周期夹具全绿（$P443_LIFE_SUM）" || bad "P443 生命周期绿了但缺结果行"
+    assert_has "$TMP/p443-lifecycle.log" "flip（去掉活跃 key 检查）" "P443 并发 key 的红侧真的跑了"
+    assert_has "$TMP/p443-lifecycle.log" "flip（修剪丢掉 unknown）" "P443 活跃记录保留的红侧真的跑了"
+  elif [ "$P443_LIFE_RC" -eq 3 ]; then
+    cond_skip "P443 生命周期夹具" "缺少生命周期夹具前提"
+  else
+    bad "P443 生命周期夹具红（rc=$P443_LIFE_RC）"; tail -14 "$TMP/p443-lifecycle.log" | sed 's/^/      /'
+  fi
+fi
+P443_UNIT="$SKILL_DIR/tests/remind-recovery-unit.sh"
+if [ ! -f "$P443_UNIT" ]; then
+  bad "P443 缺 tests/remind-recovery-unit.sh"
+else
+  bash "$P443_UNIT" >"$TMP/p443-recovery-unit.log" 2>&1; P443_UNIT_RC=$?
+  if [ "$P443_UNIT_RC" -eq 0 ]; then
+    P443_UNIT_SUM="$(smoke_inner_summary "$TMP/p443-recovery-unit.log" remind-recovery-unit)" || P443_UNIT_SUM=""
+    [ -n "$P443_UNIT_SUM" ] && ok "P443 无提示启动与恢复拒绝矩阵全绿（$P443_UNIT_SUM）" || bad "P443 恢复单元夹具绿了但缺结果行"
+  else
+    bad "P443 恢复单元夹具红（rc=$P443_UNIT_RC）"; tail -14 "$TMP/p443-recovery-unit.log" | sed 's/^/      /'
+  fi
+fi
+P443_PULSE="$SKILL_DIR/tests/remind-pulse.sh"
+if [ "$FAST" = "1" ]; then
+  cond_skip "P443 两种 Pulse 形状" "FAST：真实 headless/console 调度另跑"
+elif [ ! -f "$P443_PULSE" ]; then
+  bad "P443 缺 tests/remind-pulse.sh"
+else
+  bash "$P443_PULSE" >"$TMP/p443-pulse.log" 2>&1; P443_PULSE_RC=$?
+  if [ "$P443_PULSE_RC" -eq 0 ]; then
+    P443_PULSE_SUM="$(smoke_inner_summary "$TMP/p443-pulse.log" remind-pulse)" || P443_PULSE_SUM=""
+    [ -n "$P443_PULSE_SUM" ] && ok "P443 两种 Pulse：长巡检入队、合并恢复与子进程回收全绿（$P443_PULSE_SUM）" || bad "P443 Pulse 夹具绿了但缺结果行"
+    assert_has "$TMP/p443-pulse.log" "停止后 watchdog.pid 不存在" "P443 停止清理释放巡检锁"
+    assert_has "$TMP/p443-pulse.log" "停止前登记的循环子进程全部消失" "P443 停止清理回收循环自己的子进程"
+  else
+    bad "P443 Pulse 夹具红（rc=$P443_PULSE_RC）"; tail -16 "$TMP/p443-pulse.log" | sed 's/^/      /'
+  fi
+fi
+P443_REAL="$SKILL_DIR/tests/remind-recovery-real.sh"
+if [ "$FAST" = "1" ]; then
+  cond_skip "P443 真实 Pi 停止恢复" "FAST：私有真实 Pi/tmux + controlled model 另跑"
+elif [ ! -f "$P443_REAL" ]; then
+  bad "P443 缺 tests/remind-recovery-real.sh"
+elif ! command -v "${P442_PI:-$HOME/.bun/bin/pi}" >/dev/null 2>&1; then
+  cond_skip "P443 真实 Pi 停止恢复" "找不到真实 Pi（可设 P442_PI）"
+else
+  bash "$P443_REAL" >"$TMP/p443-recovery-real.log" 2>&1; P443_REAL_RC=$?
+  if [ "$P443_REAL_RC" -eq 0 ]; then
+    assert_has "$TMP/p443-recovery-real.log" "remind-tool-real: passed=3 failed=0" "P443 真实 Pi：无通用提示恢复、忙碌不重复启动、切换/分叉立即撤下工具"
+  else
+    bad "P443 真实 Pi 恢复夹具红（rc=$P443_REAL_RC）"; tail -16 "$TMP/p443-recovery-real.log" | sed 's/^/      /'
   fi
 fi
 

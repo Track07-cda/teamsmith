@@ -173,7 +173,7 @@ export function inspectRemindCapability({ root, state, config, session, window, 
   catch (e) { return { disk, state: 'unknown', reason: `evidence:${e.code ?? e.name}` } }
   const base = { disk, loaded: runtime.extensionVersion, generation: runtime.generation, sessionId: runtime.sessionId, at: runtime.at }
   try {
-    if (runtime.version !== 1 || !['registered', 'error'].includes(runtime.status) ||
+    if (runtime.version !== 1 || !['registered', 'error', 'hidden'].includes(runtime.status) ||
         runtime.root !== realpathSync(root) || runtime.state !== realpathSync(state) || runtime.config !== realpathSync(config)) {
       throw new Error('mismatched evidence')
     }
@@ -194,6 +194,7 @@ export function inspectRemindCapability({ root, state, config, session, window, 
     // is adopted only with this same live process/launch proof; a later conflicting nonce is not.
     if (runtime.launchNonce !== null && launch.nonce !== runtime.launchNonce) throw new Error('PM launch nonce changed')
     if (runtime.status === 'error') return { ...base, state: 'error', reason: runtime.reason ?? 'extension bootstrap failed' }
+    if (runtime.status === 'hidden') return { ...base, state: 'unknown', reason: runtime.reason ?? 'tool is hidden in the current session' }
     if (runtime.status === 'registered' && runtime.exposure === 'direct') {
       return { ...base, state: 'ready', reason: `extension reported registered/active at ${runtime.at}` }
     }

@@ -1,0 +1,12 @@
+  [32m✓[0m headless 由 TERM 正常收口
+PASS headless: due queued during long patrol; one recovery followed before the next patrol
+  [32m✓[0m headless 长巡检中入队且不重叠、结束后一次恢复
+  [32m✓[0m headless 第一次长巡检与第二次巡检之间恰有一次恢复
+  [32m✓[0m headless 停止后巡检与其外部子进程都已回收
+  [32m✓[0m console SIGTERM 后退出并执行清理
+PASS console: due queued during long patrol; one recovery followed before the next patrol
+  [32m✓[0m console 长巡检中入队且不重叠、结束后一次恢复
+  [32m✓[0m console 停止后巡检与其外部子进程都已回收
+  [32m✓[0m 两种 Pulse 夹具均未写主项目状态
+
+== remind-pulse 结果 == ✓8 ✗0 SKIP0
