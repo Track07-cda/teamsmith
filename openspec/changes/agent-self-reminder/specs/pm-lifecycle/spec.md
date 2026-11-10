@@ -13,7 +13,7 @@ its own target window, so a stalled start cannot lock the window forever, and it
 succeeds or fails.
 
 
-A start justified only by an eligible PM self-Reminder SHALL reuse these state, launch identity, continuity, window, capacity and quota guards, but SHALL use the prompt-free Reminder-only handoff in `agent-self-reminder`: no generic startup prompt or ordinary pending nudge is sent before the actual correlated wake. An unobserved or failed send does not make Standby off.
+A start justified only by an eligible PM self-Reminder SHALL reuse these state, launch identity, continuity, window, capacity and existing PM-restart quota guards, but SHALL use the prompt-free Reminder-only handoff in `agent-self-reminder`: no generic startup prompt or ordinary pending nudge is sent before the actual correlated wake. These are unchanged PM-start checks, not Reminder creation or delivery quotas. An unobserved or failed send does not make Standby off.
 
 #### Scenario: A second tick during a start does not start a second PM
 

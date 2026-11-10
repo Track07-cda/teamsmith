@@ -104,7 +104,7 @@ for pending-only patrols and the gap configuration: `skills/teamsmith/references
 `skills/teamsmith/references/config.md`.
 
 
-These pulse pending-batch reminders are distinct from a PM self-Reminder. The self-Reminder exception and its own batch spacing are specified in `agent-self-reminder` and MUST NOT relax the ordinary nudge gap.
+These pulse pending-batch reminders are distinct from a PM self-Reminder. The self-Reminder exception is specified in `agent-self-reminder` and MUST NOT relax the ordinary nudge gap.
 
 #### Scenario: The second tick stays quiet
 

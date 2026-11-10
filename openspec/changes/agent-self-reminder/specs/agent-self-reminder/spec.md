@@ -8,7 +8,7 @@ Let a project PM arrange a durable one-shot reminder, observe its delivery hones
 
 The system SHALL provide `team remind add/list/show/cancel` and a PM-only `team_remind` tool backed by the same versioned project-state authority. The owner SHALL be the verified project PM, and creator/source SHALL distinguish CLI from PM tool. Neither API SHALL accept a caller-selected project, owner or recipient. A successful create SHALL return a stable non-reused ID and its persisted actual due time. A project-scoped active key SHALL return the existing ID and fixed due for the same normalized request, and SHALL reject a conflicting request; after observed or cancelled the key is released. A retry after release is a new creation, not an exactly-once guarantee.
 
-`at` SHALL be an unambiguous valid ISO 8601 date-time with explicit offset or `Z`; `after` SHALL be a positive integer number of seconds, minutes or hours. Exactly one is accepted. The first creation SHALL reject past times and intervals shorter than 30 seconds, with an explicit reason. Text SHALL be valid nonempty UTF-8 without NUL and SHALL be stored, shown and delivered in full; oversize input is rejected, never truncated. Active count and message byte limit SHALL be configurable, with defaults 100 and 16,384 bytes. A rolling limit of 20 successful creates per 60 seconds SHALL reject rather than truncate, and an idempotent active-key hit SHALL not consume a create slot.
+`at` SHALL be an unambiguous valid RFC 3339 date-time with explicit offset or `Z`; `after` SHALL be a positive integer number of seconds, minutes or hours. Exactly one is accepted. A relative deadline SHALL be computed once inside the create transaction and persisted. The first creation SHALL require a representable instant strictly in the future, without an additional minimum delay. Text SHALL be valid nonempty UTF-8 without NUL and SHALL be stored, shown and delivered in full, without truncation. Valid creates SHALL NOT be refused based on creation frequency, active/unknown count or message byte length, and no Reminder quota configuration keys SHALL be introduced.
 
 #### Scenario: Relative retry keeps the first due instant
 
@@ -16,17 +16,29 @@ The system SHALL provide `team remind add/list/show/cancel` and a PM-only `team_
 - **WHEN** another process submits the identical request later or concurrently
 - **THEN** both return the same ID and first persisted due, and exactly one active Reminder exists
 
-#### Scenario: Conflicting key, bad time and oversize text are explicit
+#### Scenario: Conflicting key and invalid input are explicit
 
-- **GIVEN** an active Reminder with key `check` and a configured message-size bound
-- **WHEN** a caller changes the request under that key, supplies both time forms, an offset-free or past instant, an interval under 30 seconds, or a message above the bound
-- **THEN** the call is rejected with the applicable reason and no partial or truncated Reminder is created
+- **GIVEN** an active Reminder with key `check`
+- **WHEN** a caller changes the request under that key, supplies both or neither time form, an offset-free, impossible or nonfuture instant, a zero or overflowing duration, or empty, invalid UTF-8 or NUL-containing text
+- **THEN** the call is rejected with the applicable reason and no partial Reminder is created
+
+#### Scenario: Valid creates and complete text have no Reminder quotas
+
+- **GIVEN** a project with 100 active Reminders and 20 successful creates in the preceding minute
+- **WHEN** another valid request supplies `after 1s` and a 64 KiB UTF-8 message containing a final newline
+- **THEN** it creates a new ID with the persisted future due instant, and storage, list, show and eventual delivery preserve the entire message including that newline
+
+#### Scenario: Each observed wake releases the key for the next one-shot Reminder
+
+- **GIVEN** a Reminder with key `check` whose wake has been observed
+- **WHEN** the PM arranges its next one-shot Reminder under `check` and retries that new request while active
+- **THEN** the new Reminder has a new monotone ID, its retry returns that same new ID and fixed due, and the old observed Reminder does not fire again
 
 #### Scenario: Owner and project are not caller-selected
 
 - **GIVEN** two isolated projects and a worker session that changes its cwd to the PM checkout
-- **WHEN** the worker, an ordinary Pi session, or a request with forged identity tries to use the PM tool
-- **THEN** the tool is hidden or rejects before state access, and neither project's Reminder authority is modified
+- **WHEN** the worker, an ordinary Pi session, or a request with forged identity tries any PM tool action
+- **THEN** the tool is hidden or rejects before any Reminder-state read or write, and neither project's Reminder authority is accessed
 
 ### Requirement: Pulse durably queues one-shot Reminders without a full-patrol frequency increase
 
@@ -48,9 +60,15 @@ Both existing console and headless Pulse shapes SHALL keep due detection live du
 
 ### Requirement: One batch intent governs cancellation and all resend decisions
 
-The watcher SHALL freeze at most eight queued Reminders into one message, write one durable batch intent containing every member before calling Pi, and submit at most one batch per five seconds. A Reminder that has not entered intent MAY be cancelled idempotently; after intent, cancellation SHALL report that withdrawal cannot be guaranteed. A crash before intent leaves a provably unsent item eligible; a crash, timeout, API return or error after intent without a correlated observation SHALL remain unknown and MUST NOT trigger a blind resend. An explicit `team remind resolve <batch-id> --ack-unknown` SHALL atomically close all members of an inspected unknown batch and burn its one remaining auto-off right, returning the affected IDs without claiming delivery or resending them.
+The watcher SHALL freeze the current ordered queued Reminders into one full-text message without a member-count cap and write one durable batch intent containing every member before calling Pi. Only one batch may remain outstanding until observed or explicitly acknowledged; after that, the next batch SHALL be eligible without an imposed spacing interval. A Reminder that has not entered intent MAY be cancelled idempotently; after intent, cancellation SHALL report that withdrawal cannot be guaranteed. A crash before intent leaves a provably unsent item eligible; a crash, timeout, API return or error after intent without a correlated observation SHALL remain unknown and MUST NOT trigger a blind resend. An explicit `team remind resolve <batch-id> --ack-unknown` SHALL atomically close all members of an inspected unknown batch and burn its one remaining auto-off right, returning the affected IDs without claiming delivery or resending them.
 
 The Reminder authority SHALL be the sole decider of its delivery and resend. The ordinary inbox delivery journal, its floor, Outbox, a cache or absence of an old record SHALL NOT independently authorize Reminder resend. Active and unknown records and unspent batch rights SHALL never be evicted by history compaction. Terminal records SHALL be retained for at most the newest 1,000 outcomes or 30 days, and audit for at most its newest 1,000 entries or 30 days, without dropping evidence needed by active or unknown batches. A durable issued-ID high-water SHALL provide an explicit `history-pruned` result for an absent issued ID. Late or duplicate events SHALL NOT recreate a pruned item or a consumed right.
+
+#### Scenario: A batch has no member cap or post-outcome spacing timer
+
+- **GIVEN** nine queued Reminders and no outstanding batch
+- **WHEN** the watcher freezes and sends them, their matching observation commits, and another Reminder is queued immediately afterwards
+- **THEN** the first batch contains all nine full messages and the next batch is immediately eligible without waiting for a spacing interval
 
 #### Scenario: Cancel races the intent transaction
 
@@ -136,9 +154,9 @@ Standby on/off, Reminder create/cancel/admission, recovery eligibility, batch in
 - **WHEN** the process dies at any point around the atomic observation/off/audit commit
 - **THEN** restart sees either the previous unknown/on state or the committed observation/off/audit together, and replay never clears a newer generation
 
-### Requirement: PM tool availability and limits are honestly diagnosed
+### Requirement: PM tool availability is honestly diagnosed
 
-The Reminder tool SHALL be injected only into the verified PM, check identity on every call, and be hidden when identity becomes invalid or a reload/switch invalidates it. `team doctor` SHALL distinguish a PM not running, missing/stale or mismatched evidence, explicit tool-load failure, and a fresh extension-reported registration. It MUST NOT claim to have queried another process's in-memory tool set or proved that the model currently sees or used the tool.
+PM-only `team_remind` SHALL expose add/list/show/cancel, revalidate identity on every call and hide/refuse invalid or reloaded/switched contexts before Reminder-state access. Worker startup and `/team`'s no-tool surface SHALL remain unchanged. Doctor SHALL distinguish not-running, missing/stale/mismatched evidence, explicit load failure and fresh reported registration; it MUST NOT claim an external in-memory tool query, model visibility or use.
 
 #### Scenario: Missing proof is not falsely reported as a load failure
 
@@ -146,8 +164,8 @@ The Reminder tool SHALL be injected only into the verified PM, check identity on
 - **WHEN** `team doctor` inspects Reminder availability
 - **THEN** it reports availability unknown and the stale/missing evidence, not confirmed tool failure or success
 
-#### Scenario: A switched session loses access
+#### Scenario: A switched or reloaded invalid session loses all state access
 
 - **GIVEN** the tool was registered in a verified PM session
-- **WHEN** the session switches to a worker or mismatched project identity
-- **THEN** the tool is hidden and every attempted invocation refuses before mutation
+- **WHEN** a session switch or extension reload leaves a worker, ordinary Pi, forged or mismatched project/process/session identity
+- **THEN** the tool is hidden and every attempted add/list/show/cancel invocation refuses before any Reminder-state read or write
