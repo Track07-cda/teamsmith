@@ -2,9 +2,11 @@
 
 ## Purpose
 
-The PM's independent check of an agent's claim: gates run on a checkout the agent never touched, a hard timeout, and
-a written record that future readers can audit. Why a report is only a claim and the review is the evidence:
-`references/philosophy.md` (principle 1, "a false green is worse than nothing") and `references/protocol.md`.
+The assigned non-implementer verifier's independent check of an agent's claim: the PM prepares a clean checkout,
+the verifier runs the gates and records the actual executor and reviewed revision, and the PM separately accepts
+that evidence. A report is only a claim; verification is executed by the verifier, never attributed to the PM merely
+because the PM prepared the checkout or accepted the result. See `references/philosophy.md` (principle 1) and
+`references/protocol.md`.
 
 ## Requirements
 
