@@ -619,7 +619,7 @@
 | P386 | 63嵌套摘要计数修正 | dev | - | - | done |
 | P387 | Agent Self-Reminder OpenSpec提案 | dev2 | - | - | done |
 | V112 | Self-Reminder提案独立评审 | dev3 | - | - | done |
-| P388 | Agent Self-Reminder MVP实现 | dev-bob | - | - | blocked |
+| P388 | Agent Self-Reminder MVP实现 | dev-bob | - | - | dropped |
 | P389 | 指令上下文与AGENTS瘦身 | dev3 | - | - | done |
 | P390 | team say默认立即投递并移除now | dev2 | - | - | done |
 | P391 | 指令上下文瘦身OpenSpec提案 | dev3 | - | - | done |
@@ -713,6 +713,7 @@
 | P440 | 账本路径生成源修复 | dev | - | - | review |
 | V146 | 账本路径生成独立复验 | dev | - | - | done |
 | V147 | 账本路径返修复核 | dev | - | - | wip |
+| P441 | 提醒工具提案取消额度 | dev | - | - | todo |
 
 ## 当前里程碑
 
