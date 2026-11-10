@@ -3337,7 +3337,7 @@ team_pm_abort_uncommitted() { # only the window started by this attempt
   team_tmux_kill_window "$target" || { team_err "uncommitted PM stop failed: $target；检查保存的诊断"; return 1; }
 }
 
-team_pm_pi_args() { # PM 定向加载 bg/inbox-watch/reply，不加载 notify；默认 -c 延续本目录上一个会话
+team_pm_pi_args() { # PM 定向加载 bg/inbox-watch/reply/remind，不加载 notify；默认 -c 延续本目录上一个会话
   team_pm_identity_guard || return 1
   local model="$(team_pm_model_resolve)" args=()
   args=(--provider "${model%%/*}" --model "${model#*/}")
@@ -3346,6 +3346,8 @@ team_pm_pi_args() { # PM 定向加载 bg/inbox-watch/reply，不加载 notify；
   # M30：PM 的收件箱监视唤醒（投递换道：pi 通道不再往输入框粘贴）
   [ -d "$TEAM_SKILL_DIR" ] && args+=(-e "$TEAM_SKILL_DIR/extension/team-inbox-watch.ts")
   [ -d "$TEAM_SKILL_DIR" ] && args+=(-e "$TEAM_SKILL_DIR/extension/team-reply.ts")
+  # P442：PM 自我提醒工具只在已验证的主检出 PM 里激活；worker 与 /team 不注入。
+  [ -d "$TEAM_SKILL_DIR" ] && args+=(-e "$TEAM_SKILL_DIR/extension/team-remind.ts")
   [ -d "$TEAM_SKILL_DIR" ] && args+=(--skill "$TEAM_SKILL_DIR")
   # 续跑参数（M8.1）：TEAM_PM_SESSION_ID > 显式 TEAM_PM_RESUME_ARGS > 历史的 -c。
   # 默认三个都空 = 与历史逐字节一致；显式配了 resume 参数就换掉默认的 -c（同一套键也服务于自定义 CLI）。

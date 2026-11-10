@@ -23,8 +23,6 @@ const PHASES = new Set(['scheduled', 'queued', 'intent', 'observed', 'unknown', 
 // A batch is the one durable delivery decision: at most one is outstanding until it is observed or an
 // operator acknowledges it, and its single right is what may clear one Standby generation.
 const BATCH_PHASES = new Set(['intent', 'observed', 'unknown', 'resolved']);
-const BATCH_LIMIT = 8;                 // design: at most eight Reminders in one message
-const BATCH_SPACING_MS = 5000;         // design: at most one batch submission per five seconds
 const OBSERVE_DEADLINE_MS = 60000;     // after intent, no correlated event within 60s = unknown, never a resend
 const OVERDUE_LAG_MS = 30000;          // normal polling delay is not overdue; 30s of admission lag is
 // Terminal = the outcome is known and the reminder can no longer fire. A key survives `unknown` (a
@@ -238,9 +236,9 @@ function admitReminders(snapshot, request, nowMs) {
   };
 }
 
-// 3.1: freeze up to eight queued Reminders into ONE batch and bind the current Standby generation, before
-// any Pi call. Returns the whole payload so the caller sends exactly what was frozen (full text, byte for
-// byte) and nothing else.
+// 3.1: freeze every currently queued Reminder into ONE batch and bind the current Standby generation,
+// before any Pi call. Returns the whole payload so the caller sends exactly what was frozen (full text,
+// byte for byte) and nothing else. The next batch is eligible as soon as this outcome settles.
 function intentBatch(snapshot, request, nowMs) {
   const swept = sweepStaleIntents(snapshot, nowMs);
   const outstanding = outstandingBatch(snapshot);
@@ -252,14 +250,9 @@ function intentBatch(snapshot, request, nowMs) {
         : `batch ${outstanding.id} is already in flight (intent at ${outstanding.intentAt})`,
     };
   }
-  const last = snapshot.batches[snapshot.batches.length - 1];
-  if (last && Number.isFinite(msOf(last.intentAt)) && nowMs - msOf(last.intentAt) < BATCH_SPACING_MS) {
-    return { ok: true, action: 'spacing', now: iso(nowMs), retryAt: iso(msOf(last.intentAt) + BATCH_SPACING_MS), swept };
-  }
   const queued = snapshot.reminders
     .filter(record => record.phase === 'queued')
-    .sort((a, b) => ((a.queueSeq ?? 0) - (b.queueSeq ?? 0)) || (a.seq - b.seq))
-    .slice(0, BATCH_LIMIT);
+    .sort((a, b) => ((a.queueSeq ?? 0) - (b.queueSeq ?? 0)) || (a.seq - b.seq));
   if (!queued.length) return { ok: true, action: 'idle', now: iso(nowMs), swept };
   const session = typeof request.session === 'string' ? request.session.trim() : '';
   if (!session) return { ok: false, refusal: 'bad-session', reason: 'the batch intent needs the verified PM session id (which session may observe the wake)' };
@@ -520,7 +513,6 @@ export function validateReminders(snapshot, failWith) {
     if (batch.rightSpentBy !== null && !['wake', 'resolve'].includes(batch.rightSpentBy)) bad(`batch ${batch.id} has an unreadable right holder: ${batch.rightSpentBy}`);
     if (!Number.isSafeInteger(batch.attempts) || batch.attempts < 1) bad(`batch ${batch.id} has an unreadable attempt count`);
     if (!Array.isArray(batch.members) || !batch.members.length) bad(`batch ${batch.id} has no members`);
-    if (batch.members.length > BATCH_LIMIT) bad(`batch ${batch.id} carries more than ${BATCH_LIMIT} members`);
     for (const mid of batch.members) {
       const record = snapshot.reminders.find(item => item.id === mid);
       if (!record) bad(`batch ${batch.id} names a member that is not in the snapshot: ${mid}`);

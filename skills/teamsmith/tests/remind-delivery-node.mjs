@@ -74,6 +74,10 @@ if (group === 'content') {
   check('content 标出补发与来源/任务/key', text.includes('overdue: the patrol queued it late') &&
     text.includes('source cli') && text.includes('task P423') && text.includes('key check'))
   check('content 不截断：整条正文长度原样留在消息里', (text.match(new RegExp(MESSAGE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) ?? []).length === 1)
+  const large = `${'x'.repeat(64 * 1024)}\n`
+  const largeText = MOD.reminderContent(batchFixture({ members: [{ ...batch.members[0], message: large }] }))
+  check('content 64 KiB + 末尾换行逐字进入投递消息', Buffer.byteLength(large, 'utf8') === 65537 &&
+    largeText.includes(`${large}\n\n---\n`))
   const details = MOD.reminderDetails(batch)
   check('details 带批次身份与成员（模型看不见的那一半）', details.batchId === batch.id && details.nonce === 'nonce-abc' &&
     details.members.join(',') === 'rem-x-1,rem-x-2')

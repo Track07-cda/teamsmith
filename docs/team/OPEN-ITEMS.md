@@ -44,3 +44,5 @@ The separate intentional `.pi/team/state/standby` marker created by PM while wai
 
 
 - 详情读取的窄竞态：文件在发现之后、读取之前被替换成 FIFO/设备等非普通文件时，当前返回空正文而不点名类型（V145 SUGGESTION）。后续应返回与越界同类的拒绝并给出文件类型；不阻塞 panel-symlink 归档。
+
+- Reminder 工具后续收尾：stdin 正文校验失败时 `--json` 仍输出人读文本，应统一为结构化拒绝；会话 switch/fork 后能力证据最多残留 20 秒，应在 hide 时撤下并验证 doctor 立即不再 ready（V150 两条 SUGGESTION）。

@@ -36,7 +36,7 @@ for arg in "$@"; do
   case "$arg" in
     --flip=*)
       case "${arg#--flip=}" in
-        view-stored|no-prune|highwater-lax|past-time|key-conflict-gone) FLIPS+=("${arg#--flip=}") ;;
+        view-stored|no-prune|highwater-lax|past-time|key-conflict-gone|key-not-released|no-key-dedup) FLIPS+=("${arg#--flip=}") ;;
         *) printf 'remind-cli：不认识的 --flip 值 [%s]\n' "${arg#--flip=}" >&2; exit 2 ;;
       esac ;;
     -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
@@ -187,6 +187,11 @@ printf 'first line — 中文 100%%\nsecond line\n\n' > "$ROOT/msg/full.txt"
 FULL_BYTES="$(wc -c < "$ROOT/msg/full.txt" | tr -d ' ')"
 printf 'line one\nline two\n' > "$ROOT/msg/two.txt"
 printf 'probe text\n' > "$ROOT/msg/x.txt"
+python3 - "$ROOT/msg/large.txt" <<'PY'
+import sys
+with open(sys.argv[1], 'wb') as f:
+    f.write(b'x' * (64 * 1024) + b'\n')
+PY
 : > "$ROOT/msg/empty.txt"
 : > "$ROOT/msg/none"
 printf 'a\000b' > "$ROOT/msg/nul.bin"
@@ -251,6 +256,42 @@ run_team "$A" "$ROOT/msg/none" "$ROOT/out/a7.txt" remind list
 assert_has "A list：取消后计数跟着变（cancelled=1，只剩 2099 那条 scheduled）" "$(cat "$ROOT/out/a7.txt")" \
   "视图 scheduled=1 derived-due=0 queued=0 intent=0 observed=0 unknown=0 cancelled=1 resolved=0"
 assert_has "A list：取消的那条仍在保留的终结历史里" "$(cat "$ROOT/out/a7.txt")" "另有 1 条已终结"
+
+# 无额度：100 条活跃记录 + 最近一分钟 20 次创建之后，1 秒延迟与 64 KiB 全文仍然合法。
+Q="$(new_repo Q)" || { bad "夹具建不出仓库 Q"; result; exit 1; }
+run_team "$Q" "$ROOT/msg/none" "$ROOT/out/q0.txt" remind add --after 2h --message seed
+[ "$RC" = "0" ] || bad "Q 夹具：种子提醒没建成（$(head -1 "$ROOT/out/q0.txt")）"
+cat > "$ROOT/script/q-fill.mjs" <<'JS'
+snap.reminders = Array.from({ length: 100 }, (_, index) => ({
+  id: 'rem-' + snap.project.id + '-' + (index + 1), seq: index + 1, owner: 'pm', source: 'cli', task: null, key: null,
+  phase: 'scheduled', createdAt: new Date().toISOString(), request: { form: 'after', value: '2h' },
+  dueAt: new Date(Date.now() + 7200000).toISOString(), message: 'active ' + (index + 1), endedAt: null,
+}));
+snap.sequences.reminder = 101;
+snap.audit = Array.from({ length: 20 }, () => ({ at: new Date().toISOString(), op: 'remind-add', ids: ['recent'], source: 'cli' }));
+JS
+edit_snapshot "$Q" "$ROOT/script/q-fill.mjs"
+run_team "$Q" "$ROOT/msg/large.txt" "$ROOT/out/q1.txt" remind add --after 1s --message-file "$ROOT/msg/large.txt"
+assert_eq "Q 100 条活跃 + 20 次近期创建后，1s/64KiB 请求仍建成" "$RC" "0"
+Q_ID="$(sed -n 's/^已创建 \(rem-[^ ]*\) · .*/\1/p' "$ROOT/out/q1.txt")"
+assert_has "Q 新记录使用第 101 个单调 ID" "$Q_ID" '-101'
+run_team "$Q" "$ROOT/msg/none" "$ROOT/out/q2.txt" remind show "$Q_ID" --json
+if jdump "$ROOT/out/q2.txt" reminder.message "$ROOT/out/q-show-message.txt" \
+   && cmp -s "$ROOT/msg/large.txt" "$ROOT/out/q-show-message.txt"; then
+  ok "Q show 保留 64 KiB + 末尾换行（65537 字节）"
+else
+  bad "Q show 的正文被截断或改写字节"
+fi
+run_team "$Q" "$ROOT/msg/none" "$ROOT/out/q3.txt" remind list --json
+"$RUNNER" -e '
+import fs from "node:fs";
+const result = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+const record = result.active.find(item => item.id === process.argv[2]);
+if (!record) process.exit(3);
+fs.writeFileSync(process.argv[3], record.message);
+' "$ROOT/out/q3.txt" "$Q_ID" "$ROOT/out/q-list-message.txt"
+cmp -s "$ROOT/msg/large.txt" "$ROOT/out/q-list-message.txt" \
+  && ok "Q list 保留同一份全文与末尾换行" || bad "Q list 的正文与原文不同"
 
 # ---------------------------------------------------------------- B. refusals (each names its reason, writes nothing)
 B="$(new_repo B)" || { bad "夹具建不出仓库 B"; result; exit 1; }
@@ -318,6 +359,30 @@ if [ -n "$C_NEW" ] && [ "$C_NEW" != "$C_ID" ]; then
   ok "C 终结后复用 key：得到新 id（$C_NEW ≠ $C_ID）"
 else
   bad "C 终结后复用 key：没有新建（拿到 [$C_NEW]）"
+fi
+
+run_team "$C" "$ROOT/msg/none" "$ROOT/out/c6.txt" remind add --after 2h --message "identical without key"
+C_NK1="$(sed -n 's/^已创建 \(rem-[^ ]*\) · .*/\1/p' "$ROOT/out/c6.txt")"
+run_team "$C" "$ROOT/msg/none" "$ROOT/out/c7.txt" remind add --after 2h --message "identical without key"
+C_NK2="$(sed -n 's/^已创建 \(rem-[^ ]*\) · .*/\1/p' "$ROOT/out/c7.txt")"
+if [ -n "$C_NK1" ] && [ -n "$C_NK2" ] && [ "$C_NK1" != "$C_NK2" ]; then
+  ok "C 无 key 的相同正文与时长是两个独立 ID（$C_NK1 / $C_NK2）"
+else
+  bad "C 无 key 相同请求被错误去重（[$C_NK1] / [$C_NK2]）"
+fi
+
+# observed 也释放 key：下一次同 key 请求是新的单调一次性提醒，而不是全局幂等。
+R="$(new_repo R)" || { bad "夹具建不出仓库 R"; result; exit 1; }
+run_team "$R" "$ROOT/msg/none" "$ROOT/out/r1.txt" remind add --after 2h --message "cycle text" --key cycle
+R_ID="$(sed -n 's/^已创建 \(rem-[^ ]*\) · .*/\1/p' "$ROOT/out/r1.txt")"
+printf "const r = snap.reminders.find(item => item.id === '%s'); r.phase = 'observed'; r.endedAt = new Date().toISOString();\n" "$R_ID" > "$ROOT/script/r-observed.mjs"
+edit_snapshot "$R" "$ROOT/script/r-observed.mjs"
+run_team "$R" "$ROOT/msg/none" "$ROOT/out/r2.txt" remind add --after 2h --message "cycle text" --key cycle
+R_NEW="$(sed -n 's/^已创建 \(rem-[^ ]*\) · .*/\1/p' "$ROOT/out/r2.txt")"
+if [ -n "$R_NEW" ] && [ "$R_NEW" != "$R_ID" ]; then
+  ok "C observed 后同 key 新建：新单调 ID（$R_ID → $R_NEW）"
+else
+  bad "C observed 后同 key 没有新建（[$R_ID] / [$R_NEW]）"
 fi
 
 # ---------------------------------------------------------------- D. views are derived, never stored
@@ -478,13 +543,16 @@ flip_prepare() { # <id> <helper>
       mutate "$store" "    if (parsed.seq >= highWater) bad(" "    if (false) bad(" ;;
     past-time)    mutate "$store" "  if (dueMs <= nowMs) {" "  if (false) {" ;;
     key-conflict-gone) mutate "$store" "      if (!sameRequest(active, candidate)) {" "      if (false) {" ;;
+    key-not-released) mutate "$store" "const KEY_HOLDING = new Set(['scheduled', 'queued', 'intent', 'unknown']);" \
+      "const KEY_HOLDING = new Set(['scheduled', 'queued', 'intent', 'unknown', 'observed']);" ;;
+    no-key-dedup) mutate "$store" "  if (key.key) {" "  if (true) {" ;;
     *) return 1 ;;
   esac
 }
 flip_probe() { # <id> <helper>
   local id="$1" helper="$2" repo rid out
   case "$id" in
-    view-stored|no-prune|highwater-lax|past-time|key-conflict-gone) repo="$(new_repo "flip-$id")" ;;
+    view-stored|no-prune|highwater-lax|past-time|key-conflict-gone|key-not-released|no-key-dedup) repo="$(new_repo "flip-$id")" ;;
     *) return 1 ;;
   esac
   case "$id" in
@@ -545,10 +613,29 @@ JS
       else
         bad "flip（活跃 key 的不同请求照旧返回）：仍然拒绝了（rc=$RC），这条红侧是橡皮章"
       fi ;;
+    key-not-released)
+      run_helper "$helper" "$repo" "$ROOT/msg/x.txt" "$ROOT/out/p.txt" remind-add --after 2h --key cycle
+      rid="$(sed -n 's/^已创建 \(rem-[^ ]*\) · .*/\1/p' "$ROOT/out/p.txt")"
+      printf "const r = snap.reminders.find(item => item.id === '%s'); r.phase = 'observed'; r.endedAt = new Date().toISOString();\n" "$rid" > "$ROOT/script/p-cycle.mjs"
+      edit_snapshot "$repo" "$ROOT/script/p-cycle.mjs"
+      run_helper "$helper" "$repo" "$ROOT/msg/x.txt" "$ROOT/out/p2.txt" remind-add --after 2h --key cycle --json
+      if [ "$(jfield "$ROOT/out/p2.txt" 'reminder.id')" = "$rid" ]; then
+        ok "flip（observed 不释放 key）：同 key 续建返回旧 ID —— C 的「观察后新 ID」会红"
+      else
+        bad "flip（observed 不释放 key）：仍分配了新 ID，这条红侧是橡皮章"
+      fi ;;
+    no-key-dedup)
+      run_helper "$helper" "$repo" "$ROOT/msg/x.txt" "$ROOT/out/p.txt" remind-add --after 2h
+      run_helper "$helper" "$repo" "$ROOT/msg/x.txt" "$ROOT/out/p2.txt" remind-add --after 2h --json
+      if [ "$(jfield "$ROOT/out/p2.txt" 'duplicate')" = "true" ]; then
+        ok "flip（无 key 也去重）：相同正文被合并 —— C 的「两个独立 ID」会红"
+      else
+        bad "flip（无 key 也去重）：仍分配了两个 ID，这条红侧是橡皮章"
+      fi ;;
   esac
 }
 
-for flip_id in view-stored no-prune highwater-lax past-time key-conflict-gone; do
+for flip_id in view-stored no-prune highwater-lax past-time key-conflict-gone key-not-released no-key-dedup; do
   arm_selected "$flip_id" || continue
   FLIPS_RUN="${FLIPS_RUN:+$FLIPS_RUN,}$flip_id"
   if ! helper="$(helper_copy "$flip_id")"; then

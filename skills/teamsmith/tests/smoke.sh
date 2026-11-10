@@ -4556,7 +4556,8 @@ PM_SUPPORT="${PM_SUPPORT% }"
 #    M27 起默认参数多了 `-e <skill>/extension/team-bg.ts`（PM 的后台门禁）、M30 起再多了
 #    `-e <skill>/extension/team-inbox-watch.ts`（PM 的投递换道）：参考值同步加这两项，
 #    它仍是**字面写死**的，不调实现。
-#    P396 起默认参数再多了 `-e <skill>/extension/team-reply.ts`（定向关键回复采集）：参考值同步补这一项。
+#    P396 起默认参数再多了 `-e <skill>/extension/team-reply.ts`（定向关键回复采集）；
+#    P442 起再多 `-e <skill>/extension/team-remind.ts`（PM 自我提醒）：参考值同步补这两项。
 #    M36 起整条命令再带一个**闸门前缀**（tmux 运行时闸门：PATH 最前 = scripts/shim、state/tmux-calls.log、
 #    真 tmux 路径三段 export）——前缀同样字面写死；前缀以外的历史部分保持逐字节一致。
 M36_REF_PREFIX="export PATH=$(printf '%q' "$SKILL_DIR/scripts/shim"):\"\$PATH\"; export TEAM_TMUX_CALLS_LOG=$(printf '%q' "$REPO/.pi/team/state/tmux-calls.log"); "
@@ -4572,12 +4573,13 @@ M40_REF_PREFIX="unset TEAM_ROOT TEAM_MAIN_ROOT TEAM_PROJECT TEAM_SESSION TEAM_SE
 # P396 起命令里再固定本次解析出的 state/config/window 三段（进程局部，不新增配置键、不写 tmux global）：
 # 同样字面写死，前缀以外的历史部分保持逐字节一致。
 P396_REF_PREFIX="export TEAM_STATE_DIR=$(printf '%q' "$REPO/.pi/team/state") TEAM_CONFIG_FILE=$(printf '%q' "$REPO/.pi/team/config.sh") TEAM_PM_WINDOW=pm; "
-LEGACY_REF="${M40_REF_PREFIX}${M36_REF_PREFIX}${P396_REF_PREFIX}cd $(printf '%q' "$REPO") && printf \"%s\\n\" \$\$ > $(printf '%q' "$PM_SPAWN") && exec $(printf '%q' "$FAKE/pi") --provider deepseek --model deepseek-flash -e $(printf '%q' "$SKILL_DIR/extension/team-bg.ts") -e $(printf '%q' "$SKILL_DIR/extension/team-inbox-watch.ts") -e $(printf '%q' "$SKILL_DIR/extension/team-reply.ts") --skill $(printf '%q' "$SKILL_DIR") -c  @$(printf '%q' "$PM_PF")"
+LEGACY_REF="${M40_REF_PREFIX}${M36_REF_PREFIX}${P396_REF_PREFIX}cd $(printf '%q' "$REPO") && printf \"%s\\n\" \$\$ > $(printf '%q' "$PM_SPAWN") && exec $(printf '%q' "$FAKE/pi") --provider deepseek --model deepseek-flash -e $(printf '%q' "$SKILL_DIR/extension/team-bg.ts") -e $(printf '%q' "$SKILL_DIR/extension/team-inbox-watch.ts") -e $(printf '%q' "$SKILL_DIR/extension/team-reply.ts") -e $(printf '%q' "$SKILL_DIR/extension/team-remind.ts") --skill $(printf '%q' "$SKILL_DIR") -c  @$(printf '%q' "$PM_PF")"
 DEFAULT_CMD="$(pm_render "$PM_PF" "$PM_SPAWN" "TEAM_PI_BIN=$FAKE/pi")"
-assert_eq "M8.1 默认渲染与历史逐字节一致（TEAM_PM_CMD/BIN/RESUME_ARGS 全空；M27 起含 -e bg、M30 起再含 -e inbox-watch、P396 起再含 -e reply 与 state/config/window 前缀、M36 起带闸门 exports 前缀、M40 起带身份环境前缀）" "$DEFAULT_CMD" "$LEGACY_REF"
+assert_eq "M8.1 默认渲染与历史逐字节一致（TEAM_PM_CMD/BIN/RESUME_ARGS 全空；M27 起含 -e bg、M30 起再含 -e inbox-watch、P396 起再含 -e reply、P442 起再含 -e remind 与 state/config/window 前缀、M36 起带闸门 exports 前缀、M40 起带身份环境前缀）" "$DEFAULT_CMD" "$LEGACY_REF"
 assert_has_echo "$DEFAULT_CMD" "extension/team-bg.ts" "M27：PM 默认命令加载 team-bg（后台门禁）"
 assert_has_echo "$DEFAULT_CMD" "extension/team-inbox-watch.ts" "M30：PM 默认命令加载 inbox-watch（投递换道）"
 assert_has_echo "$DEFAULT_CMD" "extension/team-reply.ts" "P396：PM 默认命令加载定向关键回复扩展"
+assert_has_echo "$DEFAULT_CMD" "extension/team-remind.ts" "P442：PM 默认命令加载自我提醒扩展"
 assert_has_echo "$DEFAULT_CMD" " -c  @$PM_PF" "默认仍是 pi -c + @prompt-file（历史行为）"
 # 显式配了续跑键就在内置 Pi 路径生效（同一套键也服务于自定义 CLI）
 SID_CMD="$(pm_render "$PM_PF" "$PM_SPAWN" "TEAM_PI_BIN=$FAKE/pi" 'TEAM_PM_SESSION_ID=pm-fixed')"
@@ -25057,7 +25059,7 @@ fi
 # 覆盖 CLI 面（add/list/show/cancel）/ 输入拒绝 / key 幂等与释放 / 派生视图（手工改快照后计数跟着变）/
 # 有界终结历史与已签发高水位 / 主项目隔离；五条翻转臂在 scratch 副本上把实现逐条改坏，要求具名断言变红。
 # 纯逻辑：不建 tmux、不起 pi，FAST 与全量都跑。
-section "67 · 提醒：CLI / 派生视图 / 到期入队与投递（P409+P423 · agent-self-reminder 2.1/2.3·3.1/3.2·4.1）"
+section "67 · 提醒：CLI / PM 工具 / 派生视图 / 到期入队与投递（P409+P423+P442）"
 P409_FIX="$SKILL_DIR/tests/remind-cli.sh"
 if [ ! -f "$P409_FIX" ]; then
   bad "P409 缺 tests/remind-cli.sh（提醒 CLI 夹具）"
@@ -25102,6 +25104,37 @@ else
   else
     bad "P423 投递夹具红（rc=$P423_RC）"
     grep -a '✗' "$TMP/p423-remind-delivery.log" | head -10 | sed 's/^/      /'
+  fi
+fi
+
+# P442：PM 工具的身份拒绝/全文红绿在假宿主上跑；真实 Pi/tmux + controlled model 是全量段的另一腿，
+# 不接触真实团队、真实模型或默认 tmux server。FAST 只显式跳过后者。
+P442_NODE_FIX="$SKILL_DIR/tests/remind-tool-node.mjs"
+if [ ! -f "$P442_NODE_FIX" ]; then
+  bad "P442 缺 tests/remind-tool-node.mjs（PM 工具身份与全文夹具）"
+else
+  node "$P442_NODE_FIX" >"$TMP/p442-remind-tool-node.log" 2>&1; P442_NODE_RC=$?
+  if [ "$P442_NODE_RC" -eq 0 ]; then
+    assert_has "$TMP/p442-remind-tool-node.log" "remind-tool-node: passed=7 failed=0" "P442 假宿主：身份零读写与全文红绿全绿"
+  else
+    bad "P442 假宿主工具夹具红（rc=$P442_NODE_RC）"
+    tail -12 "$TMP/p442-remind-tool-node.log" | sed 's/^/      /'
+  fi
+fi
+P442_REAL_FIX="$SKILL_DIR/tests/remind-tool-real.sh"
+if [ "$FAST" = "1" ]; then
+  cond_skip "P442 真实 Pi 工具夹具" "FAST：私有真实 Pi/tmux + controlled model 另跑"
+elif [ ! -f "$P442_REAL_FIX" ]; then
+  bad "P442 缺 tests/remind-tool-real.sh"
+elif ! command -v "${P442_PI:-$HOME/.bun/bin/pi}" >/dev/null 2>&1; then
+  cond_skip "P442 真实 Pi 工具夹具" "找不到真实 Pi（可设 P442_PI）"
+else
+  bash "$P442_REAL_FIX" >"$TMP/p442-remind-tool-real.log" 2>&1; P442_REAL_RC=$?
+  if [ "$P442_REAL_RC" -eq 0 ]; then
+    assert_has "$TMP/p442-remind-tool-real.log" "remind-tool-real: passed=8 failed=0" "P442 真实 Pi：PM 工具/身份/doctor 八组全绿"
+  else
+    bad "P442 真实 Pi 工具夹具红（rc=$P442_REAL_RC）"
+    tail -16 "$TMP/p442-remind-tool-real.log" | sed 's/^/      /'
   fi
 fi
 

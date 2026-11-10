@@ -520,12 +520,12 @@ function command(bin, args, cwd) {
   if (result.error || result.status !== 0) throw new Error(`${basename(bin)} evidence unavailable`)
   return result.stdout.trim()
 }
-function readRegular(path) {
+export function readRegular(path) {
   safeDirectory(dirname(path))
   const fd = regular(path, C.O_RDONLY)
   try { return readFileSync(fd, 'utf8') } finally { closeSync(fd) }
 }
-function ancestor(older, younger) {
+export function ancestor(older, younger) {
   const seen = new Set()
   while (younger > 0 && !seen.has(younger)) {
     if (older === younger) return true
@@ -534,7 +534,7 @@ function ancestor(older, younger) {
   }
   return false
 }
-function proofPid(path, pid, root) {
+export function proofPid(path, pid, root) {
   try {
     const raw = readRegular(path).trim()
     if (!/^\d+$/.test(raw) || !ancestor(Number(raw), pid)) return false
@@ -549,7 +549,7 @@ function proofPid(path, pid, root) {
     throw e
   }
 }
-function tmuxEvidence(socket, pane) {
+export function tmuxEvidence(socket, pane) {
   const fields = command('tmux', ['-S', socket, 'display-message', '-p', '-t', pane,
     '#{socket_path}\t#{pid}\t#{pane_id}\t#{pane_pid}\t#{session_name}\t#{window_name}\t#{pane_current_path}']).split('\t')
   if (fields.length !== 7) throw new Error('incomplete tmux evidence')

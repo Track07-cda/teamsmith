@@ -7,8 +7,8 @@
 #
 #   A  到期入队    不到点不入队；到点的只入一次（重复巡检不加第二条）；取消的项不入队；
 #                  overdue 的两种形状（到期早于本巡检实例 / 入队滞后超 30s），正常轮询延迟不标 overdue
-#   B  冻结批次    按入队顺序最多 8 条冻结成一批；已有一批在飞时拒绝再冻（不重复送）；
-#                  5 秒间隔；成员记录带批次 id
+#   B  冻结批次    按入队顺序把当前成员全部冻结成一批；已有一批在飞时拒绝再冻（不重复送）；
+#                  观察后下一批立即可发；成员记录带批次 id
 #   C  观察与待命  匹配的回执 → observed + 花掉唯一 right + 自动退当前代次 + 一条点名全部 id/来源的审计；
 #                  手动已 off → already-off；更新的代次 → 保留并报 ambiguous；重复事件不产生第二次 off；
 #                  nonce/会话不符 → 拒绝且不消耗 right
@@ -43,7 +43,7 @@ for arg in "$@"; do
   case "$arg" in
     --flip=*)
       case "${arg#--flip=}" in
-        admit-any|intent-multi|observe-nogen|off-on-queue|unknown-resend) FLIPS+=("${arg#--flip=}") ;;
+        admit-any|intent-multi|observe-nogen|off-on-queue|unknown-resend|batch-cap|batch-spacing) FLIPS+=("${arg#--flip=}") ;;
         *) printf 'remind-delivery：不认识的 --flip 值 [%s]\n' "${arg#--flip=}" >&2; exit 2 ;;
       esac ;;
     -h|--help) sed -n '2,33p' "$0"; exit 0 ;;
@@ -292,18 +292,20 @@ assert_eq "B 批次绑定了当时的待命状态（off）" "$(jfield "$ROOT/out
 authority "$D" "$ROOT/out/intent2.txt" remind-intent --session sess-D --pid 111
 assert_eq "B 已有一批在飞：第二次冻结被拒（wait，不产生第二批）" "$(jfield "$ROOT/out/intent2.txt" 'action')" "wait"
 assert_eq "B 快照里只有一批" "$(jfield "$SD" 'batches.length')" "1"
-# 8 条上限：一个批次最多 8 个成员（第 9 条留到下一批）
+# 九条同批：没有成员数上限；观察结束后新成员立即进入下一批，不等批次间隔。
 E="$(new_repo E)"; SE="$(snapshot_of "$E")"
-for i in 1 2 3 4 5 6 7 8 9; do add_due "$E" "cap member $i" "cap$i" >/dev/null; done
+for i in 1 2 3 4 5 6 7 8 9; do add_due "$E" "uncapped member $i" "uncapped$i" >/dev/null; done
 tick "$E" "$(iso_shift -10)" "$ROOT/out/tick.txt"
 authority "$E" "$ROOT/out/intent.txt" remind-intent --session sess-E --pid 222
-assert_eq "B 单批最多 8 条" "$(jfield "$ROOT/out/intent.txt" 'batch.members.length')" "8"
-assert_eq "B 第 9 条仍是 queued（留给下一批）" "$(jfield "$SE" 'reminders.8.phase')" "queued"
-# 5 秒间隔：刚冻结完立刻再冻（先确认上一批已离开 outstanding）
+assert_eq "B 九条全部进入同一批" "$(jfield "$ROOT/out/intent.txt" 'batch.members.length')" "9"
+assert_eq "B 第九条不再滞留 queued" "$(jfield "$SE" 'reminders.8.phase')" "intent"
 authority "$E" "$ROOT/out/obs.txt" remind-observe --id "$(jfield "$ROOT/out/intent.txt" 'batch.id')" \
   --nonce "$(jfield "$ROOT/out/intent.txt" 'batch.nonce')" --session sess-E
+add_due "$E" 'immediately eligible after observation' >/dev/null
+tick "$E" "$(iso_shift -10)" "$ROOT/out/tick.txt"
 authority "$E" "$ROOT/out/intent2.txt" remind-intent --session sess-E --pid 222
-assert_eq "B 5 秒内不再提交下一批（spacing）" "$(jfield "$ROOT/out/intent2.txt" 'action')" "spacing"
+assert_eq "B 观察后下一批立即可发（无 spacing）" "$(jfield "$ROOT/out/intent2.txt" 'action')" "send"
+assert_eq "B 新批次就是刚入队的那一条" "$(jfield "$ROOT/out/intent2.txt" 'batch.members.0.message')" 'immediately eligible after observation'
 
 # ---------------------------------------------------------------- C. 观察与待命
 F="$(new_repo F)"; SF="$(snapshot_of "$F")"
@@ -387,11 +389,7 @@ assert_eq "E 成员一起关闭" "$(jfield "$SI" 'reminders.0.phase')" "resolved
 assert_eq "E right 由确认烧掉" "$(jfield "$SI" 'batches.0.rightSpentBy')" "resolve"
 assert_eq "E 确认不声称送达（没有 remind-observed）" \
   "$(node -e 'const s=require("'"$SI"'");console.log(s.audit.filter(a=>a.op==="remind-observed").length)')" "0"
-# 确认后下一批可以再冻结（把上一批的 intentAt 放到 5 秒外，不睡）
-cat > "$ROOT/script/space.js" <<'JS'
-for (const batch of snap.batches) batch.intentAt = iso(Date.now() - 10000);
-JS
-edit_snapshot "$I" "$ROOT/script/space.js"
+# 确认后下一批可以再冻结，不需要等待或改写上一批的时间。
 add_due "$I" 'after resolve' >/dev/null
 tick "$I" "$(iso_shift -10)" "$ROOT/out/tick.txt"
 authority "$I" "$ROOT/out/intent3.txt" remind-intent --session sess-I --pid 666
@@ -523,12 +521,8 @@ JS
     for i in 1 2 3 4 5 6 7 8 9; do add_due "$repo" "flip member $i" "fm$i" >/dev/null; done
     run_helper "$helper" "$repo" "$ROOT/out/flip.txt" remind-admit --pulse-started "$(iso_shift -10)"
     run_helper "$helper" "$repo" "$ROOT/out/f1.txt" remind-intent --session s --pid 1
-    # Move the first batch out of the 5-second spacing window, so the ONLY thing that could stop the
-    # second freeze is the outstanding-batch rule the mutation removed.
-    cat > "$ROOT/script/space3.js" <<'JS'
-for (const batch of snap.batches) batch.intentAt = iso(Date.now() - 10000);
-JS
-    edit_snapshot "$repo" "$ROOT/script/space3.js"
+    add_due "$repo" 'queued while another batch is in flight' >/dev/null
+    run_helper "$helper" "$repo" "$ROOT/out/flip.txt" remind-admit --pulse-started "$(iso_shift -10)"
     run_helper "$helper" "$repo" "$ROOT/out/f2.txt" remind-intent --session s --pid 1
     if [ "$(jfield "$ROOT/out/f2.txt" 'action')" = "send" ]; then
       ok "flip（不看已有一批在飞）：同一批被冻了两次 —— B 的「拒绝再冻」会红"
@@ -592,10 +586,6 @@ JS
     run_helper "$helper" "$repo" "$ROOT/out/f1.txt" remind-intent --session s --pid 1
     run_helper "$helper" "$repo" "$ROOT/out/f.txt" remind-fail --id "$(jfield "$ROOT/out/f1.txt" 'batch.id')" \
       --nonce "$(jfield "$ROOT/out/f1.txt" 'batch.nonce')" --reason "refused"
-    cat > "$ROOT/script/space2.js" <<'JS'
-for (const batch of snap.batches) batch.intentAt = iso(Date.now() - 10000);
-JS
-    edit_snapshot "$repo" "$ROOT/script/space2.js"
     add_due "$repo" 'flip next batch' >/dev/null
     run_helper "$helper" "$repo" "$ROOT/out/f.txt" remind-admit --pulse-started "$(iso_shift -10)"
     run_helper "$helper" "$repo" "$ROOT/out/f2.txt" remind-intent --session s --pid 1
@@ -603,6 +593,52 @@ JS
       ok "flip（unknown 不再挡住下一批）：无法证实送达的一批被绕过去重发 —— E 的「unknown 挡住下一批」会红"
     else
       bad "flip（unknown 不再挡住下一批）：变异没有改变答案（红侧无效）"
+    fi
+  fi
+
+  if arm_selected batch-cap; then
+    helper="$(helper_copy batch-cap)"
+    mutate "$(dirname "$helper")/remind-store.mjs" \
+      "    .sort((a, b) => ((a.queueSeq ?? 0) - (b.queueSeq ?? 0)) || (a.seq - b.seq));" \
+      "    .sort((a, b) => ((a.queueSeq ?? 0) - (b.queueSeq ?? 0)) || (a.seq - b.seq))
+    .slice(0, 8);"
+    ok "红侧 batch-cap：变异已落地（恢复单批 8 条上限）"
+    FLIPS_RUN="${FLIPS_RUN:+$FLIPS_RUN,}batch-cap"
+    repo="$(new_repo FLIP6)"
+    for i in 1 2 3 4 5 6 7 8 9; do add_due "$repo" "flip cap $i" "fc$i" >/dev/null; done
+    run_helper "$helper" "$repo" "$ROOT/out/flip.txt" remind-admit --pulse-started "$(iso_shift -10)"
+    run_helper "$helper" "$repo" "$ROOT/out/f1.txt" remind-intent --session s --pid 1
+    if [ "$(jfield "$ROOT/out/f1.txt" 'batch.members.length')" = "8" ]; then
+      ok "flip（恢复单批 8 条上限）：第九条被留下 —— B 的「九条同批」会红"
+    else
+      bad "flip（恢复单批 8 条上限）：第九条仍同批，这条红侧是橡皮章"
+    fi
+  fi
+
+  if arm_selected batch-spacing; then
+    helper="$(helper_copy batch-spacing)"
+    mutate "$(dirname "$helper")/remind-store.mjs" \
+      "  const queued = snapshot.reminders" \
+      "  const last = snapshot.batches[snapshot.batches.length - 1];
+  if (last && Number.isFinite(msOf(last.intentAt)) && nowMs - msOf(last.intentAt) < 5000) {
+    return { ok: true, action: 'spacing', now: iso(nowMs), swept };
+  }
+  const queued = snapshot.reminders"
+    ok "红侧 batch-spacing：变异已落地（恢复五秒批次间隔）"
+    FLIPS_RUN="${FLIPS_RUN:+$FLIPS_RUN,}batch-spacing"
+    repo="$(new_repo FLIP7)"
+    add_due "$repo" 'flip spacing first' >/dev/null
+    run_helper "$helper" "$repo" "$ROOT/out/flip.txt" remind-admit --pulse-started "$(iso_shift -10)"
+    run_helper "$helper" "$repo" "$ROOT/out/f1.txt" remind-intent --session s --pid 1
+    run_helper "$helper" "$repo" "$ROOT/out/obs.txt" remind-observe --id "$(jfield "$ROOT/out/f1.txt" 'batch.id')" \
+      --nonce "$(jfield "$ROOT/out/f1.txt" 'batch.nonce')" --session s
+    add_due "$repo" 'flip spacing second' >/dev/null
+    run_helper "$helper" "$repo" "$ROOT/out/flip.txt" remind-admit --pulse-started "$(iso_shift -10)"
+    run_helper "$helper" "$repo" "$ROOT/out/f2.txt" remind-intent --session s --pid 1
+    if [ "$(jfield "$ROOT/out/f2.txt" 'action')" = "spacing" ]; then
+      ok "flip（恢复五秒批次间隔）：下一批被推迟 —— B 的「立即可发」会红"
+    else
+      bad "flip（恢复五秒批次间隔）：下一批仍立即可发，这条红侧是橡皮章"
     fi
   fi
 }
