@@ -1,0 +1,35 @@
+  [32m✓[0m A 八个并发创建都成功返回
+  [32m✓[0m A 同 key 并发只保留一个 ID
+  [32m✓[0m A 同 key 并发固定第一次 due
+  [32m✓[0m A 快照只有一条活跃记录
+  [32m✓[0m A 并发创建保留完整正文和结尾换行
+  [32m✓[0m A 并发冲突请求全部拒绝
+  [32m✓[0m A 冲突是 key-conflict
+  [32m✓[0m A 冲突没有分配新 ID
+  [32m✓[0m A 取消后的并发 key 复用也只有一个新 ID
+  [32m✓[0m A key 复用使用新单调 ID（rem-37eefb99-a9f4-4412-a5d5-d7b4ea93e48c-1 → rem-37eefb99-a9f4-4412-a5d5-d7b4ea93e48c-2）
+  [32m✓[0m A 旧 cancelled 保留、新 scheduled 只有一条
+  [32m✓[0m B cancel 先于 intent：B 已取消
+  [32m✓[0m B cancel 先于 intent：批次只剩 A
+  [32m✓[0m B cancel 先于 intent：消息不含 B 正文
+  [32m✓[0m B intent 先于 cancel：拒绝撤回并说明 in-flight
+  [32m✓[0m B intent 先于 cancel：D 仍在原批次
+  [32m✓[0m B intent 先于 cancel：批次仍含两个成员
+  [32m✓[0m B cancel 拒绝不消耗批次权利
+  [32m✓[0m C 修剪后旧 unknown 仍在
+  [32m✓[0m C 旧 unknown 批次和未花权利仍在
+  [32m✓[0m C 终态批次有界且旧活跃批次不计入淘汰
+  [32m✓[0m C 旧 unknown 的迟到事件仍能正式观察
+  [32m✓[0m C 迟到事件重放只报 duplicate
+  [32m✓[0m C 迟到事件没有合成新提醒
+  [32m✓[0m C 被修剪提醒报 history-pruned
+  [32m✓[0m C 被修剪批次的迟到事件报 history-pruned
+  [32m✓[0m C 被修剪批次没有复活
+  [32m✓[0m C 迟到事件没有新增提醒或批次序号
+  [32m✓[0m C 新写入的提醒仍然有效
+  [32m✓[0m flip（去掉活跃 key 检查）：同 key 分出两个 ID —— A 的并发断言会红
+  [32m✓[0m flip（修剪丢掉 unknown）：旧活跃记录被删掉 —— C 的保留断言会红
+  [32m✓[0m E 主项目 .pi/team 非白名单路径零变化
+
+flip 臂：key-race,prune-active
+== remind-lifecycle 结果 == ✓32 ✗0 SKIP0

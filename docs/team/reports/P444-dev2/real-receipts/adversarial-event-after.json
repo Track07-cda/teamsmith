@@ -1,0 +1,179 @@
+{
+  "final": {
+    "version": 1,
+    "project": {
+      "id": "538e149a-42d6-44ac-807f-57ea0aa23b0d",
+      "mainRoot": "/var/tmp/p442-real-l9pLAM/adversarial-event-after",
+      "stateRoot": "/var/tmp/p442-real-l9pLAM/adversarial-event-after/.pi/team/state"
+    },
+    "sequences": {
+      "reminder": 2,
+      "batch": 2,
+      "queue": 2
+    },
+    "pruned": 0,
+    "standby": {
+      "on": true,
+      "generation": 2,
+      "reason": "G2",
+      "since": "2026-11-10T15:35:51Z",
+      "migrated": true
+    },
+    "pulse": {
+      "startedAt": "2026-11-10T15:35:51.257Z",
+      "lastAdmitAt": "2026-11-10T15:35:51.308Z"
+    },
+    "reminders": [
+      {
+        "id": "rem-538e149a-42d6-44ac-807f-57ea0aa23b0d-1",
+        "seq": 1,
+        "owner": "pm",
+        "source": "cli",
+        "task": null,
+        "key": "event-after",
+        "phase": "observed",
+        "createdAt": "2026-11-10T15:35:50.241Z",
+        "request": {
+          "form": "after",
+          "value": "1s"
+        },
+        "dueAt": "2026-11-10T15:35:51.241Z",
+        "message": "P444_EVENT_AFTER_G2",
+        "endedAt": "2026-11-10T15:35:51.876Z",
+        "queuedAt": "2026-11-10T15:35:51.308Z",
+        "queueSeq": 1,
+        "overdue": true,
+        "batchId": "bat-538e149a-42d6-44ac-807f-57ea0aa23b0d-1",
+        "intentAt": "2026-11-10T15:35:51.484Z",
+        "observedAt": "2026-11-10T15:35:51.876Z"
+      }
+    ],
+    "batches": [
+      {
+        "id": "bat-538e149a-42d6-44ac-807f-57ea0aa23b0d-1",
+        "seq": 1,
+        "nonce": "b75ce02e-f319-40cc-861b-11e1e1b931fe",
+        "phase": "observed",
+        "intentAt": "2026-11-10T15:35:51.484Z",
+        "generation": 1,
+        "target": {
+          "session": "01a1c619-ea01-713e-8be8-4a7d2b45bf93",
+          "pid": 568885
+        },
+        "members": [
+          "rem-538e149a-42d6-44ac-807f-57ea0aa23b0d-1"
+        ],
+        "right": "spent",
+        "rightSpentBy": "wake",
+        "attempts": 1,
+        "lastError": null,
+        "observedAt": "2026-11-10T15:35:51.876Z",
+        "unknownAt": null,
+        "resolvedAt": null,
+        "outcome": {
+          "standby": "generation-ambiguous"
+        }
+      }
+    ],
+    "audit": [
+      {
+        "at": "2026-11-10T15:35:50.241Z",
+        "op": "remind-add",
+        "ids": [
+          "rem-538e149a-42d6-44ac-807f-57ea0aa23b0d-1"
+        ],
+        "source": "cli",
+        "detail": "key=event-after"
+      },
+      {
+        "at": "2026-11-10T15:35:51.308Z",
+        "op": "remind-admit",
+        "ids": [
+          "rem-538e149a-42d6-44ac-807f-57ea0aa23b0d-1"
+        ],
+        "detail": "due <= 2026-11-10T15:35:51.308Z; overdue 1"
+      },
+      {
+        "at": "2026-11-10T15:35:51.484Z",
+        "op": "remind-intent",
+        "batch": "bat-538e149a-42d6-44ac-807f-57ea0aa23b0d-1",
+        "ids": [
+          "rem-538e149a-42d6-44ac-807f-57ea0aa23b0d-1"
+        ],
+        "detail": "standby generation 1; session 01a1c619-ea01-713e-8be8-4a7d2b45bf93"
+      },
+      {
+        "at": "2026-11-10T15:35:51.876Z",
+        "op": "remind-observed",
+        "batch": "bat-538e149a-42d6-44ac-807f-57ea0aa23b0d-1",
+        "ids": [
+          "rem-538e149a-42d6-44ac-807f-57ea0aa23b0d-1"
+        ],
+        "sources": [
+          "cli"
+        ],
+        "detail": "standby generation-ambiguous (bound generation 1)"
+      }
+    ]
+  },
+  "reminderRequests": 1,
+  "timeline": [
+    {
+      "type": "agent_settled",
+      "sessionId": "01a1c619-ea01-713e-8be8-4a7d2b45bf93",
+      "sessionFile": "/var/tmp/p442-real-l9pLAM/adversarial-event-after/home/.pi/agent/sessions/--var-tmp-p442-real-l9pLAM-adversarial-event-after--/2026-11-10T15-35-49-506Z_01a1c619-ea01-713e-8be8-4a7d2b45bf93.jsonl",
+      "reminderTools": [
+        {
+          "name": "team_remind",
+          "exposure": "direct"
+        }
+      ],
+      "activeTools": [
+        "team_remind"
+      ]
+    },
+    {
+      "type": "fixture_send",
+      "customType": "p442-busy",
+      "sessionId": "01a1c619-ea01-713e-8be8-4a7d2b45bf93"
+    },
+    {
+      "type": "custom_start",
+      "customType": "p442-busy",
+      "sessionId": "01a1c619-ea01-713e-8be8-4a7d2b45bf93",
+      "sessionFile": "/var/tmp/p442-real-l9pLAM/adversarial-event-after/home/.pi/agent/sessions/--var-tmp-p442-real-l9pLAM-adversarial-event-after--/2026-11-10T15-35-49-506Z_01a1c619-ea01-713e-8be8-4a7d2b45bf93.jsonl",
+      "reminderTools": [
+        {
+          "name": "team_remind",
+          "exposure": "direct"
+        }
+      ],
+      "activeTools": [
+        "team_remind"
+      ]
+    },
+    {
+      "type": "custom_start",
+      "customType": "team-reminder",
+      "details": {
+        "batchId": "bat-538e149a-42d6-44ac-807f-57ea0aa23b0d-1",
+        "nonce": "b75ce02e-f319-40cc-861b-11e1e1b931fe",
+        "members": [
+          "rem-538e149a-42d6-44ac-807f-57ea0aa23b0d-1"
+        ],
+        "generation": 1
+      },
+      "sessionId": "01a1c619-ea01-713e-8be8-4a7d2b45bf93",
+      "sessionFile": "/var/tmp/p442-real-l9pLAM/adversarial-event-after/home/.pi/agent/sessions/--var-tmp-p442-real-l9pLAM-adversarial-event-after--/2026-11-10T15-35-49-506Z_01a1c619-ea01-713e-8be8-4a7d2b45bf93.jsonl",
+      "reminderTools": [
+        {
+          "name": "team_remind",
+          "exposure": "direct"
+        }
+      ],
+      "activeTools": [
+        "team_remind"
+      ]
+    }
+  ]
+}

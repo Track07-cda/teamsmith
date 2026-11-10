@@ -1,0 +1,119 @@
+{
+  "final": {
+    "version": 1,
+    "project": {
+      "id": "6c97e7f5-47c2-402d-9195-00899ad4f2aa",
+      "mainRoot": "/var/tmp/p442-real-l9pLAM/adversarial-g2-bound",
+      "stateRoot": "/var/tmp/p442-real-l9pLAM/adversarial-g2-bound/.pi/team/state"
+    },
+    "sequences": {
+      "reminder": 2,
+      "batch": 2,
+      "queue": 2
+    },
+    "pruned": 0,
+    "standby": {
+      "on": false,
+      "generation": 2,
+      "reason": null,
+      "since": "2026-11-10T15:35:54.478Z",
+      "migrated": true
+    },
+    "pulse": {
+      "startedAt": "2026-11-10T15:35:54.262Z",
+      "lastAdmitAt": "2026-11-10T15:35:54.324Z"
+    },
+    "reminders": [
+      {
+        "id": "rem-6c97e7f5-47c2-402d-9195-00899ad4f2aa-1",
+        "seq": 1,
+        "owner": "pm",
+        "source": "cli",
+        "task": null,
+        "key": "g2-bound",
+        "phase": "observed",
+        "createdAt": "2026-11-10T15:35:53.247Z",
+        "request": {
+          "form": "after",
+          "value": "1s"
+        },
+        "dueAt": "2026-11-10T15:35:54.247Z",
+        "message": "P444_G2_BOUND",
+        "endedAt": "2026-11-10T15:35:54.478Z",
+        "queuedAt": "2026-11-10T15:35:54.324Z",
+        "queueSeq": 1,
+        "overdue": true,
+        "batchId": "bat-6c97e7f5-47c2-402d-9195-00899ad4f2aa-1",
+        "intentAt": "2026-11-10T15:35:54.438Z",
+        "observedAt": "2026-11-10T15:35:54.478Z"
+      }
+    ],
+    "batches": [
+      {
+        "id": "bat-6c97e7f5-47c2-402d-9195-00899ad4f2aa-1",
+        "seq": 1,
+        "nonce": "6a4441da-8f37-4462-b90c-4595cb60ba42",
+        "phase": "observed",
+        "intentAt": "2026-11-10T15:35:54.438Z",
+        "generation": 2,
+        "target": {
+          "session": "01a1c619-f4bf-74d5-a51e-51328cdcf71a",
+          "pid": 572476
+        },
+        "members": [
+          "rem-6c97e7f5-47c2-402d-9195-00899ad4f2aa-1"
+        ],
+        "right": "spent",
+        "rightSpentBy": "wake",
+        "attempts": 1,
+        "lastError": null,
+        "observedAt": "2026-11-10T15:35:54.478Z",
+        "unknownAt": null,
+        "resolvedAt": null,
+        "outcome": {
+          "standby": "auto-off"
+        }
+      }
+    ],
+    "audit": [
+      {
+        "at": "2026-11-10T15:35:53.247Z",
+        "op": "remind-add",
+        "ids": [
+          "rem-6c97e7f5-47c2-402d-9195-00899ad4f2aa-1"
+        ],
+        "source": "cli",
+        "detail": "key=g2-bound"
+      },
+      {
+        "at": "2026-11-10T15:35:54.324Z",
+        "op": "remind-admit",
+        "ids": [
+          "rem-6c97e7f5-47c2-402d-9195-00899ad4f2aa-1"
+        ],
+        "detail": "due <= 2026-11-10T15:35:54.324Z; overdue 1"
+      },
+      {
+        "at": "2026-11-10T15:35:54.438Z",
+        "op": "remind-intent",
+        "batch": "bat-6c97e7f5-47c2-402d-9195-00899ad4f2aa-1",
+        "ids": [
+          "rem-6c97e7f5-47c2-402d-9195-00899ad4f2aa-1"
+        ],
+        "detail": "standby generation 2; session 01a1c619-f4bf-74d5-a51e-51328cdcf71a"
+      },
+      {
+        "at": "2026-11-10T15:35:54.478Z",
+        "op": "remind-observed",
+        "batch": "bat-6c97e7f5-47c2-402d-9195-00899ad4f2aa-1",
+        "ids": [
+          "rem-6c97e7f5-47c2-402d-9195-00899ad4f2aa-1"
+        ],
+        "sources": [
+          "cli"
+        ],
+        "detail": "standby auto-off (bound generation 2)"
+      }
+    ]
+  }
+}

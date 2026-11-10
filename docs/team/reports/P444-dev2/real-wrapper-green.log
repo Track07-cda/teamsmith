@@ -1,0 +1,9 @@
+PASS real Pi A+B exact event, duplicate/member/foreign-session replay preserve a fresh generation
+PASS real Pi event before manual off/on G2 stays ambiguous and Standby commands do not wait for Pi
+PASS real Pi busy follow-up emitted after manual G2 keeps the unprovable order boundary
+PASS real Pi G2 committed before intent exits once; manual off before the event is already-off
+PASS real Pi death after a real event becomes unknown without resend; late replay cannot clear fresh G2
+PASS real Pi process death before-call preserves intent and never blind-resends
+PASS real Pi process death after-call preserves intent and never blind-resends
+remind-tool-real: passed=7 failed=0 evidence=/var/tmp/p444-real-evidence.o0uApJ
+remind-adversarial-real: isolation=ok evidence=/var/tmp/p444-real-evidence.o0uApJ

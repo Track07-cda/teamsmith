@@ -152,6 +152,15 @@ check('watcher 先写 intent 再发（快照里已有该批次）', (() => {
 const intentBatch = snapshot().batches.find(b => b.id === first?.message?.details?.batchId)
 check('watcher 的意图绑定了当前待命代次', intentBatch?.generation === 1, `generation=${intentBatch?.generation}`)
 
+// A real event with the batch id and nonce but a different frozen member set is not this message.
+// It must not spend the right or clear Standby before the genuine observation arrives.
+await handlers.message_start[0]({ message: { role: 'custom', customType: first.message.customType,
+  details: { ...first.message.details, members: [] } } })
+const mismatched = snapshot()
+check('watcher 批次和 nonce 相同但成员集不同 → 拒绝，权利与待命都不动',
+  mismatched.batches.find(b => b.id === first.message.details.batchId)?.phase === 'intent' &&
+  mismatched.batches.find(b => b.id === first.message.details.batchId)?.right === 'unspent' && mismatched.standby.on === true)
+
 // the observation: Pi's own message_start for that very message
 await handlers.message_start[0]({ message: { role: 'custom', customType: first.message.customType, details: first.message.details } })
 const after = snapshot()

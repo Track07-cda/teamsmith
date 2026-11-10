@@ -11,7 +11,7 @@
 #                  观察后下一批立即可发；成员记录带批次 id
 #   C  观察与待命  匹配的回执 → observed + 花掉唯一 right + 自动退当前代次 + 一条点名全部 id/来源的审计；
 #                  手动已 off → already-off；更新的代次 → 保留并报 ambiguous；重复事件不产生第二次 off；
-#                  nonce/会话不符 → 拒绝且不消耗 right
+#                  nonce/会话/成员不符（含同长度乱序）→ 拒绝且不消耗 right
 #   D  未送达      queued / intent / failed-unknown 都不清待命；只有真回执才清
 #   E  失败与确认  API 拒绝 → unknown（可见、不重发、attempts 记账）；unknown 挡住下一批；
 #                  resolve 必须显式 --ack-unknown；确认后成员 resolved、right 烧掉、下一批可以再冻
@@ -25,6 +25,7 @@
 #   --flip=admit-any        入队不看到期时间          → A 的「不到点不入队」必须红
 #   --flip=intent-multi     不看已有一批在飞          → B 的「拒绝再冻」必须红
 #   --flip=observe-nogen    观察不再核对待命代次      → C 的「更新代次必须保留」必须红
+#   --flip=members-length   成员只比长度不比顺序      → C 的「同长度乱序必须拒绝」必须红
 #   --flip=off-on-queue     入队就把待命关掉          → D 的「未送达不得清待命」必须红
 #   --flip=unknown-resend   unknown 不再挡住下一批    → E 的「unknown 挡住下一批」必须红
 # 红侧跑在 scratch 副本上（只复制 state-authority.mjs + remind-store.mjs，import 关系与产品相同），
@@ -43,7 +44,7 @@ for arg in "$@"; do
   case "$arg" in
     --flip=*)
       case "${arg#--flip=}" in
-        admit-any|intent-multi|observe-nogen|off-on-queue|unknown-resend|batch-cap|batch-spacing) FLIPS+=("${arg#--flip=}") ;;
+        admit-any|intent-multi|observe-nogen|members-length|off-on-queue|unknown-resend|batch-cap|batch-spacing) FLIPS+=("${arg#--flip=}") ;;
         *) printf 'remind-delivery：不认识的 --flip 值 [%s]\n' "${arg#--flip=}" >&2; exit 2 ;;
       esac ;;
     -h|--help) sed -n '2,33p' "$0"; exit 0 ;;
@@ -119,6 +120,9 @@ fs.writeFileSync(file + '.edit', JSON.stringify(snap) + '\n');
 fs.renameSync(file + '.edit', file);
 JS
 jfield() { "$RUNNER" "$ROOT/json-get.mjs" "$1" "$2"; }
+reversed_members() { # <intent.json> → 同长度、逆序的成员 id JSON（不改写持久快照）
+  "$RUNNER" -e 'const fs=require("fs");const r=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));process.stdout.write(JSON.stringify(r.batch.members.map(m=>m.id).reverse()))' "$1"
+}
 snapshot_of() { printf '%s/.pi/team/state/reminders/state.json\n' "$1"; }
 edit_snapshot() { # <repo> <script-file>
   "$RUNNER" "$ROOT/snapshot-edit.mjs" "$(snapshot_of "$1")" "$2"
@@ -300,7 +304,8 @@ authority "$E" "$ROOT/out/intent.txt" remind-intent --session sess-E --pid 222
 assert_eq "B 九条全部进入同一批" "$(jfield "$ROOT/out/intent.txt" 'batch.members.length')" "9"
 assert_eq "B 第九条不再滞留 queued" "$(jfield "$SE" 'reminders.8.phase')" "intent"
 authority "$E" "$ROOT/out/obs.txt" remind-observe --id "$(jfield "$ROOT/out/intent.txt" 'batch.id')" \
-  --nonce "$(jfield "$ROOT/out/intent.txt" 'batch.nonce')" --session sess-E
+  --nonce "$(jfield "$ROOT/out/intent.txt" 'batch.nonce')" --session sess-E \
+  --members "$(jfield "$ROOT/out/intent.txt" 'batch.members')"
 add_due "$E" 'immediately eligible after observation' >/dev/null
 tick "$E" "$(iso_shift -10)" "$ROOT/out/tick.txt"
 authority "$E" "$ROOT/out/intent2.txt" remind-intent --session sess-E --pid 222
@@ -310,26 +315,39 @@ assert_eq "B 新批次就是刚入队的那一条" "$(jfield "$ROOT/out/intent2.
 # ---------------------------------------------------------------- C. 观察与待命
 F="$(new_repo F)"; SF="$(snapshot_of "$F")"
 add_due "$F" 'standby wake' wake >/dev/null
+add_due "$F" 'standby wake two' wake-two >/dev/null
 authority "$F" "$ROOT/out/sb.txt" standby-on --reason "user away" --json
 assert_eq "C 待命开了（代次 1）" "$(jfield "$ROOT/out/sb.txt" 'generation')" "1"
 tick "$F" "$(iso_shift -10)" "$ROOT/out/tick.txt"
 authority "$F" "$ROOT/out/intent.txt" remind-intent --session sess-F --pid 333
 FB="$(jfield "$ROOT/out/intent.txt" 'batch.id')"; FN="$(jfield "$ROOT/out/intent.txt" 'batch.nonce')"
 assert_eq "C 意图绑定当前代次 1" "$(jfield "$ROOT/out/intent.txt" 'batch.generation')" "1"
-authority "$F" "$ROOT/out/bad.txt" remind-observe --id "$FB" --nonce "wrong" --session sess-F
+authority "$F" "$ROOT/out/bad.txt" remind-observe --id "$FB" --nonce "wrong" --session sess-F \
+  --members "$(jfield "$ROOT/out/intent.txt" 'batch.members')"
 assert_eq "C nonce 不符：拒绝且不消耗 right" "$(jfield "$ROOT/out/bad.txt" 'refusal')" "nonce-mismatch"
 assert_eq "C nonce 不符后 right 仍未花" "$(jfield "$SF" 'batches.0.right')" "unspent"
-authority "$F" "$ROOT/out/bad.txt" remind-observe --id "$FB" --nonce "$FN" --session other
+authority "$F" "$ROOT/out/bad.txt" remind-observe --id "$FB" --nonce "$FN" --session other \
+  --members "$(jfield "$ROOT/out/intent.txt" 'batch.members')"
 assert_eq "C 会话不符：拒绝" "$(jfield "$ROOT/out/bad.txt" 'refusal')" "session-mismatch"
-authority "$F" "$ROOT/out/obs.txt" remind-observe --id "$FB" --nonce "$FN" --session sess-F
+authority "$F" "$ROOT/out/bad.txt" remind-observe --id "$FB" --nonce "$FN" --session sess-F --members '[]'
+assert_eq "C 成员集不符：拒绝且不消耗 right" "$(jfield "$ROOT/out/bad.txt" 'refusal')" "member-mismatch"
+assert_eq "C 成员集不符后 right 仍未花" "$(jfield "$SF" 'batches.0.right')" "unspent"
+authority "$F" "$ROOT/out/bad.txt" remind-observe --id "$FB" --nonce "$FN" --session sess-F \
+  --members "$(reversed_members "$ROOT/out/intent.txt")"
+assert_eq "C 同长度乱序成员：拒绝" "$(jfield "$ROOT/out/bad.txt" 'refusal')" "member-mismatch"
+assert_eq "C 同长度乱序成员：right 仍未花" "$(jfield "$SF" 'batches.0.right')" "unspent"
+assert_eq "C 同长度乱序成员：Standby 仍开" "$(jfield "$SF" 'standby.on')" "true"
+authority "$F" "$ROOT/out/obs.txt" remind-observe --id "$FB" --nonce "$FN" --session sess-F \
+  --members "$(jfield "$ROOT/out/intent.txt" 'batch.members')"
 assert_has "C 匹配事件 → observed" "$(cat "$ROOT/out/obs.txt")" '"outcome":"observed"'
 assert_has "C 观察原子地自动退代次 1" "$(cat "$ROOT/out/obs.txt")" '"standby":"auto-off"'
 assert_eq "C 待命已关" "$(jfield "$SF" 'standby.on')" "false"
 assert_eq "C right 已花（wake）" "$(jfield "$SF" 'batches.0.rightSpentBy')" "wake"
 assert_eq "C 审计一条、点名批次" "$(jfield "$SF" 'audit.-1.batch')" "$FB"
-assert_eq "C 审计带每个提醒 id" "$(jfield "$SF" 'audit.-1.ids.length')" "1"
+assert_eq "C 审计带每个提醒 id" "$(jfield "$SF" 'audit.-1.ids.length')" "2"
 assert_eq "C 审计带来源" "$(jfield "$SF" 'audit.-1.sources.0')" "cli"
-authority "$F" "$ROOT/out/obs.txt" remind-observe --id "$FB" --nonce "$FN" --session sess-F
+authority "$F" "$ROOT/out/obs.txt" remind-observe --id "$FB" --nonce "$FN" --session sess-F \
+  --members "$(jfield "$ROOT/out/intent.txt" 'batch.members')"
 assert_has "C 重复事件 → duplicate（不再退待命）" "$(cat "$ROOT/out/obs.txt")" '"outcome":"duplicate"'
 assert_eq "C 重复事件不产生第二条观察审计" \
   "$(node -e 'const s=require("'"$SF"'");console.log(s.audit.filter(a=>a.op==="remind-observed").length)')" "1"
@@ -342,7 +360,8 @@ tick "$G" "$(iso_shift -10)" "$ROOT/out/tick.txt"
 authority "$G" "$ROOT/out/intent.txt" remind-intent --session sess-G --pid 444
 authority "$G" "$ROOT/out/sb.txt" standby-off >/dev/null
 authority "$G" "$ROOT/out/obs.txt" remind-observe --id "$(jfield "$ROOT/out/intent.txt" 'batch.id')" \
-  --nonce "$(jfield "$ROOT/out/intent.txt" 'batch.nonce')" --session sess-G
+  --nonce "$(jfield "$ROOT/out/intent.txt" 'batch.nonce')" --session sess-G \
+  --members "$(jfield "$ROOT/out/intent.txt" 'batch.members')"
 assert_has "C 手动已关 → already-off（不虚构自动退出）" "$(cat "$ROOT/out/obs.txt")" '"standby":"already-off"'
 
 # 更新的代次：保留，报 ambiguous
@@ -355,7 +374,8 @@ authority "$H" "$ROOT/out/sb.txt" standby-off >/dev/null
 authority "$H" "$ROOT/out/sb.txt" standby-on --reason "g2" --json >/dev/null
 assert_eq "C 现在的代次是 2" "$(jfield "$ROOT/out/sb.txt" 'generation')" "2"
 authority "$H" "$ROOT/out/obs.txt" remind-observe --id "$(jfield "$ROOT/out/intent.txt" 'batch.id')" \
-  --nonce "$(jfield "$ROOT/out/intent.txt" 'batch.nonce')" --session sess-H
+  --nonce "$(jfield "$ROOT/out/intent.txt" 'batch.nonce')" --session sess-H \
+  --members "$(jfield "$ROOT/out/intent.txt" 'batch.members')"
 assert_has "C 更新代次 → 保留并报 generation-ambiguous" "$(cat "$ROOT/out/obs.txt")" '"standby":"generation-ambiguous"'
 assert_eq "C 更新代次没有被清掉" "$(jfield "$SH" 'standby.on')" "true"
 assert_eq "C 更新代次仍是 2" "$(jfield "$SH" 'standby.generation')" "2"
@@ -406,7 +426,8 @@ authority "$J" "$ROOT/out/intent.txt" remind-intent --session sess-J --pid 777
 assert_eq "F 重启后 queued 被冻结成批次" "$(jfield "$ROOT/out/intent.txt" 'action')" "send"
 assert_has "F 正文仍是原文" "$(cat "$ROOT/out/intent.txt")" 'restart catch-up'
 authority "$J" "$ROOT/out/obs.txt" remind-observe --id "$(jfield "$ROOT/out/intent.txt" 'batch.id')" \
-  --nonce "$(jfield "$ROOT/out/intent.txt" 'batch.nonce')" --session sess-J
+  --nonce "$(jfield "$ROOT/out/intent.txt" 'batch.nonce')" --session sess-J \
+  --members "$(jfield "$ROOT/out/intent.txt" 'batch.members')"
 tick "$J" "$(iso_shift -10)" "$ROOT/out/tick.txt"
 assert_eq "F 已送达的不再入队（admitted 为空）" "$(jfield "$ROOT/out/tick.txt" 'admitted.length')" "0"
 assert_eq "F 已送达记录仍是 observed" "$(jfield "$SJ" 'reminders.0.phase')" "observed"
@@ -546,11 +567,41 @@ JS
     run_helper "$helper" "$repo" "$ROOT/out/f.txt" standby-off
     run_helper "$helper" "$repo" "$ROOT/out/f.txt" standby-on --reason g2
     run_helper "$helper" "$repo" "$ROOT/out/f2.txt" remind-observe --id "$(jfield "$ROOT/out/f1.txt" 'batch.id')" \
-      --nonce "$(jfield "$ROOT/out/f1.txt" 'batch.nonce')" --session s
+      --nonce "$(jfield "$ROOT/out/f1.txt" 'batch.nonce')" --session s \
+      --members "$(jfield "$ROOT/out/f1.txt" 'batch.members')"
     if [ "$(jfield "$ROOT/out/f2.txt" 'standby')" = "auto-off" ]; then
       ok "flip（观察不核对代次）：新代次被清掉 —— C 的「更新代次必须保留」会红"
     else
       bad "flip（观察不核对代次）：变异没有改变答案（红侧无效）"
+    fi
+  fi
+
+  if arm_selected members-length; then
+    helper="$(helper_copy members-length)"
+    if mutate "$(dirname "$helper")/remind-store.mjs" \
+      "request.members.length !== batch.members.length ||
+      request.members.some((id, index) => id !== batch.members[index])" \
+      "request.members.length !== batch.members.length"; then
+      ok "红侧 members-length：变异已落地（成员只比长度，不再逐项比身份与顺序）"
+    else
+      bad "红侧 members-length：变异锚点没落地"
+    fi
+    FLIPS_RUN="${FLIPS_RUN:+$FLIPS_RUN,}members-length"
+    repo="$(new_repo FLIP_MEMBERS)"
+    add_due "$repo" 'member order one' order-one >/dev/null
+    add_due "$repo" 'member order two' order-two >/dev/null
+    run_helper "$helper" "$repo" "$ROOT/out/f.txt" standby-on --reason g1
+    run_helper "$helper" "$repo" "$ROOT/out/flip.txt" remind-admit --pulse-started "$(iso_shift -10)"
+    run_helper "$helper" "$repo" "$ROOT/out/f1.txt" remind-intent --session s --pid 1
+    run_helper "$helper" "$repo" "$ROOT/out/f2.txt" remind-observe --id "$(jfield "$ROOT/out/f1.txt" 'batch.id')" \
+      --nonce "$(jfield "$ROOT/out/f1.txt" 'batch.nonce')" --session s \
+      --members "$(reversed_members "$ROOT/out/f1.txt")"
+    if [ "$(jfield "$ROOT/out/f2.txt" 'outcome')" = "observed" ] && \
+       [ "$(jfield "$ROOT/out/f2.txt" 'standby')" = "auto-off" ] && \
+       [ "$(jfield "$(snapshot_of "$repo")" 'standby.on')" = "false" ]; then
+      ok "flip（成员只比长度）：同长度乱序被误收并清了 Standby —— C 的乱序拒绝会红；完整比较恢复后拒绝"
+    else
+      bad "flip（成员只比长度）：变异没有误收同长度乱序（红侧无效）"
     fi
   fi
 
@@ -631,7 +682,8 @@ JS
     run_helper "$helper" "$repo" "$ROOT/out/flip.txt" remind-admit --pulse-started "$(iso_shift -10)"
     run_helper "$helper" "$repo" "$ROOT/out/f1.txt" remind-intent --session s --pid 1
     run_helper "$helper" "$repo" "$ROOT/out/obs.txt" remind-observe --id "$(jfield "$ROOT/out/f1.txt" 'batch.id')" \
-      --nonce "$(jfield "$ROOT/out/f1.txt" 'batch.nonce')" --session s
+      --nonce "$(jfield "$ROOT/out/f1.txt" 'batch.nonce')" --session s \
+      --members "$(jfield "$ROOT/out/f1.txt" 'batch.members')"
     add_due "$repo" 'flip spacing second' >/dev/null
     run_helper "$helper" "$repo" "$ROOT/out/flip.txt" remind-admit --pulse-started "$(iso_shift -10)"
     run_helper "$helper" "$repo" "$ROOT/out/f2.txt" remind-intent --session s --pid 1

@@ -322,6 +322,13 @@ function observeBatch(snapshot, request, nowMs) {
   if (!session || batch.target?.session !== session) {
     return { ok: false, refusal: 'session-mismatch', reason: `${batch.id} was frozen for session ${batch.target?.session ?? '(none)'}, not '${session || '(none)'}'` };
   }
+  // The batch id and nonce alone do not identify the whole frozen message: a same-named custom event
+  // carrying a different member list is not the observation of this batch. Check the durable member
+  // order inside the same authority transaction so this also holds for a late event after a restart.
+  if (!Array.isArray(request.members) || request.members.length !== batch.members.length ||
+      request.members.some((id, index) => id !== batch.members[index])) {
+    return { ok: false, refusal: 'member-mismatch', reason: `the observed message does not carry the exact frozen member identities of ${batch.id}; no right consumed` };
+  }
   if (batch.phase === 'resolved') return { ok: false, refusal: 'already-resolved', reason: `${batch.id} was acknowledged as unknown; it cannot be reopened` };
   if (batch.right === 'spent' || batch.phase === 'observed') {
     return { ok: true, outcome: 'duplicate', now: iso(nowMs), batch: batch.id, right: batch.right, reason: 'this batch already spent its one right; no second off' };

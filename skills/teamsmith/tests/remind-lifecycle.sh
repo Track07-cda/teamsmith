@@ -108,7 +108,7 @@ authority "$B" "$ROOT/out/b-intent.json" remind-intent --session sess-B --pid 10
 assert_eq 'B cancel 先于 intent：B 已取消' "$(jfield "$ROOT/out/b-cancel.json" outcome)" 'cancelled'
 assert_eq 'B cancel 先于 intent：批次只剩 A' "$(jfield "$ROOT/out/b-intent.json" batch.members.length)" '1'
 assert_eq 'B cancel 先于 intent：消息不含 B 正文' "$(jfield "$ROOT/out/b-intent.json" batch.members.0.message)" 'member-A'
-authority "$B" "$ROOT/out/b-obs.json" remind-observe --id "$(jfield "$ROOT/out/b-intent.json" batch.id)" --nonce "$(jfield "$ROOT/out/b-intent.json" batch.nonce)" --session sess-B
+authority "$B" "$ROOT/out/b-obs.json" remind-observe --id "$(jfield "$ROOT/out/b-intent.json" batch.id)" --nonce "$(jfield "$ROOT/out/b-intent.json" batch.nonce)" --session sess-B --members "$(jfield "$ROOT/out/b-intent.json" batch.members)"
 B3="$(add "$B" member-C)"; B4="$(add "$B" member-D)"; make_due "$B"; tick "$B" "$ROOT/out/b-tick2.json"
 authority "$B" "$ROOT/out/b-intent2.json" remind-intent --session sess-B --pid 10
 BB="$(jfield "$ROOT/out/b-intent2.json" batch.id)"
@@ -149,21 +149,21 @@ add "$C" trigger-compaction >/dev/null
 assert_eq 'C 修剪后旧 unknown 仍在' "$(jfield "$(snapshot_of "$C")" reminders.0.phase)" 'unknown'
 assert_eq 'C 旧 unknown 批次和未花权利仍在' "$(jfield "$(snapshot_of "$C")" batches.0.right)" 'unspent'
 assert_eq 'C 终态批次有界且旧活跃批次不计入淘汰' "$(jfield "$(snapshot_of "$C")" batches.length)" '1001'
-authority "$C" "$ROOT/out/c-late.json" remind-observe --id "$CB" --nonce "$CN" --session sess-C
+authority "$C" "$ROOT/out/c-late.json" remind-observe --id "$CB" --nonce "$CN" --session sess-C --members "$(jfield "$ROOT/out/c-intent.json" batch.members)"
 assert_eq 'C 旧 unknown 的迟到事件仍能正式观察' "$(jfield "$ROOT/out/c-late.json" outcome)" 'observed'
-authority "$C" "$ROOT/out/c-dup.json" remind-observe --id "$CB" --nonce "$CN" --session sess-C
+authority "$C" "$ROOT/out/c-dup.json" remind-observe --id "$CB" --nonce "$CN" --session sess-C --members "$(jfield "$ROOT/out/c-intent.json" batch.members)"
 assert_eq 'C 迟到事件重放只报 duplicate' "$(jfield "$ROOT/out/c-dup.json" outcome)" 'duplicate'
 assert_eq 'C 迟到事件没有合成新提醒' "$(jfield "$(snapshot_of "$C")" sequences.reminder)" '1008'
 
 D="$(new_repo pruned-late)"; DID="$(add "$D" prune-this-batch)"; make_due "$D"; tick "$D" "$ROOT/out/d-tick.json"
 authority "$D" "$ROOT/out/d-intent.json" remind-intent --session sess-D --pid 30
 DB="$(jfield "$ROOT/out/d-intent.json" batch.id)"; DN="$(jfield "$ROOT/out/d-intent.json" batch.nonce)"
-authority "$D" "$ROOT/out/d-obs.json" remind-observe --id "$DB" --nonce "$DN" --session sess-D
+authority "$D" "$ROOT/out/d-obs.json" remind-observe --id "$DB" --nonce "$DN" --session sess-D --members "$(jfield "$ROOT/out/d-intent.json" batch.members)"
 fill_history "$D" 0
 add "$D" trigger-pruned-batch >/dev/null
 run_team "$D" "$ROOT/out/d-show.json" remind show "$DID" --json
 assert_eq 'C 被修剪提醒报 history-pruned' "$(jfield "$ROOT/out/d-show.json" refusal)" 'history-pruned'
-authority "$D" "$ROOT/out/d-late.json" remind-observe --id "$DB" --nonce "$DN" --session sess-D
+authority "$D" "$ROOT/out/d-late.json" remind-observe --id "$DB" --nonce "$DN" --session sess-D --members "$(jfield "$ROOT/out/d-intent.json" batch.members)"
 assert_eq 'C 被修剪批次的迟到事件报 history-pruned' "$(jfield "$ROOT/out/d-late.json" refusal)" 'history-pruned'
 assert_eq 'C 被修剪批次没有复活' "$(jfield "$(snapshot_of "$D")" batches.length)" '1000'
 assert_eq 'C 迟到事件没有新增提醒或批次序号' "$(jfield "$(snapshot_of "$D")" sequences.reminder)" '1008'

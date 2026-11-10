@@ -1,0 +1,222 @@
+{
+  "frozen": {
+    "id": "bat-e6501591-7698-4a1f-bc7b-4768b1e47484-1",
+    "seq": 1,
+    "nonce": "4c99b447-97df-4a22-9f7a-e9cfafee0bb0",
+    "phase": "intent",
+    "intentAt": "2026-11-10T15:35:45.214Z",
+    "generation": 1,
+    "target": {
+      "session": "01a1c619-cef6-7117-8a94-2495ff4174a8",
+      "pid": 558809
+    },
+    "members": [
+      "rem-e6501591-7698-4a1f-bc7b-4768b1e47484-1",
+      "rem-e6501591-7698-4a1f-bc7b-4768b1e47484-2"
+    ],
+    "right": "unspent",
+    "rightSpentBy": null,
+    "attempts": 1,
+    "lastError": null,
+    "observedAt": null,
+    "unknownAt": null,
+    "resolvedAt": null,
+    "outcome": null
+  },
+  "foreignSession": "01a1c619-dbfb-71bb-a592-7e1cf488686a",
+  "final": {
+    "version": 1,
+    "project": {
+      "id": "e6501591-7698-4a1f-bc7b-4768b1e47484",
+      "mainRoot": "/var/tmp/p442-real-l9pLAM/adversarial-batch",
+      "stateRoot": "/var/tmp/p442-real-l9pLAM/adversarial-batch/.pi/team/state"
+    },
+    "sequences": {
+      "reminder": 3,
+      "batch": 2,
+      "queue": 3
+    },
+    "pruned": 0,
+    "standby": {
+      "on": true,
+      "generation": 2,
+      "reason": "P444 fresh G2",
+      "since": "2026-11-10T15:35:45Z",
+      "migrated": true
+    },
+    "pulse": {
+      "startedAt": "2026-11-10T15:35:45.082Z",
+      "lastAdmitAt": "2026-11-10T15:35:45.134Z"
+    },
+    "reminders": [
+      {
+        "id": "rem-e6501591-7698-4a1f-bc7b-4768b1e47484-1",
+        "seq": 1,
+        "owner": "pm",
+        "source": "cli",
+        "task": null,
+        "key": "batch-a",
+        "phase": "observed",
+        "createdAt": "2026-11-10T15:35:43.564Z",
+        "request": {
+          "form": "after",
+          "value": "1s"
+        },
+        "dueAt": "2026-11-10T15:35:44.564Z",
+        "message": "P444_A first line\nsecond line\n",
+        "endedAt": "2026-11-10T15:35:45.301Z",
+        "queuedAt": "2026-11-10T15:35:45.134Z",
+        "queueSeq": 1,
+        "overdue": true,
+        "batchId": "bat-e6501591-7698-4a1f-bc7b-4768b1e47484-1",
+        "intentAt": "2026-11-10T15:35:45.214Z",
+        "observedAt": "2026-11-10T15:35:45.301Z"
+      },
+      {
+        "id": "rem-e6501591-7698-4a1f-bc7b-4768b1e47484-2",
+        "seq": 2,
+        "owner": "pm",
+        "source": "cli",
+        "task": null,
+        "key": "batch-b",
+        "phase": "observed",
+        "createdAt": "2026-11-10T15:35:43.716Z",
+        "request": {
+          "form": "after",
+          "value": "1s"
+        },
+        "dueAt": "2026-11-10T15:35:44.716Z",
+        "message": "P444_B full text",
+        "endedAt": "2026-11-10T15:35:45.301Z",
+        "queuedAt": "2026-11-10T15:35:45.134Z",
+        "queueSeq": 2,
+        "overdue": true,
+        "batchId": "bat-e6501591-7698-4a1f-bc7b-4768b1e47484-1",
+        "intentAt": "2026-11-10T15:35:45.214Z",
+        "observedAt": "2026-11-10T15:35:45.301Z"
+      }
+    ],
+    "batches": [
+      {
+        "id": "bat-e6501591-7698-4a1f-bc7b-4768b1e47484-1",
+        "seq": 1,
+        "nonce": "4c99b447-97df-4a22-9f7a-e9cfafee0bb0",
+        "phase": "observed",
+        "intentAt": "2026-11-10T15:35:45.214Z",
+        "generation": 1,
+        "target": {
+          "session": "01a1c619-cef6-7117-8a94-2495ff4174a8",
+          "pid": 558809
+        },
+        "members": [
+          "rem-e6501591-7698-4a1f-bc7b-4768b1e47484-1",
+          "rem-e6501591-7698-4a1f-bc7b-4768b1e47484-2"
+        ],
+        "right": "spent",
+        "rightSpentBy": "wake",
+        "attempts": 1,
+        "lastError": null,
+        "observedAt": "2026-11-10T15:35:45.301Z",
+        "unknownAt": null,
+        "resolvedAt": null,
+        "outcome": {
+          "standby": "auto-off"
+        }
+      }
+    ],
+    "audit": [
+      {
+        "at": "2026-11-10T15:35:43.564Z",
+        "op": "remind-add",
+        "ids": [
+          "rem-e6501591-7698-4a1f-bc7b-4768b1e47484-1"
+        ],
+        "source": "cli",
+        "detail": "key=batch-a"
+      },
+      {
+        "at": "2026-11-10T15:35:43.716Z",
+        "op": "remind-add",
+        "ids": [
+          "rem-e6501591-7698-4a1f-bc7b-4768b1e47484-2"
+        ],
+        "source": "cli",
+        "detail": "key=batch-b"
+      },
+      {
+        "at": "2026-11-10T15:35:45.134Z",
+        "op": "remind-admit",
+        "ids": [
+          "rem-e6501591-7698-4a1f-bc7b-4768b1e47484-1",
+          "rem-e6501591-7698-4a1f-bc7b-4768b1e47484-2"
+        ],
+        "detail": "due <= 2026-11-10T15:35:45.134Z; overdue 2"
+      },
+      {
+        "at": "2026-11-10T15:35:45.214Z",
+        "op": "remind-intent",
+        "batch": "bat-e6501591-7698-4a1f-bc7b-4768b1e47484-1",
+        "ids": [
+          "rem-e6501591-7698-4a1f-bc7b-4768b1e47484-1",
+          "rem-e6501591-7698-4a1f-bc7b-4768b1e47484-2"
+        ],
+        "detail": "standby generation 1; session 01a1c619-cef6-7117-8a94-2495ff4174a8"
+      },
+      {
+        "at": "2026-11-10T15:35:45.301Z",
+        "op": "remind-observed",
+        "batch": "bat-e6501591-7698-4a1f-bc7b-4768b1e47484-1",
+        "ids": [
+          "rem-e6501591-7698-4a1f-bc7b-4768b1e47484-1",
+          "rem-e6501591-7698-4a1f-bc7b-4768b1e47484-2"
+        ],
+        "sources": [
+          "cli",
+          "cli"
+        ],
+        "detail": "standby auto-off (bound generation 1)"
+      }
+    ]
+  },
+  "sends": [
+    {
+      "type": "fixture_send",
+      "customType": "team-reminder",
+      "details": {
+        "batchId": "bat-e6501591-7698-4a1f-bc7b-4768b1e47484-1",
+        "nonce": "4c99b447-97df-4a22-9f7a-e9cfafee0bb0",
+        "members": [],
+        "generation": 1
+      },
+      "sessionId": "01a1c619-cef6-7117-8a94-2495ff4174a8"
+    },
+    {
+      "type": "fixture_send",
+      "customType": "team-reminder",
+      "details": {
+        "batchId": "bat-e6501591-7698-4a1f-bc7b-4768b1e47484-1",
+        "nonce": "4c99b447-97df-4a22-9f7a-e9cfafee0bb0",
+        "members": [
+          "rem-e6501591-7698-4a1f-bc7b-4768b1e47484-1",
+          "rem-e6501591-7698-4a1f-bc7b-4768b1e47484-2"
+        ],
+        "generation": 1
+      },
+      "sessionId": "01a1c619-cef6-7117-8a94-2495ff4174a8"
+    },
+    {
+      "type": "fixture_send",
+      "customType": "team-reminder",
+      "details": {
+        "batchId": "bat-e6501591-7698-4a1f-bc7b-4768b1e47484-1",
+        "nonce": "4c99b447-97df-4a22-9f7a-e9cfafee0bb0",
+        "members": [
+          "rem-e6501591-7698-4a1f-bc7b-4768b1e47484-1",
+          "rem-e6501591-7698-4a1f-bc7b-4768b1e47484-2"
+        ],
+        "generation": 1
+      },
+      "sessionId": "01a1c619-dbfb-71bb-a592-7e1cf488686a"
+    }
+  ]
+}

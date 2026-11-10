@@ -1,0 +1,119 @@
+{
+  "final": {
+    "version": 1,
+    "project": {
+      "id": "4e6b0b1d-7332-492d-bfb8-bfbcd3623f7f",
+      "mainRoot": "/var/tmp/p442-real-l9pLAM/adversarial-manual-off",
+      "stateRoot": "/var/tmp/p442-real-l9pLAM/adversarial-manual-off/.pi/team/state"
+    },
+    "sequences": {
+      "reminder": 2,
+      "batch": 2,
+      "queue": 2
+    },
+    "pruned": 0,
+    "standby": {
+      "on": false,
+      "generation": 1,
+      "reason": null,
+      "since": "2026-11-10T15:35:57Z",
+      "migrated": true
+    },
+    "pulse": {
+      "startedAt": "2026-11-10T15:35:56.664Z",
+      "lastAdmitAt": "2026-11-10T15:35:56.721Z"
+    },
+    "reminders": [
+      {
+        "id": "rem-4e6b0b1d-7332-492d-bfb8-bfbcd3623f7f-1",
+        "seq": 1,
+        "owner": "pm",
+        "source": "cli",
+        "task": null,
+        "key": "manual-off",
+        "phase": "observed",
+        "createdAt": "2026-11-10T15:35:55.648Z",
+        "request": {
+          "form": "after",
+          "value": "1s"
+        },
+        "dueAt": "2026-11-10T15:35:56.648Z",
+        "message": "P444_MANUAL_OFF",
+        "endedAt": "2026-11-10T15:35:57.146Z",
+        "queuedAt": "2026-11-10T15:35:56.721Z",
+        "queueSeq": 1,
+        "overdue": true,
+        "batchId": "bat-4e6b0b1d-7332-492d-bfb8-bfbcd3623f7f-1",
+        "intentAt": "2026-11-10T15:35:56.931Z",
+        "observedAt": "2026-11-10T15:35:57.146Z"
+      }
+    ],
+    "batches": [
+      {
+        "id": "bat-4e6b0b1d-7332-492d-bfb8-bfbcd3623f7f-1",
+        "seq": 1,
+        "nonce": "078c20b7-b3d7-46b0-ad39-689b6d898a4f",
+        "phase": "observed",
+        "intentAt": "2026-11-10T15:35:56.931Z",
+        "generation": 1,
+        "target": {
+          "session": "01a1c619-ff4a-734b-a2a5-fa9c850e9422",
+          "pid": 579242
+        },
+        "members": [
+          "rem-4e6b0b1d-7332-492d-bfb8-bfbcd3623f7f-1"
+        ],
+        "right": "spent",
+        "rightSpentBy": "wake",
+        "attempts": 1,
+        "lastError": null,
+        "observedAt": "2026-11-10T15:35:57.146Z",
+        "unknownAt": null,
+        "resolvedAt": null,
+        "outcome": {
+          "standby": "already-off"
+        }
+      }
+    ],
+    "audit": [
+      {
+        "at": "2026-11-10T15:35:55.648Z",
+        "op": "remind-add",
+        "ids": [
+          "rem-4e6b0b1d-7332-492d-bfb8-bfbcd3623f7f-1"
+        ],
+        "source": "cli",
+        "detail": "key=manual-off"
+      },
+      {
+        "at": "2026-11-10T15:35:56.721Z",
+        "op": "remind-admit",
+        "ids": [
+          "rem-4e6b0b1d-7332-492d-bfb8-bfbcd3623f7f-1"
+        ],
+        "detail": "due <= 2026-11-10T15:35:56.721Z; overdue 1"
+      },
+      {
+        "at": "2026-11-10T15:35:56.931Z",
+        "op": "remind-intent",
+        "batch": "bat-4e6b0b1d-7332-492d-bfb8-bfbcd3623f7f-1",
+        "ids": [
+          "rem-4e6b0b1d-7332-492d-bfb8-bfbcd3623f7f-1"
+        ],
+        "detail": "standby generation 1; session 01a1c619-ff4a-734b-a2a5-fa9c850e9422"
+      },
+      {
+        "at": "2026-11-10T15:35:57.146Z",
+        "op": "remind-observed",
+        "batch": "bat-4e6b0b1d-7332-492d-bfb8-bfbcd3623f7f-1",
+        "ids": [
+          "rem-4e6b0b1d-7332-492d-bfb8-bfbcd3623f7f-1"
+        ],
+        "sources": [
+          "cli"
+        ],
+        "detail": "standby already-off (bound generation 1)"
+      }
+    ]
+  }
+}

@@ -21,6 +21,17 @@ export default function (pi: ExtensionAPI) {
       else if (action === 'fork') {
         const entry = ctx.sessionManager.getBranch().find((e: any) => e.type === 'message' && e.message.role === 'assistant')!
         await ctx.fork(entry.id, { position: 'at' })
+      } else if (action.startsWith('send ')) {
+        // Re-submit a recorded message through Pi itself. The resulting message_start is a real Pi
+        // event in the current (possibly replaced) session, not a direct call to a product handler.
+        const message = JSON.parse(readFileSync(action.slice(5), 'utf8'))
+        pi.sendMessage(message, { triggerTurn: true, deliverAs: 'followUp' })
+        log({ type: 'fixture_send', customType: message.customType, details: message.details,
+          sessionId: ctx.sessionManager.getSessionId() })
+      } else if (action === 'busy') {
+        pi.sendMessage({ customType: 'p442-busy', content: 'P444 unrelated busy turn', display: true },
+          { triggerTurn: true, deliverAs: 'followUp' })
+        log({ type: 'fixture_send', customType: 'p442-busy', sessionId: ctx.sessionManager.getSessionId() })
       } else if (action === 'stop') ctx.shutdown()
       else throw new Error(`unknown fixture action ${action}`)
       log({ type: 'command_done', action })

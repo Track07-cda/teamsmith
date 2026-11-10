@@ -1,0 +1,14 @@
+FAULT PASS remind-intent before-apply
+FAULT PASS remind-intent after-apply
+FAULT PASS remind-intent before-file-fsync
+FAULT PASS remind-intent after-file-fsync
+FAULT PASS remind-intent after-rename
+FAULT PASS remind-intent after-dir-fsync
+FAULT PASS remind-observe before-apply
+FAULT PASS remind-observe after-apply
+FAULT PASS remind-observe before-file-fsync
+FAULT PASS remind-observe after-file-fsync
+FAULT PASS remind-observe after-rename
+FAULT PASS remind-observe after-dir-fsync
+fault-matrix: passed=12 failed=0
+remind-adversarial-faults: isolation=ok

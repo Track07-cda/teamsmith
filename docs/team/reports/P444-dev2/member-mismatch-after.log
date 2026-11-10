@@ -1,0 +1,99 @@
+  [32m✓[0m A 夹具建出到点提醒 rem-697b4d67-f505-44da-9ee9-d33348bdd7d3-1
+  [32m✓[0m A 不到点：tick 正常结束
+  [32m✓[0m A 不到点：记录仍是 scheduled
+  [32m✓[0m A 到点：tick 把它入队
+  [32m✓[0m A 到点：记录变成 queued
+  [32m✓[0m A 正常轮询延迟不标 overdue（due 晚于本巡检实例起点）
+  [32m✓[0m A 重复巡检不产生第二条队列记录（queueSeq 不变）
+  [32m✓[0m A 重复巡检不重复入队（admitted 为空）
+  [32m✓[0m A 可取消尚未冻结的提醒
+  [32m✓[0m A 取消的项不入队（phase 仍是 cancelled）
+  [32m✓[0m A 取消的项不出现在入队结果里
+  [32m✓[0m A 到期早于本巡检实例起点 → overdue
+  [32m✓[0m A overdue 的 id 被点名
+  [32m✓[0m A 入队滞后 45s → overdue
+  [32m✓[0m B 一批冻结成功
+  [32m✓[0m B 正文逐字进批次（第一行）
+  [32m✓[0m B 正文逐字进批次（第二行）
+  [32m✓[0m B 两条成员都进入同一批
+  [32m✓[0m B 成员记录带批次 id
+  [32m✓[0m B 批次绑定了当时的待命状态（off）
+  [32m✓[0m B 已有一批在飞：第二次冻结被拒（wait，不产生第二批）
+  [32m✓[0m B 快照里只有一批
+  [32m✓[0m B 九条全部进入同一批
+  [32m✓[0m B 第九条不再滞留 queued
+  [32m✓[0m B 观察后下一批立即可发（无 spacing）
+  [32m✓[0m B 新批次就是刚入队的那一条
+  [32m✓[0m C 待命开了（代次 1）
+  [32m✓[0m C 意图绑定当前代次 1
+  [32m✓[0m C nonce 不符：拒绝且不消耗 right
+  [32m✓[0m C nonce 不符后 right 仍未花
+  [32m✓[0m C 会话不符：拒绝
+  [32m✓[0m C 成员集不符：拒绝且不消耗 right
+  [32m✓[0m C 成员集不符后 right 仍未花
+  [32m✓[0m C 匹配事件 → observed
+  [32m✓[0m C 观察原子地自动退代次 1
+  [32m✓[0m C 待命已关
+  [32m✓[0m C right 已花（wake）
+  [32m✓[0m C 审计一条、点名批次
+  [32m✓[0m C 审计带每个提醒 id
+  [32m✓[0m C 审计带来源
+  [32m✓[0m C 重复事件 → duplicate（不再退待命）
+  [32m✓[0m C 重复事件不产生第二条观察审计
+  [32m✓[0m C 手动已关 → already-off（不虚构自动退出）
+  [32m✓[0m C 现在的代次是 2
+  [32m✓[0m C 更新代次 → 保留并报 generation-ambiguous
+  [32m✓[0m C 更新代次没有被清掉
+  [32m✓[0m C 更新代次仍是 2
+  [32m✓[0m D 只是入队：待命还开着
+  [32m✓[0m D 冻结成批次：待命还开着
+  [32m✓[0m D 投递失败：待命还开着（unknown 不等于送达）
+  [32m✓[0m D 失败后成员是 unknown
+  [32m✓[0m E 失败后 attempts=2（一次 intent + 一次失败）
+  [32m✓[0m E 失败原因可见
+  [32m✓[0m E 失败不冒充成功：right 仍未花
+  [32m✓[0m E unknown 挡住下一批（wait）
+  [32m✓[0m E resolve 不给 --ack-unknown → 拒绝（rc=2）
+  [32m✓[0m E resolve 拒绝时点名 --ack-unknown
+  [32m✓[0m E 拒绝后批次仍是 unknown（没有动手）
+  [32m✓[0m E 显式确认 → resolved
+  [32m✓[0m E 成员一起关闭
+  [32m✓[0m E right 由确认烧掉
+  [32m✓[0m E 确认不声称送达（没有 remind-observed）
+  [32m✓[0m E 确认之后可以冻结下一批
+  [32m✓[0m E 新批次不含已确认的那一条
+  [32m✓[0m F 巡检进程退出后记录仍是 queued
+  [32m✓[0m F 重启后 queued 被冻结成批次
+  [32m✓[0m F 正文仍是原文
+  [32m✓[0m F 已送达的不再入队（admitted 为空）
+  [32m✓[0m F 已送达记录仍是 observed
+  [32m✓[0m F 过期 intent 被清成 unknown
+  [32m✓[0m F unknown 的成员也变成 unknown
+  [32m✓[0m F 巡检把这次清点点名
+  [32m✓[0m F unknown 不会被自动重发（wait）
+  [32m✓[0m F 没有产生第二批
+  [32m✓[0m F 成员仍挂着原批次 id（不是新的投递）
+  [32m✓[0m G content：8 条契约成立（== remind-delivery-node content 结果 == ✓8 ✗0）
+  [32m✓[0m G match：7 条契约成立（== remind-delivery-node match 结果 == ✓7 ✗0）
+  [32m✓[0m G watcher：真扩展在假 Pi 宿主上把一批送出去并观察到回执（== remind-delivery-node watcher 结果 == ✓13 ✗0）
+  [32m✓[0m G watcher 结束后待命按规则退出
+  [32m✓[0m G 只有一批
+  [32m✓[0m H 主项目 .pi/team：非白名单路径零变化（同期白名单内 3 个运行时文件在动）
+  [32m✓[0m H 白名单登记：元套件记录放行、state/ 下未登记的子目录仍被点名（判据没有一处松）
+  [32m✓[0m 红侧 admit-any：变异已落地（副本不再是产品那一份）
+  [32m✓[0m flip（入队不看到期时间）：不到点的提醒也入了队 —— A 的「不到点不入队」会红
+  [32m✓[0m 红侧 intent-multi：变异已落地（副本不再是产品那一份）
+  [32m✓[0m flip（不看已有一批在飞）：同一批被冻了两次 —— B 的「拒绝再冻」会红
+  [32m✓[0m 红侧 observe-nogen：变异已落地（副本不再是产品那一份）
+  [32m✓[0m flip（观察不核对代次）：新代次被清掉 —— C 的「更新代次必须保留」会红
+  [32m✓[0m 红侧 off-on-queue：变异已落地（副本不再是产品那一份）
+  [32m✓[0m flip（入队就关待命）：只是入队就把待命清了 —— D 的「未送达不得清待命」会红
+  [32m✓[0m 红侧 unknown-resend：变异已落地（副本不再是产品那一份）
+  [32m✓[0m flip（unknown 不再挡住下一批）：无法证实送达的一批被绕过去重发 —— E 的「unknown 挡住下一批」会红
+  [32m✓[0m 红侧 batch-cap：变异已落地（恢复单批 8 条上限）
+  [32m✓[0m flip（恢复单批 8 条上限）：第九条被留下 —— B 的「九条同批」会红
+  [32m✓[0m 红侧 batch-spacing：变异已落地（恢复五秒批次间隔）
+  [32m✓[0m flip（恢复五秒批次间隔）：下一批被推迟 —— B 的「立即可发」会红
+
+flip 臂：admit-any,intent-multi,observe-nogen,off-on-queue,unknown-resend,batch-cap,batch-spacing
+== remind-delivery 结果 == ✓96 ✗0 SKIP0

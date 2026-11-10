@@ -1,0 +1,176 @@
+{
+  "final": {
+    "version": 1,
+    "project": {
+      "id": "f3327074-2d91-4b14-95e1-aa535cd5562f",
+      "mainRoot": "/var/tmp/p442-real-l9pLAM/adversarial-event-first",
+      "stateRoot": "/var/tmp/p442-real-l9pLAM/adversarial-event-first/.pi/team/state"
+    },
+    "sequences": {
+      "reminder": 2,
+      "batch": 2,
+      "queue": 2
+    },
+    "pruned": 0,
+    "standby": {
+      "on": true,
+      "generation": 2,
+      "reason": "G2",
+      "since": "2026-11-10T15:35:49Z",
+      "migrated": true
+    },
+    "pulse": {
+      "startedAt": "2026-11-10T15:35:48.389Z",
+      "lastAdmitAt": "2026-11-10T15:35:48.441Z"
+    },
+    "reminders": [
+      {
+        "id": "rem-f3327074-2d91-4b14-95e1-aa535cd5562f-1",
+        "seq": 1,
+        "owner": "pm",
+        "source": "cli",
+        "task": null,
+        "key": "event-first",
+        "phase": "observed",
+        "createdAt": "2026-11-10T15:35:47.373Z",
+        "request": {
+          "form": "after",
+          "value": "1s"
+        },
+        "dueAt": "2026-11-10T15:35:48.373Z",
+        "message": "P444_EVENT_BEFORE_G2",
+        "endedAt": "2026-11-10T15:35:49.099Z",
+        "queuedAt": "2026-11-10T15:35:48.441Z",
+        "queueSeq": 1,
+        "overdue": true,
+        "batchId": "bat-f3327074-2d91-4b14-95e1-aa535cd5562f-1",
+        "intentAt": "2026-11-10T15:35:48.684Z",
+        "observedAt": "2026-11-10T15:35:49.099Z"
+      }
+    ],
+    "batches": [
+      {
+        "id": "bat-f3327074-2d91-4b14-95e1-aa535cd5562f-1",
+        "seq": 1,
+        "nonce": "19f92d3e-e70d-44ae-9844-8a8ee69b2315",
+        "phase": "observed",
+        "intentAt": "2026-11-10T15:35:48.684Z",
+        "generation": 1,
+        "target": {
+          "session": "01a1c619-defd-70c3-9805-5c328b328030",
+          "pid": 564159
+        },
+        "members": [
+          "rem-f3327074-2d91-4b14-95e1-aa535cd5562f-1"
+        ],
+        "right": "spent",
+        "rightSpentBy": "wake",
+        "attempts": 1,
+        "lastError": null,
+        "observedAt": "2026-11-10T15:35:49.099Z",
+        "unknownAt": null,
+        "resolvedAt": null,
+        "outcome": {
+          "standby": "generation-ambiguous"
+        }
+      }
+    ],
+    "audit": [
+      {
+        "at": "2026-11-10T15:35:47.373Z",
+        "op": "remind-add",
+        "ids": [
+          "rem-f3327074-2d91-4b14-95e1-aa535cd5562f-1"
+        ],
+        "source": "cli",
+        "detail": "key=event-first"
+      },
+      {
+        "at": "2026-11-10T15:35:48.441Z",
+        "op": "remind-admit",
+        "ids": [
+          "rem-f3327074-2d91-4b14-95e1-aa535cd5562f-1"
+        ],
+        "detail": "due <= 2026-11-10T15:35:48.441Z; overdue 1"
+      },
+      {
+        "at": "2026-11-10T15:35:48.684Z",
+        "op": "remind-intent",
+        "batch": "bat-f3327074-2d91-4b14-95e1-aa535cd5562f-1",
+        "ids": [
+          "rem-f3327074-2d91-4b14-95e1-aa535cd5562f-1"
+        ],
+        "detail": "standby generation 1; session 01a1c619-defd-70c3-9805-5c328b328030"
+      },
+      {
+        "at": "2026-11-10T15:35:49.099Z",
+        "op": "remind-observed",
+        "batch": "bat-f3327074-2d91-4b14-95e1-aa535cd5562f-1",
+        "ids": [
+          "rem-f3327074-2d91-4b14-95e1-aa535cd5562f-1"
+        ],
+        "sources": [
+          "cli"
+        ],
+        "detail": "standby generation-ambiguous (bound generation 1)"
+      }
+    ]
+  },
+  "timeline": [
+    {
+      "type": "delay_enter",
+      "pid": 564159,
+      "sessionId": "01a1c619-defd-70c3-9805-5c328b328030",
+      "message": {
+        "role": "custom",
+        "customType": "team-reminder",
+        "content": "[teamsmith reminder] bat-f3327074-2d91-4b14-95e1-aa535cd5562f-1 · 1 reminder\nNonce: 19f92d3e-e70d-44ae-9844-8a8ee69b2315\n\nID: rem-f3327074-2d91-4b14-95e1-aa535cd5562f-1\nDue: 2026-11-10T15:35:48.373Z\nEnqueued: 2026-11-10T15:35:48.441Z (overdue: the patrol queued it late)\nAttempted: 2026-11-10T15:35:48.684Z\nFrom: source cli · key event-first\n\nP444_EVENT_BEFORE_G2\n\n---\nThis message is a scheduled reminder this project's PM created earlier. The project and task state may have changed since it was scheduled: check the current state before you continue.\n",
+        "details": {
+          "batchId": "bat-f3327074-2d91-4b14-95e1-aa535cd5562f-1",
+          "nonce": "19f92d3e-e70d-44ae-9844-8a8ee69b2315",
+          "members": [
+            "rem-f3327074-2d91-4b14-95e1-aa535cd5562f-1"
+          ],
+          "generation": 1
+        },
+        "display": true
+      }
+    },
+    {
+      "type": "delay_exit",
+      "pid": 564159,
+      "sessionId": "01a1c619-defd-70c3-9805-5c328b328030",
+      "details": {
+        "batchId": "bat-f3327074-2d91-4b14-95e1-aa535cd5562f-1",
+        "nonce": "19f92d3e-e70d-44ae-9844-8a8ee69b2315",
+        "members": [
+          "rem-f3327074-2d91-4b14-95e1-aa535cd5562f-1"
+        ],
+        "generation": 1
+      }
+    },
+    {
+      "type": "custom_start",
+      "customType": "team-reminder",
+      "details": {
+        "batchId": "bat-f3327074-2d91-4b14-95e1-aa535cd5562f-1",
+        "nonce": "19f92d3e-e70d-44ae-9844-8a8ee69b2315",
+        "members": [
+          "rem-f3327074-2d91-4b14-95e1-aa535cd5562f-1"
+        ],
+        "generation": 1
+      },
+      "sessionId": "01a1c619-defd-70c3-9805-5c328b328030",
+      "sessionFile": "/var/tmp/p442-real-l9pLAM/adversarial-event-first/home/.pi/agent/sessions/--var-tmp-p442-real-l9pLAM-adversarial-event-first--/2026-11-10T15-35-46-686Z_01a1c619-defd-70c3-9805-5c328b328030.jsonl",
+      "reminderTools": [
+        {
+          "name": "team_remind",
+          "exposure": "direct"
+        }
+      ],
+      "activeTools": [
+        "team_remind"
+      ]
+    }
+  ]
+}

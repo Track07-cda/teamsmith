@@ -1,0 +1,107 @@
+{
+  "point": "before-call",
+  "final": {
+    "version": 1,
+    "project": {
+      "id": "82d1f8ad-b8fa-49b9-b094-6a780c56d65c",
+      "mainRoot": "/var/tmp/p442-real-l9pLAM/adversarial-death-before-call",
+      "stateRoot": "/var/tmp/p442-real-l9pLAM/adversarial-death-before-call/.pi/team/state"
+    },
+    "sequences": {
+      "reminder": 2,
+      "batch": 2,
+      "queue": 2
+    },
+    "pruned": 0,
+    "standby": {
+      "on": true,
+      "generation": 1,
+      "reason": "before-call",
+      "since": "2026-11-10T15:37:01Z",
+      "migrated": true
+    },
+    "pulse": {
+      "startedAt": "2026-11-10T15:37:02.584Z",
+      "lastAdmitAt": "2026-11-10T15:37:02.632Z"
+    },
+    "reminders": [
+      {
+        "id": "rem-82d1f8ad-b8fa-49b9-b094-6a780c56d65c-1",
+        "seq": 1,
+        "owner": "pm",
+        "source": "cli",
+        "task": null,
+        "key": "before-call",
+        "phase": "intent",
+        "createdAt": "2026-11-10T15:37:01.571Z",
+        "request": {
+          "form": "after",
+          "value": "1s"
+        },
+        "dueAt": "2026-11-10T15:37:02.571Z",
+        "message": "P444_DEATH_before-call",
+        "endedAt": null,
+        "queuedAt": "2026-11-10T15:37:02.632Z",
+        "queueSeq": 1,
+        "overdue": true,
+        "batchId": "bat-82d1f8ad-b8fa-49b9-b094-6a780c56d65c-1",
+        "intentAt": "2026-11-10T15:37:02.683Z"
+      }
+    ],
+    "batches": [
+      {
+        "id": "bat-82d1f8ad-b8fa-49b9-b094-6a780c56d65c-1",
+        "seq": 1,
+        "nonce": "9ca7b695-f9c4-4040-b4f7-f7a76c77a9dd",
+        "phase": "intent",
+        "intentAt": "2026-11-10T15:37:02.683Z",
+        "generation": 1,
+        "target": {
+          "session": "01a1c61a-ffbf-71ab-af1e-d8ecdeb0245b",
+          "pid": 667643
+        },
+        "members": [
+          "rem-82d1f8ad-b8fa-49b9-b094-6a780c56d65c-1"
+        ],
+        "right": "unspent",
+        "rightSpentBy": null,
+        "attempts": 1,
+        "lastError": null,
+        "observedAt": null,
+        "unknownAt": null,
+        "resolvedAt": null,
+        "outcome": null
+      }
+    ],
+    "audit": [
+      {
+        "at": "2026-11-10T15:37:01.571Z",
+        "op": "remind-add",
+        "ids": [
+          "rem-82d1f8ad-b8fa-49b9-b094-6a780c56d65c-1"
+        ],
+        "source": "cli",
+        "detail": "key=before-call"
+      },
+      {
+        "at": "2026-11-10T15:37:02.632Z",
+        "op": "remind-admit",
+        "ids": [
+          "rem-82d1f8ad-b8fa-49b9-b094-6a780c56d65c-1"
+        ],
+        "detail": "due <= 2026-11-10T15:37:02.632Z; overdue 1"
+      },
+      {
+        "at": "2026-11-10T15:37:02.683Z",
+        "op": "remind-intent",
+        "batch": "bat-82d1f8ad-b8fa-49b9-b094-6a780c56d65c-1",
+        "ids": [
+          "rem-82d1f8ad-b8fa-49b9-b094-6a780c56d65c-1"
+        ],
+        "detail": "standby generation 1; session 01a1c61a-ffbf-71ab-af1e-d8ecdeb0245b"
+      }
+    ]
+  },
+  "calls": "before-invoke\n",
+  "automaticPostCallLedgerCount": 0
+}

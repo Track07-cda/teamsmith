@@ -616,7 +616,7 @@ const REMIND_FLAGS = {
   'remind-cancel': new Set(['id']),
   'remind-admit': new Set(['pulse-started']),
   'remind-intent': new Set(['session', 'pid']),
-  'remind-observe': new Set(['id', 'nonce', 'session']),
+  'remind-observe': new Set(['id', 'nonce', 'session', 'members']),
   'remind-fail': new Set(['id', 'nonce', 'reason']),
   'remind-resolve': new Set(['id', 'ack-unknown']),
 };
@@ -626,7 +626,7 @@ const REMIND_FLAGS = {
 const REMIND_FIELD = { 'pulse-started': 'pulseStartedAt', 'ack-unknown': 'ack' };
 const REMIND_REQUIRED = {
   'remind-intent': ['session'],
-  'remind-observe': ['id', 'nonce', 'session'],
+  'remind-observe': ['id', 'nonce', 'session', 'members'],
   'remind-fail': ['id', 'nonce'],
   'remind-resolve': ['id'],
 };
@@ -638,9 +638,18 @@ function parseRemindFlags(op, flags) {
     if (!allowed.has(name)) fail(`${op} does not accept --${name}`);
     request[REMIND_FIELD[name] ?? name] = flags[name];
   }
+  if (op === 'remind-observe' && request.members !== undefined) {
+    try {
+      const parsed = JSON.parse(String(request.members));
+      request.members = Array.isArray(parsed)
+        ? parsed.map(member => typeof member === 'string' ? member : String(member?.id ?? ''))
+        : null;
+    } catch { request.members = null; }
+    if (!request.members) fail('remind-observe --members must be a JSON array of the frozen Reminder ids');
+  }
   for (const name of REMIND_REQUIRED[op] ?? []) {
     const field = REMIND_FIELD[name] ?? name;
-    if (request[field] === undefined || request[field] === '') fail(`${op} needs --${name}`);
+    if (request[field] === undefined || request[field] === '' || request[field] === null) fail(`${op} needs --${name}`);
   }
   if (op === 'remind-intent' && request.pid !== undefined) {
     const pid = Number(request.pid);

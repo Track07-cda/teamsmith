@@ -88,7 +88,7 @@ async function start(name, respond, opts = {}) {
   writeFileSync(config, `TEAM_PROJECT='${session}'\nTEAM_SESSION='${session}'\nTEAM_PM_WINDOW='pm'\nTEAM_PM_MODEL='p442/controlled'\nTEAM_TASK_MODELS='routine=p442/controlled analysis=p442/controlled verify=p442/controlled code=p442/controlled'\nTEAM_VCS='local'\nTEAM_PI_THEME='dark'\nTEAM_PI_BIN=${sh(pi)}\nTEAM_PM_EXTRA_PI_ARGS=${sh(extra)}\n`)
   const prompt = join(state, 'pm-prompt.md'); writeFileSync(prompt, `CASE ${name}\n`)
   const env = { ...base, HOME: home, PI_CODING_AGENT_DIR: join(home, '.pi/agent'), P442_EVIDENCE: dir,
-    P442_ENDPOINT: `http://127.0.0.1:${port}/${name}/v1`, TEAM_REMIND_POLL_MS: '200' }
+    P442_ENDPOINT: `http://127.0.0.1:${port}/${name}/v1`, TEAM_REMIND_POLL_MS: '200', ...(opts.env ?? {}) }
   const info = { name, dir, root, home, state, config, session, env, skill: runSkill, pane: '', done: join(dir, 'done') }
   let launch
   if (['ordinary', 'worker'].includes(opts.invalid)) {
@@ -103,6 +103,12 @@ async function start(name, respond, opts = {}) {
     const sourceScript = `source ${sh(join(runSkill, 'scripts/lib/common.sh'))}; source ${sh(join(runSkill, 'scripts/lib/cmd-config.sh'))}; team_load_config; team_pm_launch_cmd ${sh(prompt)} ${sh(join(state, 'pm.pid.spawn'))}`
     launch = command('bash', ['-c', sourceScript], { cwd: root, env })
     if (opts.invalid === 'no-entry') launch = launch.replace(` -e ${join(runSkill, 'extension/team-remind.ts')}`, '')
+  }
+  if (opts.earlierHandler) {
+    const watcher = join(runSkill, 'extension/team-inbox-watch.ts')
+    const earlier = join(runSkill, 'tests/fixtures/remind-adversarial-delay.ts')
+    assert(launch.includes(`-e ${watcher}`), 'the real PM launch names the production watcher')
+    launch = launch.replace(`-e ${watcher}`, `-e ${earlier} -e ${watcher}`)
   }
   writeFileSync(join(dir, 'launch.txt'), launch + '\n')
   if (!opts.invalid) assert.equal((launch.match(/extension\/team-remind\.ts/g) ?? []).length, 1, 'one directed Reminder extension')
@@ -122,19 +128,30 @@ async function start(name, respond, opts = {}) {
   if (!['ordinary', 'worker', 'forged', 'no-entry'].includes(opts.invalid)) publishLaunch(info)
   if (release) release()
   if (opts.invalid === 'no-entry' && release) release()
-  const ticker = setInterval(() => {
+  const tick = () => {
     if (['ordinary', 'worker', 'forged', 'no-entry'].includes(opts.invalid)) return
     spawnSync(process.execPath, [join(runSkill, 'scripts/remind-tick.mjs'), '--root', root, '--state-dir', state,
       '--pulse-started', new Date().toISOString(), '--json'], { cwd: root, env, stdio: 'ignore' })
-  }, 250)
-  info.ticker = ticker
+  }
+  const armTicker = () => setInterval(tick, 250)
+  info.ticker = opts.pauseTicker ? null : armTicker()
+  info.armTicker = () => { if (!info.ticker) info.ticker = armTicker() }
   return info
 }
 async function stopPi(info) {
   clearInterval(info.ticker)
   if (!existsSync(info.done)) {
+    const pid = Number(readFileSync(join(info.dir, 'session-start'), 'utf8').trim())
+    const alive = () => { try { process.kill(pid, 0); return true } catch { return false } }
     tmux('send-keys', '-t', info.pane, '-l', '/p442-control stop'); tmux('send-keys', '-t', info.pane, 'Enter')
-    await until(() => existsSync(info.done), `${info.name} shutdown`)
+    // team_pm_start restarts do not use launch.sh, so they have no `done` receipt. Wait for either
+    // that receipt or the actual process exit; a stuck private fixture is killed by its recorded pid.
+    for (let n = 0; n < 200 && !existsSync(info.done) && alive(); n++) await delay(50)
+    if (!existsSync(info.done) && alive()) {
+      console.error(`CLEANUP ${info.name}: graceful shutdown did not exit; killing private Pi pid ${pid}`)
+      process.kill(pid, 'SIGKILL')
+    }
+    await until(() => existsSync(info.done) || !alive(), `${info.name} process reaped`)
   }
 }
 async function stop(info) {
@@ -159,6 +176,66 @@ function recover(info) {
     env: { ...info.env, TMUX: `${socket},${info.serverPid},0`, TMUX_PANE: info.pane }, encoding: 'utf8' })
   writeFileSync(join(info.dir, `recovery-${Date.now()}.txt`), (result.stdout ?? '') + (result.stderr ?? ''))
   return result
+}
+function control(info, action) {
+  tmux('send-keys', '-t', info.pane, '-l', `/p442-control ${action}`)
+  tmux('send-keys', '-t', info.pane, 'Enter')
+}
+async function hardStop(info) {
+  const pid = Number(readFileSync(join(info.dir, 'session-start'), 'utf8').trim())
+  assert(Number.isSafeInteger(pid) && pid > 1, `real Pi pid in ${info.name}`)
+  process.kill(pid, 'SIGKILL')
+  await until(() => existsSync(info.done), `${info.name} hard death`)
+}
+async function restartDirect(info) {
+  // An outstanding intent is deliberately not eligible for team_remind_recovery (that path never
+  // resends). Restart the same stopped PM through the production prompt-free start primitive instead.
+  rmSync(info.done, { force: true })
+  delete info.env.P444_KILL_AT
+  for (const [key, value] of Object.entries(info.env)) tmux('set-environment', '-t', info.session, key, String(value))
+  const script = join(info.root, 'launch.sh')
+  writeFileSync(script, readFileSync(script, 'utf8').replace(/^export P444_KILL_AT=.*;$/m, 'unset P444_KILL_AT;'))
+  const before = events(info).filter(e => e.type === 'session_start').length
+  const source = `source ${sh(join(info.skill, 'scripts/lib/common.sh'))}; source ${sh(join(info.skill, 'scripts/lib/cmd-config.sh'))}; team_load_config; TEAM_REMINDER_ONLY_RECOVERY=1 team_pm_start`
+  const result = spawnSync('bash', ['-c', source], { cwd: info.root,
+    env: { ...info.env, TMUX: `${socket},${info.serverPid},0`, TMUX_PANE: info.pane }, encoding: 'utf8' })
+  writeFileSync(join(info.dir, `restart-${Date.now()}.txt`), (result.stdout ?? '') + (result.stderr ?? ''))
+  assert.equal(result.status, 0, `prompt-free restart after death: ${result.stdout}${result.stderr}`)
+  await until(() => events(info).filter(e => e.type === 'session_start').length > before && !existsSync(info.done),
+    `${info.name} restart after death`)
+}
+async function restartForeign(info) {
+  await hardStop(info)
+  rmSync(info.done, { force: true })
+  const before = events(info).filter(e => e.type === 'session_start').length
+  const oldSession = events(info).filter(e => e.type === 'session_start').at(-1).sessionId
+  const launch = readFileSync(join(info.dir, 'launch.txt'), 'utf8').trim()
+    .replace(' -c --offline', ' --offline').replace(/ @\S*pm-prompt\.md\s*$/, '')
+  const script = join(info.root, 'launch-foreign.sh')
+  const assignments = Object.entries(info.env).map(([key, value]) => `export ${key}=${sh(value)};`).join('\n')
+  writeFileSync(script, `#!/usr/bin/env bash\n${assignments}\nunset TEAM_ROOT TEAM_MAIN_ROOT TEAM_CONFIG_FILE TEAM_STATE_DIR\nbash -c ${sh(launch)}\nrc=$?; printf '%s\\n' "$rc" >${sh(info.done)}\nsleep 600\n`)
+  tmux('respawn-pane', '-k', '-t', info.pane, `bash ${sh(script)}`)
+  await until(() => events(info).filter(e => e.type === 'session_start').length > before &&
+    events(info).filter(e => e.type === 'session_start').at(-1).sessionId !== oldSession, 'actual foreign process/session')
+}
+function addReal(info, message, key, label = 'add-adversarial') {
+  const args = ['remind', 'add', '--after', '1s', '--message', message]
+  if (key) args.push('--key', key)
+  const result = team(info, args, label)
+  assert.equal(result.status, 0, `${label}: ${result.stdout}${result.stderr}`)
+}
+function lastBatch(info) { return snapshot(info.state).batches.at(-1) }
+function replayPayload(info, name = 'replay') {
+  const event = events(info).find(e => e.type === 'delay_enter' && e.message?.customType === 'team-reminder')
+  assert(event?.message?.content && event.message.details?.members, 'a real earlier-handler event supplied the replay payload')
+  const file = join(info.dir, `${name}.json`)
+  writeFileSync(file, JSON.stringify(event.message))
+  return file
+}
+async function replay(info, file, label) {
+  const sends = events(info).filter(e => e.type === 'fixture_send').length
+  control(info, `send ${file}`)
+  await until(() => events(info).filter(e => e.type === 'fixture_send').length > sends, `${label} actual Pi send`)
 }
 async function test(name, body) {
   try { await body(); console.log(`PASS real Pi ${name}`); passed++ }
@@ -333,6 +410,225 @@ try {
         genericTurns: 0, ordinaryBacklogTurns: 0, final: snapshot(info.state) }, null, 2))
     } finally { info.releaseBusy?.(); await stop(info) }
   })
+
+  if (selection.includes('adversarial') || selection.some(name => name.startsWith('adversarial-'))) {
+    const adversarialCase = name => selection.includes('adversarial') || selection.includes(`adversarial-${name}`)
+    if (adversarialCase('batch')) await test('A+B exact event, duplicate/member/foreign-session replay preserve a fresh generation', async () => {
+      const info = await start('adversarial-batch', async ({ n, res }) => sse(res, { name: 'adversarial-batch', ...final(`batch response ${n}`) }),
+        { deferFirstResponse: true, earlierHandler: true, pauseTicker: true, env: { P444_DELAY: '1' } })
+      try {
+        await until(() => requests(info).length === 1 && events(info).some(e => e.type === 'agent_settled'), 'batch initial response')
+        assert.equal(team(info, ['standby', 'on', '--reason', 'P444 G1'], 'batch-g1').status, 0)
+        addReal(info, 'P444_A first line\nsecond line\n', 'batch-a', 'add-a')
+        addReal(info, 'P444_B full text', 'batch-b', 'add-b')
+        await delay(1100) // Both one-second Reminders are actually due before admission is allowed to run.
+        info.armTicker()
+        await until(() => lastBatch(info)?.phase === 'intent' && events(info).some(e => e.type === 'delay_enter'), 'A+B real event paused in earlier handler')
+        const frozen = lastBatch(info)
+        assert.equal(frozen.generation, 1); assert.equal(frozen.members.length, 2)
+        const delayed = events(info).find(e => e.type === 'delay_enter')
+        assert(delayed.message.content.includes('P444_A first line\nsecond line\n'))
+        assert(delayed.message.content.includes('P444_B full text'))
+        assert.deepEqual(delayed.message.details.members, frozen.members)
+        const original = replayPayload(info, 'original-batch')
+        writeFileSync(join(info.dir, 'release-event'), 'release')
+        await until(() => lastBatch(info)?.phase === 'observed', 'A+B observed')
+        let snap = snapshot(info.state)
+        assert.equal(snap.standby.on, false); assert.equal(lastBatch(info).outcome.standby, 'auto-off')
+        assert.equal(lastBatch(info).rightSpentBy, 'wake')
+        const audits = snap.audit.filter(a => a.op === 'remind-observed')
+        assert.equal(audits.length, 1); assert.deepEqual(audits[0].ids, frozen.members)
+        assert.deepEqual(audits[0].sources, ['cli', 'cli'])
+        await until(() => requests(info).filter(r => JSON.stringify(r).includes('P444_A') && JSON.stringify(r).includes('P444_B')).length === 1,
+          'the frozen A+B batch caused one controlled model request')
+        assert.equal(requests(info).filter(r => JSON.stringify(r).includes('P444_A') && JSON.stringify(r).includes('P444_B')).length, 1)
+
+        assert.equal(team(info, ['standby', 'on', '--reason', 'P444 fresh G2'], 'batch-g2').status, 0)
+        const malformed = join(info.dir, 'wrong-members.json')
+        writeFileSync(malformed, JSON.stringify({ ...delayed.message, details: { ...delayed.message.details, members: [] } }))
+        await replay(info, malformed, 'wrong members')
+        await until(() => readFileSync(join(info.state, 'inbox-watch.log'), 'utf8').includes('member-mismatch'), 'member mismatch is visible')
+        assert.equal(snapshot(info.state).standby.generation, 2); assert.equal(snapshot(info.state).standby.on, true)
+        await replay(info, original, 'duplicate')
+        await until(() => readFileSync(join(info.state, 'inbox-watch.log'), 'utf8').includes('reminder duplicate event'), 'duplicate handled')
+        snap = snapshot(info.state)
+        assert.equal(snap.standby.on, true); assert.equal(snap.standby.generation, 2)
+        assert.equal(snap.audit.filter(a => a.op === 'remind-observed').length, 1)
+
+        await restartForeign(info)
+        const foreignSession = events(info).filter(e => e.type === 'session_start').at(-1).sessionId
+        assert.notEqual(foreignSession, frozen.target.session)
+        await replay(info, original, 'foreign session')
+        await until(() => readFileSync(join(info.state, 'inbox-watch.log'), 'utf8').includes('session-mismatch'), 'foreign session rejected')
+        snap = snapshot(info.state)
+        assert.equal(snap.standby.on, true); assert.equal(snap.standby.generation, 2)
+        assert.equal(snap.audit.filter(a => a.op === 'remind-observed').length, 1)
+        writeFileSync(join(info.dir, 'receipt.json'), JSON.stringify({ frozen, foreignSession, final: snap,
+          sends: events(info).filter(e => e.type === 'fixture_send') }, null, 2))
+      } finally { writeFileSync(join(info.dir, 'release-event'), 'release'); await stop(info) }
+    })
+
+    if (adversarialCase('event-first')) await test('event before manual off/on G2 stays ambiguous and Standby commands do not wait for Pi', async () => {
+      const info = await start('adversarial-event-first', async ({ n, res }) => sse(res, { name: 'adversarial-event-first', ...final(`event first ${n}`) }),
+        { deferFirstResponse: true, earlierHandler: true, env: { P444_DELAY: '1' } })
+      try {
+        await until(() => events(info).some(e => e.type === 'agent_settled'), 'event-first initial response')
+        team(info, ['standby', 'on', '--reason', 'G1'], 'event-first-g1')
+        addReal(info, 'P444_EVENT_BEFORE_G2', 'event-first')
+        await until(() => events(info).some(e => e.type === 'delay_enter') && lastBatch(info)?.phase === 'intent', 'real event arrived before G2')
+        assert.equal(team(info, ['standby', 'off'], 'event-first-off').status, 0)
+        assert.equal(team(info, ['standby', 'on', '--reason', 'G2'], 'event-first-g2').status, 0)
+        assert.equal(snapshot(info.state).standby.generation, 2)
+        assert.equal(lastBatch(info).phase, 'intent', 'paused earlier handler has not committed observation')
+        assert(!events(info).some(e => e.type === 'delay_exit'), 'both Standby commands completed while Pi handler was paused')
+        writeFileSync(join(info.dir, 'release-event'), 'release')
+        await until(() => lastBatch(info)?.phase === 'observed', 'event-first observation')
+        assert.equal(lastBatch(info).outcome.standby, 'generation-ambiguous')
+        assert.equal(snapshot(info.state).standby.on, true); assert.equal(snapshot(info.state).standby.generation, 2)
+        writeFileSync(join(info.dir, 'receipt.json'), JSON.stringify({ final: snapshot(info.state),
+          timeline: events(info).filter(e => ['delay_enter', 'delay_exit', 'custom_start'].includes(e.type)) }, null, 2))
+      } finally { writeFileSync(join(info.dir, 'release-event'), 'release'); await stop(info) }
+    })
+
+    if (adversarialCase('event-after')) await test('busy follow-up emitted after manual G2 keeps the unprovable order boundary', async () => {
+      const info = await start('adversarial-event-after', async ({ n, res }) => sse(res, { name: 'adversarial-event-after', ...final(`event after ${n}`) }),
+        { deferFirstResponse: true })
+      try {
+        await until(() => events(info).some(e => e.type === 'agent_settled'), 'event-after initial response')
+        const plan = plans.get('adversarial-event-after')
+        plan.gateN = plan.requests
+        let releaseBusy
+        plan.gate = new Promise(resolve => { releaseBusy = resolve; info.releaseBusy = resolve })
+        control(info, 'busy')
+        await until(() => requests(info).length === plan.gateN + 1, 'unrelated controlled turn is busy')
+        team(info, ['standby', 'on', '--reason', 'G1'], 'event-after-g1')
+        addReal(info, 'P444_EVENT_AFTER_G2', 'event-after')
+        await until(() => lastBatch(info)?.phase === 'intent' && readFileSync(join(info.state, 'inbox-watch.log'), 'utf8').includes('intent-sent'),
+          'busy follow-up call returned with durable intent')
+        assert(!events(info).some(e => e.type === 'custom_start' && e.customType === 'team-reminder'), 'no message event before the busy turn ends')
+        assert.equal(lastBatch(info).phase, 'intent', 'sendMessage returning is not a wake')
+        assert.equal(team(info, ['standby', 'off'], 'event-after-off').status, 0)
+        assert.equal(team(info, ['standby', 'on', '--reason', 'G2'], 'event-after-g2').status, 0)
+        releaseBusy()
+        await until(() => lastBatch(info)?.phase === 'observed', 'busy follow-up observed after G2')
+        assert(events(info).some(e => e.type === 'custom_start' && e.customType === 'team-reminder'))
+        assert.equal(lastBatch(info).outcome.standby, 'generation-ambiguous')
+        assert.equal(snapshot(info.state).standby.on, true); assert.equal(snapshot(info.state).standby.generation, 2)
+        writeFileSync(join(info.dir, 'receipt.json'), JSON.stringify({ final: snapshot(info.state),
+          reminderRequests: requests(info).filter(r => JSON.stringify(r).includes('P444_EVENT_AFTER_G2')).length,
+          timeline: events(info).filter(e => ['custom_start', 'fixture_send', 'agent_settled'].includes(e.type)) }, null, 2))
+      } finally { info.releaseBusy?.(); await stop(info) }
+    })
+
+    if (adversarialCase('generations')) await test('G2 committed before intent exits once; manual off before the event is already-off', async () => {
+      const bound = await start('adversarial-g2-bound', async ({ n, res }) => sse(res, { name: 'adversarial-g2-bound', ...final(`G2 bound ${n}`) }), { deferFirstResponse: true })
+      try {
+        await until(() => events(bound).some(e => e.type === 'agent_settled'), 'G2-bound initial response')
+        team(bound, ['standby', 'on', '--reason', 'G1'], 'bound-g1')
+        team(bound, ['standby', 'off'], 'bound-off1')
+        team(bound, ['standby', 'on', '--reason', 'G2'], 'bound-g2')
+        addReal(bound, 'P444_G2_BOUND', 'g2-bound')
+        await until(() => lastBatch(bound)?.phase === 'observed', 'G2-bound observation')
+        assert.equal(lastBatch(bound).generation, 2); assert.equal(lastBatch(bound).outcome.standby, 'auto-off')
+        assert.equal(snapshot(bound.state).standby.on, false)
+        writeFileSync(join(bound.dir, 'receipt.json'), JSON.stringify({ final: snapshot(bound.state) }, null, 2))
+      } finally { await stop(bound) }
+
+      const manual = await start('adversarial-manual-off', async ({ n, res }) => sse(res, { name: 'adversarial-manual-off', ...final(`manual off ${n}`) }),
+        { deferFirstResponse: true, earlierHandler: true, env: { P444_DELAY: '1' } })
+      try {
+        await until(() => events(manual).some(e => e.type === 'agent_settled'), 'manual-off initial response')
+        team(manual, ['standby', 'on', '--reason', 'G1'], 'manual-g1')
+        addReal(manual, 'P444_MANUAL_OFF', 'manual-off')
+        await until(() => events(manual).some(e => e.type === 'delay_enter'), 'manual-off real event paused')
+        assert.equal(team(manual, ['standby', 'off'], 'manual-off-command').status, 0)
+        writeFileSync(join(manual.dir, 'release-event'), 'release')
+        await until(() => lastBatch(manual)?.phase === 'observed', 'manual-off observation')
+        assert.equal(lastBatch(manual).outcome.standby, 'already-off')
+        assert.equal(snapshot(manual.state).standby.on, false)
+        writeFileSync(join(manual.dir, 'receipt.json'), JSON.stringify({ final: snapshot(manual.state) }, null, 2))
+      } finally { writeFileSync(join(manual.dir, 'release-event'), 'release'); await stop(manual) }
+    })
+
+    if (adversarialCase('death-event')) await test('death after a real event becomes unknown without resend; late replay cannot clear fresh G2', async () => {
+      const info = await start('adversarial-death-event', async ({ n, res }) => sse(res, { name: 'adversarial-death-event', ...final(`death event ${n}`) }),
+        { deferFirstResponse: true, earlierHandler: true, env: { P444_KILL_AT: 'event' } })
+      try {
+        await until(() => events(info).some(e => e.type === 'agent_settled'), 'death-event initial response')
+        team(info, ['standby', 'on', '--reason', 'G1'], 'death-event-g1')
+        addReal(info, 'P444_DEATH_AFTER_EVENT', 'death-event')
+        await until(() => existsSync(info.done) && events(info).some(e => e.type === 'delay_enter'), 'death inside earlier real event handler')
+        const original = replayPayload(info, 'late-original-event')
+        assert.equal(lastBatch(info).phase, 'intent'); assert.equal(snapshot(info.state).standby.on, true)
+        await restartDirect(info)
+        await delay(500)
+        const ledger = () => readFileSync(join(info.state, 'inbox-watch.log'), 'utf8')
+        assert.equal((ledger().match(/reminder intent-sent/g) ?? []).length, 1, 'restart did not resend the old intent')
+        await until(() => lastBatch(info)?.phase === 'unknown', 'actual sixty-second deadline marks the old intent unknown')
+        assert.equal(snapshot(info.state).standby.on, true)
+        team(info, ['standby', 'off'], 'death-event-off1')
+        team(info, ['standby', 'on', '--reason', 'fresh G2 after restart'], 'death-event-g2')
+        await replay(info, original, 'late original event')
+        await until(() => lastBatch(info)?.phase === 'observed', 'late real event observes unknown batch')
+        assert.equal(lastBatch(info).outcome.standby, 'generation-ambiguous')
+        assert.equal(snapshot(info.state).standby.on, true); assert.equal(snapshot(info.state).standby.generation, 2)
+        assert.equal(snapshot(info.state).audit.filter(a => a.op === 'remind-observed').length, 1)
+        assert.equal((ledger().match(/reminder intent-sent/g) ?? []).length, 1, 'late observation caused no automatic resend')
+        writeFileSync(join(info.dir, 'receipt.json'), JSON.stringify({ final: snapshot(info.state),
+          automaticSendCount: (ledger().match(/reminder intent-sent/g) ?? []).length,
+          replaySends: events(info).filter(e => e.type === 'fixture_send'), requestCount: requests(info).length,
+          timeline: events(info).filter(e => ['session_start', 'delay_enter', 'custom_start', 'fixture_send'].includes(e.type)) }, null, 2))
+      } finally { await stop(info) }
+    })
+  }
+
+  if (selection.includes('death')) {
+    for (const point of ['before-call', 'after-call']) await test(`process death ${point} preserves intent and never blind-resends`, async () => {
+      const name = `adversarial-death-${point}`
+      const info = await start(name, async ({ n, res }) => sse(res, { name, ...final(`${point} ${n}`) }), {
+        skillCopy: true, deferFirstResponse: true, env: { P444_KILL_AT: point },
+        mutate: copied => {
+          const path = join(copied, 'extension/team-inbox-watch.ts'), source = readFileSync(path, 'utf8')
+          const before = '        pi.sendMessage({\n'
+          const after = "        }, { triggerTurn: true, deliverAs: 'followUp' })\n"
+          assert.equal(source.split(before).length, 2); assert.equal(source.split(after).length, 2)
+          writeFileSync(path, source.replace(before, `        appendFileSync(join(process.env.P442_EVIDENCE, 'pi-calls.log'), 'before-invoke\\n')\n        if (process.env.P444_KILL_AT === 'before-call') process.kill(process.pid, 'SIGKILL')\n${before}`)
+            .replace(after, `${after}        appendFileSync(join(process.env.P442_EVIDENCE, 'pi-calls.log'), 'after-invoke\\n')\n        if (process.env.P444_KILL_AT === 'after-call') process.kill(process.pid, 'SIGKILL')\n`))
+        },
+      })
+      try {
+        await until(() => events(info).some(e => e.type === 'agent_settled'), `${point} initial response`)
+        const plan = plans.get(name)
+        if (point === 'after-call') {
+          plan.gateN = plan.requests
+          plan.gate = new Promise(resolve => { info.releaseBusy = resolve })
+          control(info, 'busy')
+          await until(() => requests(info).length === plan.gateN + 1, 'after-call busy turn')
+        }
+        team(info, ['standby', 'on', '--reason', point], `${point}-g1`)
+        addReal(info, `P444_DEATH_${point}`, point)
+        await until(() => existsSync(info.done), `${point} process death`)
+        assert.equal(lastBatch(info).phase, 'intent'); assert.equal(snapshot(info.state).standby.on, true)
+        assert(!events(info).some(e => e.type === 'custom_start' && e.customType === 'team-reminder'), 'no observation was manufactured')
+        const ledgerBefore = readFileSync(join(info.state, 'inbox-watch.log'), 'utf8')
+        assert.equal((ledgerBefore.match(/reminder intent-sent/g) ?? []).length, 0, 'death precedes the post-call ledger append')
+        const callsBefore = readFileSync(join(info.dir, 'pi-calls.log'), 'utf8')
+        assert.equal((callsBefore.match(/before-invoke/g) ?? []).length, 1)
+        assert.equal((callsBefore.match(/after-invoke/g) ?? []).length, point === 'before-call' ? 0 : 1)
+        await restartDirect(info)
+        await delay(500)
+        const ledgerAfter = readFileSync(join(info.state, 'inbox-watch.log'), 'utf8')
+        assert.equal((ledgerAfter.match(/reminder intent-sent/g) ?? []).length, 0,
+          'restart did not reach another post-call ledger append')
+        const callsAfter = readFileSync(join(info.dir, 'pi-calls.log'), 'utf8')
+        assert.equal((callsAfter.match(/before-invoke/g) ?? []).length, 1, 'restart did not issue another Pi call')
+        assert.equal((callsAfter.match(/after-invoke/g) ?? []).length, point === 'before-call' ? 0 : 1)
+        assert.equal(lastBatch(info).phase, 'intent'); assert.equal(snapshot(info.state).standby.on, true)
+        writeFileSync(join(info.dir, 'receipt.json'), JSON.stringify({ point, final: snapshot(info.state),
+          calls: callsAfter, automaticPostCallLedgerCount: (ledgerAfter.match(/reminder intent-sent/g) ?? []).length }, null, 2))
+      } finally { info.releaseBusy?.(); await stop(info) }
+    })
+  }
 
   if (selection.includes('withdrawal')) {
     for (const action of ['new', 'fork']) await test(`${action}: invalid replacement session immediately loses ready evidence`, async () => {

@@ -1,0 +1,26 @@
+PASS real Pi builtin print/end/append/entry/settled/raw store/transcript
+PASS real Pi interactive actual-marker raw PTY and authoritative final cleanup
+PASS real Pi length cleanup and publication eligibility
+PASS real Pi error cleanup and publication eligibility
+PASS real Pi aborted cleanup and publication eligibility
+PASS real Pi partial cleanup and publication eligibility
+PASS real Pi queued cleanup and publication eligibility
+PASS real Pi continued cleanup and publication eligibility
+PASS real Pi tool cleanup and publication eligibility
+PASS real Pi retry cleanup and publication eligibility
+PASS real Pi overallabort cleanup and publication eligibility
+PASS real Pi staging journal fault preserves real Pi stdout/transcript
+PASS real Pi restoring config hash/inode identity makes the real edit red; restoration is green
+PASS real Pi restoring diagnostic stderr makes the real Pi terminal assertion red; restoration is green
+PASS real Pi owner mutation named red and restoration green in private Pi
+FAIL real Pi loaded dependency reload evaluates new code; tree/fork/new/switch do not import: Error: watchdog: command reload
+FAIL real Pi reload cannot invent a never-injected entry: Error: watchdog: command reload
+PASS real Pi foreign context cannot clean/publish/register
+PASS real Pi worker context cannot clean/publish/register
+PASS real Pi ordinary context cannot clean/publish/register
+PASS real Pi custom context cannot clean/publish/register
+PASS real Pi inherited context cannot clean/publish/register
+PASS real Pi config-link context cannot clean/publish/register
+PASS real Pi two loaded paths share one owner and generation
+PASS real Pi live registration distinct from disk, dead/reused process and readonly doctor
+reply-capture-real: passed=23 failed=2 evidence=/var/tmp/p444-key-reply-capture

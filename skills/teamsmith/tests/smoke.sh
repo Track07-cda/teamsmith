@@ -25200,6 +25200,35 @@ else
   fi
 fi
 
+# ---------------------------------------------------------------- 69. Reminder 受控对抗验收（P444）
+section "69 · 提醒：真实事件顺序 / 重放 / 进程死亡原子边界（P444）"
+P444_FAULTS="$SKILL_DIR/tests/remind-adversarial-faults.sh"
+if [ ! -f "$P444_FAULTS" ]; then
+  bad "P444 缺 tests/remind-adversarial-faults.sh"
+else
+  bash "$P444_FAULTS" >"$TMP/p444-faults.log" 2>&1; P444_FAULTS_RC=$?
+  if [ "$P444_FAULTS_RC" -eq 0 ]; then
+    assert_has "$TMP/p444-faults.log" "fault-matrix: passed=12 failed=0" "P444 intent/观察在 apply、rename、file/fsync 与目录 fsync 前后死亡均有恢复证据"
+    assert_has "$TMP/p444-faults.log" "remind-adversarial-faults: isolation=ok" "P444 原子故障矩阵不碰主项目"
+  else
+    bad "P444 原子故障矩阵红（rc=$P444_FAULTS_RC）"; tail -18 "$TMP/p444-faults.log" | sed 's/^/      /'
+  fi
+fi
+P444_REAL="$SKILL_DIR/tests/remind-adversarial-real.sh"
+if [ "$FAST" = "1" ]; then
+  cond_skip "P444 真实 Pi 受控对抗" "FAST：真实事件、60 秒未知边界与进程死亡另跑（不记为通过）"
+elif [ ! -f "$P444_REAL" ]; then
+  bad "P444 缺 tests/remind-adversarial-real.sh"
+else
+  bash "$P444_REAL" >"$TMP/p444-real.log" 2>&1; P444_REAL_RC=$?
+  if [ "$P444_REAL_RC" -eq 0 ]; then
+    assert_has "$TMP/p444-real.log" "remind-tool-real: passed=7 failed=0" "P444 真实 Pi：A+B、G1/G2、外部会话、调用/事件死亡与迟到重放全绿"
+    assert_has "$TMP/p444-real.log" "remind-adversarial-real: isolation=ok" "P444 真实 Pi 受控对抗不碰主项目"
+  else
+    bad "P444 真实 Pi 受控对抗红（rc=$P444_REAL_RC）"; tail -20 "$TMP/p444-real.log" | sed 's/^/      /'
+  fi
+fi
+
 section "14d · P70 本套自述对账（段落账目 + 无误判）"
 P70_S_STARTS="$(grep -c '^== #[0-9][0-9]* ' "$SG_LOG" 2>/dev/null || true)"
 P70_S_SHAPED="$(grep -cE '^== #[0-9]+ .+ == [0-9]{4}-[0-9]{2}-[0-9]{2}T[^ ]+$' "$SG_LOG" 2>/dev/null || true)"

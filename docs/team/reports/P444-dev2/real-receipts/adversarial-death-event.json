@@ -1,0 +1,233 @@
+{
+  "final": {
+    "version": 1,
+    "project": {
+      "id": "4f8a15e3-2d5d-42f0-a455-ef5df7301e9b",
+      "mainRoot": "/var/tmp/p442-real-l9pLAM/adversarial-death-event",
+      "stateRoot": "/var/tmp/p442-real-l9pLAM/adversarial-death-event/.pi/team/state"
+    },
+    "sequences": {
+      "reminder": 2,
+      "batch": 2,
+      "queue": 2
+    },
+    "pruned": 0,
+    "standby": {
+      "on": true,
+      "generation": 2,
+      "reason": "fresh G2 after restart",
+      "since": "2026-11-10T15:36:59Z",
+      "migrated": true
+    },
+    "pulse": {
+      "startedAt": "2026-11-10T15:35:59.250Z",
+      "lastAdmitAt": "2026-11-10T15:35:59.304Z"
+    },
+    "reminders": [
+      {
+        "id": "rem-4f8a15e3-2d5d-42f0-a455-ef5df7301e9b-1",
+        "seq": 1,
+        "owner": "pm",
+        "source": "cli",
+        "task": null,
+        "key": "death-event",
+        "phase": "observed",
+        "createdAt": "2026-11-10T15:35:58.233Z",
+        "request": {
+          "form": "after",
+          "value": "1s"
+        },
+        "dueAt": "2026-11-10T15:35:59.233Z",
+        "message": "P444_DEATH_AFTER_EVENT",
+        "endedAt": "2026-11-10T15:36:59.986Z",
+        "queuedAt": "2026-11-10T15:35:59.304Z",
+        "queueSeq": 1,
+        "overdue": true,
+        "batchId": "bat-4f8a15e3-2d5d-42f0-a455-ef5df7301e9b-1",
+        "intentAt": "2026-11-10T15:35:59.529Z",
+        "unknownAt": "2026-11-10T15:36:59.597Z",
+        "observedAt": "2026-11-10T15:36:59.986Z"
+      }
+    ],
+    "batches": [
+      {
+        "id": "bat-4f8a15e3-2d5d-42f0-a455-ef5df7301e9b-1",
+        "seq": 1,
+        "nonce": "5c860227-f446-461f-b9f8-d161a22a6d57",
+        "phase": "observed",
+        "intentAt": "2026-11-10T15:35:59.529Z",
+        "generation": 1,
+        "target": {
+          "session": "01a1c61a-0969-75c8-b2b9-e14d22edd36d",
+          "pid": 583804
+        },
+        "members": [
+          "rem-4f8a15e3-2d5d-42f0-a455-ef5df7301e9b-1"
+        ],
+        "right": "spent",
+        "rightSpentBy": "wake",
+        "attempts": 1,
+        "lastError": null,
+        "observedAt": "2026-11-10T15:36:59.986Z",
+        "unknownAt": "2026-11-10T15:36:59.597Z",
+        "resolvedAt": null,
+        "outcome": {
+          "standby": "generation-ambiguous"
+        }
+      }
+    ],
+    "audit": [
+      {
+        "at": "2026-11-10T15:35:58.233Z",
+        "op": "remind-add",
+        "ids": [
+          "rem-4f8a15e3-2d5d-42f0-a455-ef5df7301e9b-1"
+        ],
+        "source": "cli",
+        "detail": "key=death-event"
+      },
+      {
+        "at": "2026-11-10T15:35:59.304Z",
+        "op": "remind-admit",
+        "ids": [
+          "rem-4f8a15e3-2d5d-42f0-a455-ef5df7301e9b-1"
+        ],
+        "detail": "due <= 2026-11-10T15:35:59.304Z; overdue 1"
+      },
+      {
+        "at": "2026-11-10T15:35:59.529Z",
+        "op": "remind-intent",
+        "batch": "bat-4f8a15e3-2d5d-42f0-a455-ef5df7301e9b-1",
+        "ids": [
+          "rem-4f8a15e3-2d5d-42f0-a455-ef5df7301e9b-1"
+        ],
+        "detail": "standby generation 1; session 01a1c61a-0969-75c8-b2b9-e14d22edd36d"
+      },
+      {
+        "at": "2026-11-10T15:36:59.597Z",
+        "op": "remind-unknown",
+        "batch": "bat-4f8a15e3-2d5d-42f0-a455-ef5df7301e9b-1",
+        "ids": [
+          "rem-4f8a15e3-2d5d-42f0-a455-ef5df7301e9b-1"
+        ],
+        "detail": "no correlated wake within 60s; no automatic resend"
+      },
+      {
+        "at": "2026-11-10T15:36:59.986Z",
+        "op": "remind-observed",
+        "batch": "bat-4f8a15e3-2d5d-42f0-a455-ef5df7301e9b-1",
+        "ids": [
+          "rem-4f8a15e3-2d5d-42f0-a455-ef5df7301e9b-1"
+        ],
+        "sources": [
+          "cli"
+        ],
+        "detail": "standby generation-ambiguous (bound generation 1)"
+      }
+    ]
+  },
+  "automaticSendCount": 1,
+  "replaySends": [
+    {
+      "type": "fixture_send",
+      "customType": "team-reminder",
+      "details": {
+        "batchId": "bat-4f8a15e3-2d5d-42f0-a455-ef5df7301e9b-1",
+        "nonce": "5c860227-f446-461f-b9f8-d161a22a6d57",
+        "members": [
+          "rem-4f8a15e3-2d5d-42f0-a455-ef5df7301e9b-1"
+        ],
+        "generation": 1
+      },
+      "sessionId": "01a1c61a-0969-75c8-b2b9-e14d22edd36d"
+    }
+  ],
+  "requestCount": 1,
+  "timeline": [
+    {
+      "type": "session_start",
+      "pid": 583804,
+      "sessionId": "01a1c61a-0969-75c8-b2b9-e14d22edd36d",
+      "sessionFile": "/var/tmp/p442-real-l9pLAM/adversarial-death-event/home/.pi/agent/sessions/--var-tmp-p442-real-l9pLAM-adversarial-death-event--/2026-11-10T15-35-57-545Z_01a1c61a-0969-75c8-b2b9-e14d22edd36d.jsonl",
+      "reminderTools": [
+        {
+          "name": "team_remind",
+          "exposure": "direct"
+        }
+      ],
+      "activeTools": [
+        "team_remind"
+      ]
+    },
+    {
+      "type": "delay_enter",
+      "pid": 583804,
+      "sessionId": "01a1c61a-0969-75c8-b2b9-e14d22edd36d",
+      "message": {
+        "role": "custom",
+        "customType": "team-reminder",
+        "content": "[teamsmith reminder] bat-4f8a15e3-2d5d-42f0-a455-ef5df7301e9b-1 · 1 reminder\nNonce: 5c860227-f446-461f-b9f8-d161a22a6d57\n\nID: rem-4f8a15e3-2d5d-42f0-a455-ef5df7301e9b-1\nDue: 2026-11-10T15:35:59.233Z\nEnqueued: 2026-11-10T15:35:59.304Z (overdue: the patrol queued it late)\nAttempted: 2026-11-10T15:35:59.529Z\nFrom: source cli · key death-event\n\nP444_DEATH_AFTER_EVENT\n\n---\nThis message is a scheduled reminder this project's PM created earlier. The project and task state may have changed since it was scheduled: check the current state before you continue.\n",
+        "details": {
+          "batchId": "bat-4f8a15e3-2d5d-42f0-a455-ef5df7301e9b-1",
+          "nonce": "5c860227-f446-461f-b9f8-d161a22a6d57",
+          "members": [
+            "rem-4f8a15e3-2d5d-42f0-a455-ef5df7301e9b-1"
+          ],
+          "generation": 1
+        },
+        "display": true
+      }
+    },
+    {
+      "type": "session_start",
+      "pid": 589257,
+      "sessionId": "01a1c61a-0969-75c8-b2b9-e14d22edd36d",
+      "sessionFile": "/var/tmp/p442-real-l9pLAM/adversarial-death-event/home/.pi/agent/sessions/--var-tmp-p442-real-l9pLAM-adversarial-death-event--/2026-11-10T15-35-57-545Z_01a1c61a-0969-75c8-b2b9-e14d22edd36d.jsonl",
+      "reminderTools": [
+        {
+          "name": "team_remind",
+          "exposure": "direct"
+        }
+      ],
+      "activeTools": [
+        "team_remind"
+      ]
+    },
+    {
+      "type": "fixture_send",
+      "customType": "team-reminder",
+      "details": {
+        "batchId": "bat-4f8a15e3-2d5d-42f0-a455-ef5df7301e9b-1",
+        "nonce": "5c860227-f446-461f-b9f8-d161a22a6d57",
+        "members": [
+          "rem-4f8a15e3-2d5d-42f0-a455-ef5df7301e9b-1"
+        ],
+        "generation": 1
+      },
+      "sessionId": "01a1c61a-0969-75c8-b2b9-e14d22edd36d"
+    },
+    {
+      "type": "custom_start",
+      "customType": "team-reminder",
+      "details": {
+        "batchId": "bat-4f8a15e3-2d5d-42f0-a455-ef5df7301e9b-1",
+        "nonce": "5c860227-f446-461f-b9f8-d161a22a6d57",
+        "members": [
+          "rem-4f8a15e3-2d5d-42f0-a455-ef5df7301e9b-1"
+        ],
+        "generation": 1
+      },
+      "sessionId": "01a1c61a-0969-75c8-b2b9-e14d22edd36d",
+      "sessionFile": "/var/tmp/p442-real-l9pLAM/adversarial-death-event/home/.pi/agent/sessions/--var-tmp-p442-real-l9pLAM-adversarial-death-event--/2026-11-10T15-35-57-545Z_01a1c61a-0969-75c8-b2b9-e14d22edd36d.jsonl",
+      "reminderTools": [
+        {
+          "name": "team_remind",
+          "exposure": "direct"
+        }
+      ],
+      "activeTools": [
+        "team_remind"
+      ]
+    }
+  ]
+}

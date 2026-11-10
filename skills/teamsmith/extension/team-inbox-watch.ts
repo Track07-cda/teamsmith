@@ -1425,6 +1425,7 @@ export default function (pi: ExtensionAPI) {
     try {
       const res = await remindAuthority.request({ cwd: remindRoot, mainRoot: remindRoot, stateRoot: remindState || defaultStateRoot() }, {
         op: 'remind-observe', id: String(details.batchId), nonce: String(details.nonce ?? ''), session: remindSession,
+        members: Array.isArray(details.members) ? details.members.map((id: unknown) => String(id)) : null,
       })
       if (!res?.ok) {
         appendLedger(root, `reminder observation refused (${res?.refusal ?? 'unknown'}): ${oneLine(String(res?.reason ?? ''), 200)}`)
