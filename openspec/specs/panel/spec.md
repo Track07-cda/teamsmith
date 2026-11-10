@@ -7,7 +7,9 @@ degradation on a small terminal and its behaviour on a pipe are part of the cont
 (`scripts/monitor.mjs --json`, the probes, the bounded tail reads, the sanitizer) is unchanged and stays the source
 of every untrusted string; this capability describes the front end that consumes it. Why a TUI framework at all, and
 why the bundle is committed: `references/config.md`, E4's measurements and `docs/team/DECISIONS.md` D19/D24.
+
 ## Requirements
+
 ### Requirement: The panel is a TUI in a terminal and never a TUI on a pipe
 
 `team monitor` SHALL render through the TUI renderer only when stdout is a terminal; when stdout is redirected, or
@@ -1081,7 +1083,9 @@ file-list-plus-one-body shape, the same 128 KiB bound, the same off-input-path a
 addressed by an explicit source. `--source spec --id <capability>` SHALL serve `openspec/specs/<capability>/spec.md`
 as one tab; `--source change --id <change-id>` SHALL serve that change's own `proposal.md`, `design.md` and
 `tasks.md`, in that order and one tab each, MUST NOT invent a file the change does not have, and MUST NOT serve a
-file of any other change or of `openspec/changes/archive/`; `--source decision --id <D-number>` SHALL serve the body
+file of any other change or of the archive directory **by its own path** — a change directory that is a symbolic
+link resolving inside the project root is served as the change its id names, and the archive answers nothing when
+addressed by its own directory name; `--source decision --id <D-number>` SHALL serve the body
 of that decision entry out of `docs/team/DECISIONS.md` as one tab. A reader that is given no source keeps its
 present meaning (the entry-id families above), so an existing caller behaves exactly as it does today. The sources'
 roots are the reader's own project root: the spec and change sources read only under the openspec directory the
@@ -1089,8 +1093,14 @@ panel's other readers already resolve, the decision source only the ledger's `do
 source only the three ledger directories above. A request whose source is outside that closed set, whose id leaves
 its source's grammar (`[A-Za-z0-9._-]` for a capability or change id, `D<digits>` for a decision), or whose `--file`
 is not one of the paths the requested source discovered SHALL fail with a non-zero exit and one line naming what was
-refused, printing no file content; a discovered path that is a symbolic link SHALL be refused and named, never read
-through. The decision source serves exactly one entry and offers no whole-file exit: its `--file` selects the ledger
+refused, printing no file content. A discovered path that is a symbolic link SHALL be resolved to its real path
+before it is judged: a real path that stays inside the reader's project root SHALL be served, and every
+symbolic-link segment the read passed through SHALL be reported with the block rather than hidden; a real path that
+leaves the project root SHALL be refused and named together with both the real path and the project root, and never
+read through. A discovered path that is not a regular file — a FIFO, a device, a directory, a socket or a broken
+link — SHALL NOT be opened at all: it SHALL be refused and named with its kind, so a corrupt or hostile ledger entry
+can neither be served nor block the console. The decision source serves exactly one entry and offers no whole-file
+exit: its `--file` selects the ledger
 file it discovered, and the body is always the requested entry's slice. A target that does not exist is not an
 error: the block SHALL answer with an empty file list and a human-readable reason, the detail view SHALL say that
 the source is unavailable rather than render an empty document as a successful read, and no mode SHALL crash. The
@@ -1187,12 +1197,29 @@ tables — and add no action key of their own.
 - **THEN** every one of them exits non-zero and prints no file content, and each line names the source, the id or
   the path it refused
 
+#### Scenario: A symlinked path that stays inside the project opens
+
+- **GIVEN** a fixture whose ledger root is a symbolic link to a ledger tree elsewhere in the same project, and whose
+  `openspec/changes/<id>` is a symbolic link to another change of the same project
+- **WHEN** the entry detail view opens and `--source change --id <id>` runs
+- **THEN** both reads return count > 0 with the real body, report the symbolic-link segments they passed through,
+  and answer with no unavailable reason — the ledger and the change previews stay readable through the links,
+  while a change the fixture does not have still answers with an empty list
+
 #### Scenario: A symlinked entry is refused, never read through
 
-- **GIVEN** a fixture whose `openspec/changes/demo/proposal.md` is a symbolic link to a file outside the change
-- **WHEN** `--source change --id demo` runs and the detail view opens on it
-- **THEN** the symlinked path is refused and named, the link's target text is not printed, and the change's other
-  two artifacts still open
+- **GIVEN** a fixture whose `openspec/changes/demo/proposal.md` is a symbolic link to a file outside the project root,
+  and whose ledger root is a symbolic link to a directory outside the project root
+- **WHEN** `--source change --id demo` and the entry detail view run
+- **THEN** both refuse with count 0 and print no file content, each reason names the real path **and** the project root
+  it left, and the change's other two artifacts still open with both reads still exiting 0
+
+#### Scenario: A non-regular discovered path is refused and named
+
+- **GIVEN** a fixture whose `docs/team/reports/<ID>-dev.md` is a FIFO, directly or through a symbolic link
+- **WHEN** the entry detail view runs under a ten-second bound
+- **THEN** it returns within that bound with count 0 and prints no content, and its reason names the path and that it
+  is a FIFO; `--file` naming that path exits non-zero
 
 #### Scenario: A preview body is bounded and sanitized
 
@@ -2720,4 +2747,3 @@ by itself; it says where user-facing replies land, and publishing stays the PM's
 - **WHEN** page 5 is rendered with typed text in the compose line and the recorded reader calls of that frame are inspected
 - **THEN** the description line carries the same text as in a quiet fixture, and the only readers recorded are the bounded key-reply block reads
 - **AND** no chat, session or history reader is consulted, so the console has no way to learn what the user just asked and cannot claim to have marked the reply
-
