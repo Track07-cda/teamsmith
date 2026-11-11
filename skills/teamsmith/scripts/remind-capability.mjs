@@ -117,10 +117,10 @@ export function updateRemindCapability(identity, change, { create = true } = {})
     catch (e) { if (e.code !== 'ENOENT') throw e }
     const next = change(current)
     if (next === undefined) return
-    temp = `.current-${randomUUID()}`
     if (next === null) {
       try { unlinkSync(at('current.json')) } catch (e) { if (e.code !== 'ENOENT') throw e }
     } else {
+      temp = `.current-${randomUUID()}`
       const fd = regular(at(temp), C.O_WRONLY | C.O_CREAT | C.O_EXCL)
       try { writeFileSync(fd, JSON.stringify(next) + '\n'); fsyncSync(fd) } finally { closeSync(fd) }
       renameSync(at(temp), at('current.json')); temp = null

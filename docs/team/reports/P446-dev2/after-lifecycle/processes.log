@@ -1,0 +1,28 @@
+2026-11-10T19:25:01Z
+    PID    PPID    PGID STAT     ELAPSED COMMAND
+2328717 2226268 2328717 Ss         00:00 bash -c set -u; ev=/var/tmp/p446-lifecycle-after1; rm -rf "$ev"; mkdir -p "$ev"; ( while :; do { date -u +%Y-%m-%dT%H:%M:%SZ; ps -eo pid,ppid,pgid,stat,etime,args | awk 'NR==1 || /p396-real|reply-capture-real/'; } >>"$ev/processes.log"; sleep 2; done ) & monitor=$!; trap 'kill "$monitor" 2>/dev/null || true' EXIT; P396_EVIDENCE="$ev" bash skills/teamsmith/tests/reply-capture-real.sh --select=lifecycle >"$ev/run.log" 2>&1
+2328727 2328717 2328717 S          00:00 bash -c set -u; ev=/var/tmp/p446-lifecycle-after1; rm -rf "$ev"; mkdir -p "$ev"; ( while :; do { date -u +%Y-%m-%dT%H:%M:%SZ; ps -eo pid,ppid,pgid,stat,etime,args | awk 'NR==1 || /p396-real|reply-capture-real/'; } >>"$ev/processes.log"; sleep 2; done ) & monitor=$!; trap 'kill "$monitor" 2>/dev/null || true' EXIT; P396_EVIDENCE="$ev" bash skills/teamsmith/tests/reply-capture-real.sh --select=lifecycle >"$ev/run.log" 2>&1
+2328728 2328717 2328717 Rl         00:00 /usr/bin/node /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+2328732 2328727 2328717 S          00:00 awk NR==1 || /p396-real|reply-capture-real/
+2026-11-10T19:25:03Z
+    PID    PPID    PGID STAT     ELAPSED COMMAND
+2328717 2226268 2328717 Ss         00:02 bash -c set -u; ev=/var/tmp/p446-lifecycle-after1; rm -rf "$ev"; mkdir -p "$ev"; ( while :; do { date -u +%Y-%m-%dT%H:%M:%SZ; ps -eo pid,ppid,pgid,stat,etime,args | awk 'NR==1 || /p396-real|reply-capture-real/'; } >>"$ev/processes.log"; sleep 2; done ) & monitor=$!; trap 'kill "$monitor" 2>/dev/null || true' EXIT; P396_EVIDENCE="$ev" bash skills/teamsmith/tests/reply-capture-real.sh --select=lifecycle >"$ev/run.log" 2>&1
+2328727 2328717 2328717 S          00:02 bash -c set -u; ev=/var/tmp/p446-lifecycle-after1; rm -rf "$ev"; mkdir -p "$ev"; ( while :; do { date -u +%Y-%m-%dT%H:%M:%SZ; ps -eo pid,ppid,pgid,stat,etime,args | awk 'NR==1 || /p396-real|reply-capture-real/'; } >>"$ev/processes.log"; sleep 2; done ) & monitor=$!; trap 'kill "$monitor" 2>/dev/null || true' EXIT; P396_EVIDENCE="$ev" bash skills/teamsmith/tests/reply-capture-real.sh --select=lifecycle >"$ev/run.log" 2>&1
+2328728 2328717 2328717 Sl         00:02 /usr/bin/node /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+2329179       1 2329179 Ss         00:01 tmux -S /var/tmp/p396-real-ZQuaRz/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-ZQuaRz/lifecycle sleep 600
+2329206 2329179 2329206 Ss+        00:01 bash /var/tmp/p396-real-ZQuaRz/lifecycle/launch.sh
+2332232 2328727 2328717 S          00:00 awk NR==1 || /p396-real|reply-capture-real/
+2026-11-10T19:25:05Z
+    PID    PPID    PGID STAT     ELAPSED COMMAND
+2328717 2226268 2328717 Ss         00:04 bash -c set -u; ev=/var/tmp/p446-lifecycle-after1; rm -rf "$ev"; mkdir -p "$ev"; ( while :; do { date -u +%Y-%m-%dT%H:%M:%SZ; ps -eo pid,ppid,pgid,stat,etime,args | awk 'NR==1 || /p396-real|reply-capture-real/'; } >>"$ev/processes.log"; sleep 2; done ) & monitor=$!; trap 'kill "$monitor" 2>/dev/null || true' EXIT; P396_EVIDENCE="$ev" bash skills/teamsmith/tests/reply-capture-real.sh --select=lifecycle >"$ev/run.log" 2>&1
+2328727 2328717 2328717 S          00:04 bash -c set -u; ev=/var/tmp/p446-lifecycle-after1; rm -rf "$ev"; mkdir -p "$ev"; ( while :; do { date -u +%Y-%m-%dT%H:%M:%SZ; ps -eo pid,ppid,pgid,stat,etime,args | awk 'NR==1 || /p396-real|reply-capture-real/'; } >>"$ev/processes.log"; sleep 2; done ) & monitor=$!; trap 'kill "$monitor" 2>/dev/null || true' EXIT; P396_EVIDENCE="$ev" bash skills/teamsmith/tests/reply-capture-real.sh --select=lifecycle >"$ev/run.log" 2>&1
+2328728 2328717 2328717 Sl         00:04 /usr/bin/node /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+2329179       1 2329179 Ss         00:03 tmux -S /var/tmp/p396-real-ZQuaRz/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-ZQuaRz/lifecycle sleep 600
+2329206 2329179 2329206 Ss+        00:03 bash /var/tmp/p396-real-ZQuaRz/lifecycle/launch.sh
+2334810 2328727 2328717 S          00:00 awk NR==1 || /p396-real|reply-capture-real/
+2026-11-10T19:25:07Z
+    PID    PPID    PGID STAT     ELAPSED COMMAND
+2328717 2226268 2328717 Ss         00:06 bash -c set -u; ev=/var/tmp/p446-lifecycle-after1; rm -rf "$ev"; mkdir -p "$ev"; ( while :; do { date -u +%Y-%m-%dT%H:%M:%SZ; ps -eo pid,ppid,pgid,stat,etime,args | awk 'NR==1 || /p396-real|reply-capture-real/'; } >>"$ev/processes.log"; sleep 2; done ) & monitor=$!; trap 'kill "$monitor" 2>/dev/null || true' EXIT; P396_EVIDENCE="$ev" bash skills/teamsmith/tests/reply-capture-real.sh --select=lifecycle >"$ev/run.log" 2>&1
+2328727 2328717 2328717 S          00:06 bash -c set -u; ev=/var/tmp/p446-lifecycle-after1; rm -rf "$ev"; mkdir -p "$ev"; ( while :; do { date -u +%Y-%m-%dT%H:%M:%SZ; ps -eo pid,ppid,pgid,stat,etime,args | awk 'NR==1 || /p396-real|reply-capture-real/'; } >>"$ev/processes.log"; sleep 2; done ) & monitor=$!; trap 'kill "$monitor" 2>/dev/null || true' EXIT; P396_EVIDENCE="$ev" bash skills/teamsmith/tests/reply-capture-real.sh --select=lifecycle >"$ev/run.log" 2>&1
+2328728 2328717 2328717 Rl         00:06 /usr/bin/node /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+2338586 2328727 2328717 S          00:00 awk NR==1 || /p396-real|reply-capture-real/

@@ -1,0 +1,15 @@
+FAIL real Pi loaded dependency reload evaluates new code; tree/fork/new/switch do not import: Error: watchdog: command reload
+    at until (file:///var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs:33:49)
+    at async control (file:///var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs:255:3)
+    at async Object.interactive (file:///var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs:372:9)
+    at async run (file:///var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs:152:11)
+    at async test (file:///var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs:263:9)
+    at async file:///var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs:359:5
+FAIL real Pi reload cannot invent a never-injected entry: Error: watchdog: command reload
+    at until (file:///var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs:33:49)
+    at async control (file:///var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs:255:3)
+    at async Object.interactive (file:///var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs:403:9)
+    at async run (file:///var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs:152:11)
+    at async test (file:///var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs:263:9)
+    at async file:///var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs:397:5
+reply-capture-real: passed=0 failed=2 evidence=/var/tmp/p446-baseline-pre

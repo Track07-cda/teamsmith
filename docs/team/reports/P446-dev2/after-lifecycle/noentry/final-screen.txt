@@ -1,0 +1,41 @@
+
+ ▀▀█  v1.5.1
+ █▀ █ escape interrupt · ctrl+c/ctrl+d clear/exit · / commands · ! bash ·
+ ctrl+o more
+ Press ctrl+o to show full startup help and loaded resources.
+
+ Pi can explain its own features and look up its docs. Ask it how to use or
+ extend Pi.
+
+[Skills]
+  teamsmith
+
+[Extensions]
+  reply-capture-provider.ts, team-bg.ts, team-inbox-watch.ts, team-remind.ts
+
+
+ <file name="/var/tmp/p396-real-ZQuaRz/noentry/.pi/team/state/pm-prompt.md">
+ CASE noentry
+
+ </file>
+
+
+ 决定 noentry 保留。
+ [[team-reply:决定 noentry]]
+
+ Reloaded keybindings, extensions, skills, prompts, themes, and context files
+
+
+ CASE noentry-after-reload
+
+
+ 决定 noentry 保留。
+ [[team-reply:决定 noentry]]
+
+────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────
+/var/tmp/p396-real-ZQuaRz/noentry (main)
+0.4%/128k                                                             controlled
+To resume this session: pi --session 01a1c6eb-d37c-7680-82af-5c0b8b8b0dd2
+

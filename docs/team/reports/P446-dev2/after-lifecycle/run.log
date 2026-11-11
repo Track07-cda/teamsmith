@@ -1,0 +1,3 @@
+PASS real Pi loaded dependency reload evaluates new code; tree/fork/new/switch do not import
+PASS real Pi reload cannot invent a never-injected entry
+reply-capture-real: passed=2 failed=0 evidence=/var/tmp/p446-lifecycle-after1

@@ -1,0 +1,37 @@
+teamsmith doctor · p396-runtime
+  skill: /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith (0.4.6)  main: /var/tmp/p396-real-XyHmgK/runtime
+  config                   ✓ /var/tmp/p396-real-XyHmgK/runtime/.pi/team/config.sh
+  docs 骨架              ✓ docs/team
+  BOARD 重复 ID          ✓ 无
+  bash                     ✓ 5.3.9
+  git                      ✓ 2.53.0
+  tmux                     ! tmux 在，但 session 'p396-runtime' 不存在（dispatch 会创建；PM 需要在 <session>:<pm-window> 里跑）
+  pi                       ✓ 1.5.1
+  agent adapter            ✓ built-in (Pi) → /home/<user>/.bun/bin/pi
+  agent notify             ✓ Pi notify 扩展（内置）
+  harness                  ! PATH 里有 omp（自带后台任务：bash 后台派发 / hub wait·cancel / /jobs）；本项目配的是 pi（内置无后台 bash）
+  已装插件 packages    ! 未检测到插件（teamsmith 不依赖第三方插件；团队会话的后台任务由自带 team-bg 覆盖）
+  门禁 TEAM_GATES        ! 未配置门禁命令：复验无法自动判定，只能靠人读 diff
+  perf suite               ✓ 存在（team perf --container ｜ team perf --host）
+  名册 TEAM_AGENTS       ! 名册为空：可以 PM-only 开局；要派单先 team add-agent <name>
+  worktree 目录          ! 尚未创建 .worktrees/（add-agent 时创建）
+  notify 扩展            ✓ 可加载（node 预检通过；worktree 里需 -e 显式加载）
+  PM 记忆 magic-context  ✗ 没检测到：装 pi 包 @cortexkit/pi-magic-context（settings 在别处时设 TEAM_PI_SETTINGS_FILE；环境特殊可 TEAM_REQUIRE_MAGIC_CONTEXT=0 降级）
+  OpenSpec CLI             ✓ 1.16.0（/home/<user>/.bun/bin/openspec）
+  OpenSpec 规格目录    ✗ 缺 openspec/：在项目里跑 openspec init --tools none
+  JS 运行时 node/bun    ✓ /usr/local/bin/node (v24.22.1)
+  inotify 额度           ✓ inotify 额度 max_user_watches=524288，已用 unknown（空闲 unknown，底线 1024），注册探针 ok
+  临时根余量          ✓ /var/tmp/p396-real-XyHmgK：可用 16.3 GB / 总 930.2 GB · inode 不适用（这个文件系统不报 inode 表） · source=tmpdir
+  容量 / swap 底线     ✓ RAM 可用 11942MB ｜ 磁盘 swap 空闲 49979MB ｜ 临时根 /var/tmp/p396-real-XyHmgK 可用 16.3 GB（inode n/a） · source=tmpdir ｜ 估算可再加 9 个 agent
+  PM 存活                ! PM 窗口 p396-runtime:pm 不存在 → team up
+  PM 提醒工具          ! not-running：PM 未在运行（missing）
+  关键回复磁盘       ✓ 捕获源码存在（不代表当前 PM 已加载）
+  关键回复启动       ✓ 内置 Pi 启动定向注入 team-reply；旧进程未带 -e 时 /reload 不会补入口，须获权重启
+  关键回复运行       ✓ ready disk=ddaab2c6f3ea83ed7ab00cdd3510d92be54a95cd4e213131c43320f896a2e977 loaded=ddaab2c6f3ea83ed7ab00cdd3510d92be54a95cd4e213131c43320f896a2e977 generation=10618355-1188-4e4a-83aa-cd7a8d60bcf0; live PM registered actual loaded source
+  巡检（pulse）        ! 没在跑 → team pulse up（pulse 由 PM 配置）
+  forge                    ✓ local（不依赖 forge；合并由 PM 用 git 完成）
+  保护分支             ! 本地没有分支 main（配置对吗？）
+  gitignore                ! 3 条未忽略（收件箱/worktree 会被误提交）
+  陈旧 state             ✓ 干净
+
+✗ doctor: 2 项失败 / 11 项警告

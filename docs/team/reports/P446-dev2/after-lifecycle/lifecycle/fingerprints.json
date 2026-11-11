@@ -1,0 +1,61 @@
+{
+  "before": {
+    "root": "/var/tmp/p396-real-ZQuaRz/lifecycle",
+    "state": "/var/tmp/p396-real-ZQuaRz/lifecycle/.pi/team/state",
+    "config": "/var/tmp/p396-real-ZQuaRz/lifecycle/.pi/team/config.sh",
+    "sessionId": "01a1c6eb-c26c-77fc-a47a-38664abab120",
+    "sessionFile": "/var/tmp/p396-real-ZQuaRz/lifecycle/home/.pi/agent/sessions/--var-tmp-p396-real-ZQuaRz-lifecycle--/2026-11-10T19-25-01-932Z_01a1c6eb-c26c-77fc-a47a-38664abab120.jsonl",
+    "pid": 2329211,
+    "starttime": "5609886",
+    "cwd": "/var/tmp/p396-real-ZQuaRz/lifecycle",
+    "tmux": {
+      "socket": "/var/tmp/p396-real-ZQuaRz/socket",
+      "serverPid": 2329179,
+      "pane": "%0",
+      "panePid": 2329206,
+      "session": "p396-lifecycle",
+      "window": "pm",
+      "cwd": "/var/tmp/p396-real-ZQuaRz/lifecycle"
+    },
+    "generation": "b5798140-3049-4bd1-ae44-139d0e11dcde",
+    "status": "ready",
+    "extension": "/var/tmp/p396-real-ZQuaRz/lifecycle/skill/extension/team-reply.ts",
+    "fingerprint": "ddaab2c6f3ea83ed7ab00cdd3510d92be54a95cd4e213131c43320f896a2e977",
+    "at": "2026-11-10T19:25:02.340Z"
+  },
+  "stale": {
+    "disk": "e6172a5e8d6e6f83215036304dcd1c993688a13b89ec1befa6403602766c330f",
+    "loaded": "ddaab2c6f3ea83ed7ab00cdd3510d92be54a95cd4e213131c43320f896a2e977",
+    "generation": "b5798140-3049-4bd1-ae44-139d0e11dcde",
+    "extension": "/var/tmp/p396-real-ZQuaRz/lifecycle/skill/extension/team-reply.ts",
+    "sessionId": "01a1c6eb-c26c-77fc-a47a-38664abab120",
+    "state": "stale",
+    "reason": "disk differs from loaded source"
+  },
+  "after": {
+    "root": "/var/tmp/p396-real-ZQuaRz/lifecycle",
+    "state": "/var/tmp/p396-real-ZQuaRz/lifecycle/.pi/team/state",
+    "config": "/var/tmp/p396-real-ZQuaRz/lifecycle/.pi/team/config.sh",
+    "sessionId": "01a1c6eb-c26c-77fc-a47a-38664abab120",
+    "sessionFile": "/var/tmp/p396-real-ZQuaRz/lifecycle/home/.pi/agent/sessions/--var-tmp-p396-real-ZQuaRz-lifecycle--/2026-11-10T19-25-01-932Z_01a1c6eb-c26c-77fc-a47a-38664abab120.jsonl",
+    "pid": 2329211,
+    "starttime": "5609886",
+    "cwd": "/var/tmp/p396-real-ZQuaRz/lifecycle",
+    "tmux": {
+      "socket": "/var/tmp/p396-real-ZQuaRz/socket",
+      "serverPid": 2329179,
+      "pane": "%0",
+      "panePid": 2329206,
+      "session": "p396-lifecycle",
+      "window": "pm",
+      "cwd": "/var/tmp/p396-real-ZQuaRz/lifecycle"
+    },
+    "generation": "813555cd-7ca8-41d1-ad23-f9bda8dd4463",
+    "status": "ready",
+    "extension": "/var/tmp/p396-real-ZQuaRz/lifecycle/skill/extension/team-reply.ts",
+    "fingerprint": "e6172a5e8d6e6f83215036304dcd1c993688a13b89ec1befa6403602766c330f",
+    "at": "2026-11-10T19:25:03.237Z"
+  },
+  "launchBefore": "83f67c178008",
+  "launchAfter": "2b25a8347c6e"
+}

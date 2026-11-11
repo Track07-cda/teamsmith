@@ -87,6 +87,13 @@ try {
   rmSync(snapshot, { force: true })
   const capability = await import(pathToFileURL(join(skill, 'scripts/remind-capability.mjs')).href)
   const identity = { root: repo, state, config }
+  const capabilityRecord = generation => ({ generation, extensionVersion: 'fixture', status: 'registered', exposure: 'direct' })
+  capability.publishRemindCapability(identity, capabilityRecord('before-remove'))
+  capability.removeRemindCapability(identity, 'before-remove')
+  assert(!existsSync(join(state, 'remind-tool/current.json')), 'matching shutdown removes capability evidence')
+  capability.publishRemindCapability(identity, capabilityRecord('after-remove'))
+  assert.equal(JSON.parse(readFileSync(join(state, 'remind-tool/current.json'), 'utf8')).generation, 'after-remove',
+    'a new session can immediately publish after removal without inheriting a held lock')
   const large = `${'x'.repeat(64 * 1024)}\n`
   const first = await capability.runReminderAuthority({ identity, skill, action: 'add', params: { after: '1h', message: large } })
   const second = await capability.runReminderAuthority({ identity, skill, action: 'add', params: { after: '1h', message: large } })
@@ -99,7 +106,7 @@ try {
   assert.equal(shown.reminder.message, large)
   const cancelled = await capability.runReminderAuthority({ identity, skill, action: 'cancel', params: { id: first.reminder.id } })
   assert.equal(cancelled.outcome, 'cancelled')
-  pass('authority: pm-tool source, two no-key IDs, full 64 KiB + newline in add/list/show, cancel')
+  pass('authority: full text and capability removal followed immediately by a new registration')
 
   const truncating = join(root, 'truncating.mjs')
   const capabilitySource = readFileSync(join(skill, 'scripts/remind-capability.mjs'), 'utf8')

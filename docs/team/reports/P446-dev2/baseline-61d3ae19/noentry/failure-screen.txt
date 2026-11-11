@@ -1,0 +1,24 @@
+ Warning: fd not found. Offline mode enabled, skipping download.
+ Warning: ripgrep not found. Offline mode enabled, skipping download.
+
+
+ <file name="/var/tmp/p396-real-jGfSom/noentry/.pi/team/state/pm-prompt.md">
+ CASE noentry
+
+ </file>
+
+
+ Warning: tmux extended-keys is off. Modified Enter keys may not work. Add `set
+ -g extended-keys on` to ~/.tmux.conf and restart tmux.
+
+ 决定 noentry 保留。
+ [[team-reply:决定 noentry]]
+
+────────────────────────────────────────────────────────────────────────────────
+
+ Reloading keybindings, extensions, skills, prompts, themes, and context
+ files...
+
+────────────────────────────────────────────────────────────────────────────────
+/var/tmp/p396-real-jGfSom/noentry (main)
+0.3%/128k                                                             controlled

@@ -1,0 +1,23 @@
+publish before
+remove before
+node:fs:2000
+  binding.unlink(getValidatedPath(path));
+          ^
+
+Error: ENOENT: no such file or directory, unlink '/proc/self/fd/21/.current-db41b84b-68f4-4f20-a9fe-1bc6732a5a90'
+    at unlinkSync (node:fs:2000:11)
+    at updateRemindCapability (file:///home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/scripts/remind-capability.mjs:133:15)
+    at removeRemindCapability (file:///home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/scripts/remind-capability.mjs:164:3)
+    at file:///home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/[eval1]:7:1
+    at ModuleJob.run (node:internal/modules/esm/module_job:561:25)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async node:internal/modules/esm/loader:223:26
+    at async ModuleLoader.executeModuleJob (node:internal/modules/esm/loader:220:20)
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5) {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'unlink',
+  path: '/proc/self/fd/21/.current-db41b84b-68f4-4f20-a9fe-1bc6732a5a90'
+}
+
+Node.js v24.22.1

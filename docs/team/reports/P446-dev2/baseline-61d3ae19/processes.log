@@ -1,0 +1,127 @@
+3023689 3022611 3022611 Rl         00:00 MainThread      /usr/bin/node /var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+3023689 3022611 3022611 Sl         00:05 MainThread      /usr/bin/node /var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+3024332       1 3024332 Ss         00:04 tmux: server    tmux -S /var/tmp/p396-real-jGfSom/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-jGfSom/lifecycle sleep 600
+3024443 3024332 3024443 Ss+        00:04 bash            bash /var/tmp/p396-real-jGfSom/lifecycle/launch.sh
+3023689 3022611 3022611 Sl         00:10 MainThread      /usr/bin/node /var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+3024332       1 3024332 Ss         00:09 tmux: server    tmux -S /var/tmp/p396-real-jGfSom/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-jGfSom/lifecycle sleep 600
+3024443 3024332 3024443 Ss+        00:09 bash            bash /var/tmp/p396-real-jGfSom/lifecycle/launch.sh
+3023689 3022611 3022611 Sl         00:15 MainThread      /usr/bin/node /var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+3024332       1 3024332 Ss         00:14 tmux: server    tmux -S /var/tmp/p396-real-jGfSom/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-jGfSom/lifecycle sleep 600
+3024443 3024332 3024443 Ss+        00:14 bash            bash /var/tmp/p396-real-jGfSom/lifecycle/launch.sh
+3023689 3022611 3022611 Sl         00:20 MainThread      /usr/bin/node /var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+3024332       1 3024332 Ss         00:19 tmux: server    tmux -S /var/tmp/p396-real-jGfSom/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-jGfSom/lifecycle sleep 600
+3024443 3024332 3024443 Ss+        00:19 bash            bash /var/tmp/p396-real-jGfSom/lifecycle/launch.sh
+3023689 3022611 3022611 Sl         00:25 MainThread      /usr/bin/node /var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+3024332       1 3024332 Ss         00:24 tmux: server    tmux -S /var/tmp/p396-real-jGfSom/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-jGfSom/lifecycle sleep 600
+3024443 3024332 3024443 Ss+        00:24 bash            bash /var/tmp/p396-real-jGfSom/lifecycle/launch.sh
+3023689 3022611 3022611 Sl         00:30 MainThread      /usr/bin/node /var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+3024332       1 3024332 Ss         00:29 tmux: server    tmux -S /var/tmp/p396-real-jGfSom/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-jGfSom/lifecycle sleep 600
+3024443 3024332 3024443 Ss+        00:29 bash            bash /var/tmp/p396-real-jGfSom/lifecycle/launch.sh
+3023689 3022611 3022611 Sl         00:35 MainThread      /usr/bin/node /var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+3024332       1 3024332 Ss         00:34 tmux: server    tmux -S /var/tmp/p396-real-jGfSom/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-jGfSom/lifecycle sleep 600
+3024443 3024332 3024443 Ss+        00:34 bash            bash /var/tmp/p396-real-jGfSom/lifecycle/launch.sh
+3023689 3022611 3022611 Sl         00:40 MainThread      /usr/bin/node /var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+3024332       1 3024332 Ss         00:39 tmux: server    tmux -S /var/tmp/p396-real-jGfSom/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-jGfSom/lifecycle sleep 600
+3024443 3024332 3024443 Ss+        00:39 bash            bash /var/tmp/p396-real-jGfSom/lifecycle/launch.sh
+3023689 3022611 3022611 Sl         00:45 MainThread      /usr/bin/node /var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+3024332       1 3024332 Ss         00:44 tmux: server    tmux -S /var/tmp/p396-real-jGfSom/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-jGfSom/lifecycle sleep 600
+3024443 3024332 3024443 Ss+        00:44 bash            bash /var/tmp/p396-real-jGfSom/lifecycle/launch.sh
+3023689 3022611 3022611 Sl         00:50 MainThread      /usr/bin/node /var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+3024332       1 3024332 Ss         00:49 tmux: server    tmux -S /var/tmp/p396-real-jGfSom/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-jGfSom/lifecycle sleep 600
+3024443 3024332 3024443 Ss+        00:49 bash            bash /var/tmp/p396-real-jGfSom/lifecycle/launch.sh
+3023689 3022611 3022611 Sl         00:55 MainThread      /usr/bin/node /var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+3024332       1 3024332 Ss         00:54 tmux: server    tmux -S /var/tmp/p396-real-jGfSom/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-jGfSom/lifecycle sleep 600
+3024443 3024332 3024443 Ss+        00:54 bash            bash /var/tmp/p396-real-jGfSom/lifecycle/launch.sh
+3023689 3022611 3022611 Sl         01:00 MainThread      /usr/bin/node /var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+3024332       1 3024332 Ss         01:00 tmux: server    tmux -S /var/tmp/p396-real-jGfSom/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-jGfSom/lifecycle sleep 600
+3024443 3024332 3024443 Ss+        00:59 bash            bash /var/tmp/p396-real-jGfSom/lifecycle/launch.sh
+3023689 3022611 3022611 Sl         01:05 MainThread      /usr/bin/node /var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+3024332       1 3024332 Ss         01:05 tmux: server    tmux -S /var/tmp/p396-real-jGfSom/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-jGfSom/lifecycle sleep 600
+3024443 3024332 3024443 Ss+        01:04 bash            bash /var/tmp/p396-real-jGfSom/lifecycle/launch.sh
+3023689 3022611 3022611 Sl         01:10 MainThread      /usr/bin/node /var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+3024332       1 3024332 Ss         01:10 tmux: server    tmux -S /var/tmp/p396-real-jGfSom/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-jGfSom/lifecycle sleep 600
+3024443 3024332 3024443 Ss+        01:10 bash            bash /var/tmp/p396-real-jGfSom/lifecycle/launch.sh
+3023689 3022611 3022611 Sl         01:15 MainThread      /usr/bin/node /var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+3024332       1 3024332 Ss         01:15 tmux: server    tmux -S /var/tmp/p396-real-jGfSom/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-jGfSom/lifecycle sleep 600
+3024443 3024332 3024443 Ss+        01:15 bash            bash /var/tmp/p396-real-jGfSom/lifecycle/launch.sh
+3023689 3022611 3022611 Sl         01:20 MainThread      /usr/bin/node /var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+3024332       1 3024332 Ss         01:20 tmux: server    tmux -S /var/tmp/p396-real-jGfSom/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-jGfSom/lifecycle sleep 600
+3024443 3024332 3024443 Ss+        01:20 bash            bash /var/tmp/p396-real-jGfSom/lifecycle/launch.sh
+3023689 3022611 3022611 Sl         01:25 MainThread      /usr/bin/node /var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+3024332       1 3024332 Ss         01:25 tmux: server    tmux -S /var/tmp/p396-real-jGfSom/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-jGfSom/lifecycle sleep 600
+3024443 3024332 3024443 Ss+        01:25 bash            bash /var/tmp/p396-real-jGfSom/lifecycle/launch.sh
+3023689 3022611 3022611 Sl         01:30 MainThread      /usr/bin/node /var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+3024332       1 3024332 Ss         01:30 tmux: server    tmux -S /var/tmp/p396-real-jGfSom/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-jGfSom/lifecycle sleep 600
+3024443 3024332 3024443 Ss+        01:30 bash            bash /var/tmp/p396-real-jGfSom/lifecycle/launch.sh
+3023689 3022611 3022611 Sl         01:35 MainThread      /usr/bin/node /var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+3024332       1 3024332 Ss         01:35 tmux: server    tmux -S /var/tmp/p396-real-jGfSom/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-jGfSom/lifecycle sleep 600
+3024443 3024332 3024443 Ss+        01:35 bash            bash /var/tmp/p396-real-jGfSom/lifecycle/launch.sh
+3199648 3024332 3199648 Ss+        00:03 bash            bash /var/tmp/p396-real-jGfSom/noentry/launch.sh
+3023689 3022611 3022611 Sl         01:40 MainThread      /usr/bin/node /var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+3024332       1 3024332 Ss         01:40 tmux: server    tmux -S /var/tmp/p396-real-jGfSom/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-jGfSom/lifecycle sleep 600
+3024443 3024332 3024443 Ss+        01:40 bash            bash /var/tmp/p396-real-jGfSom/lifecycle/launch.sh
+3199648 3024332 3199648 Ss+        00:08 bash            bash /var/tmp/p396-real-jGfSom/noentry/launch.sh
+3023689 3022611 3022611 Sl         01:45 MainThread      /usr/bin/node /var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+3024332       1 3024332 Ss         01:45 tmux: server    tmux -S /var/tmp/p396-real-jGfSom/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-jGfSom/lifecycle sleep 600
+3024443 3024332 3024443 Ss+        01:45 bash            bash /var/tmp/p396-real-jGfSom/lifecycle/launch.sh
+3199648 3024332 3199648 Ss+        00:13 bash            bash /var/tmp/p396-real-jGfSom/noentry/launch.sh
+3023689 3022611 3022611 Sl         01:50 MainThread      /usr/bin/node /var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+3024332       1 3024332 Ss         01:50 tmux: server    tmux -S /var/tmp/p396-real-jGfSom/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-jGfSom/lifecycle sleep 600
+3024443 3024332 3024443 Ss+        01:50 bash            bash /var/tmp/p396-real-jGfSom/lifecycle/launch.sh
+3199648 3024332 3199648 Ss+        00:18 bash            bash /var/tmp/p396-real-jGfSom/noentry/launch.sh
+3023689 3022611 3022611 Sl         01:55 MainThread      /usr/bin/node /var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+3024332       1 3024332 Ss         01:55 tmux: server    tmux -S /var/tmp/p396-real-jGfSom/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-jGfSom/lifecycle sleep 600
+3024443 3024332 3024443 Ss+        01:55 bash            bash /var/tmp/p396-real-jGfSom/lifecycle/launch.sh
+3199648 3024332 3199648 Ss+        00:23 bash            bash /var/tmp/p396-real-jGfSom/noentry/launch.sh
+3023689 3022611 3022611 Sl         02:00 MainThread      /usr/bin/node /var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+3024332       1 3024332 Ss         02:00 tmux: server    tmux -S /var/tmp/p396-real-jGfSom/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-jGfSom/lifecycle sleep 600
+3024443 3024332 3024443 Ss+        02:00 bash            bash /var/tmp/p396-real-jGfSom/lifecycle/launch.sh
+3199648 3024332 3199648 Ss+        00:28 bash            bash /var/tmp/p396-real-jGfSom/noentry/launch.sh
+3023689 3022611 3022611 Sl         02:05 MainThread      /usr/bin/node /var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+3024332       1 3024332 Ss         02:05 tmux: server    tmux -S /var/tmp/p396-real-jGfSom/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-jGfSom/lifecycle sleep 600
+3024443 3024332 3024443 Ss+        02:05 bash            bash /var/tmp/p396-real-jGfSom/lifecycle/launch.sh
+3199648 3024332 3199648 Ss+        00:33 bash            bash /var/tmp/p396-real-jGfSom/noentry/launch.sh
+3023689 3022611 3022611 Sl         02:10 MainThread      /usr/bin/node /var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+3024332       1 3024332 Ss         02:10 tmux: server    tmux -S /var/tmp/p396-real-jGfSom/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-jGfSom/lifecycle sleep 600
+3024443 3024332 3024443 Ss+        02:10 bash            bash /var/tmp/p396-real-jGfSom/lifecycle/launch.sh
+3199648 3024332 3199648 Ss+        00:38 bash            bash /var/tmp/p396-real-jGfSom/noentry/launch.sh
+3023689 3022611 3022611 Sl         02:15 MainThread      /usr/bin/node /var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+3024332       1 3024332 Ss         02:15 tmux: server    tmux -S /var/tmp/p396-real-jGfSom/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-jGfSom/lifecycle sleep 600
+3024443 3024332 3024443 Ss+        02:15 bash            bash /var/tmp/p396-real-jGfSom/lifecycle/launch.sh
+3199648 3024332 3199648 Ss+        00:43 bash            bash /var/tmp/p396-real-jGfSom/noentry/launch.sh
+3023689 3022611 3022611 Sl         02:20 MainThread      /usr/bin/node /var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+3024332       1 3024332 Ss         02:20 tmux: server    tmux -S /var/tmp/p396-real-jGfSom/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-jGfSom/lifecycle sleep 600
+3024443 3024332 3024443 Ss+        02:20 bash            bash /var/tmp/p396-real-jGfSom/lifecycle/launch.sh
+3199648 3024332 3199648 Ss+        00:48 bash            bash /var/tmp/p396-real-jGfSom/noentry/launch.sh
+3023689 3022611 3022611 Sl         02:25 MainThread      /usr/bin/node /var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+3024332       1 3024332 Ss         02:25 tmux: server    tmux -S /var/tmp/p396-real-jGfSom/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-jGfSom/lifecycle sleep 600
+3024443 3024332 3024443 Ss+        02:25 bash            bash /var/tmp/p396-real-jGfSom/lifecycle/launch.sh
+3199648 3024332 3199648 Ss+        00:53 bash            bash /var/tmp/p396-real-jGfSom/noentry/launch.sh
+3023689 3022611 3022611 Sl         02:30 MainThread      /usr/bin/node /var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+3024332       1 3024332 Ss         02:30 tmux: server    tmux -S /var/tmp/p396-real-jGfSom/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-jGfSom/lifecycle sleep 600
+3024443 3024332 3024443 Ss+        02:30 bash            bash /var/tmp/p396-real-jGfSom/lifecycle/launch.sh
+3199648 3024332 3199648 Ss+        00:58 bash            bash /var/tmp/p396-real-jGfSom/noentry/launch.sh
+3023689 3022611 3022611 Sl         02:35 MainThread      /usr/bin/node /var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+3024332       1 3024332 Ss         02:35 tmux: server    tmux -S /var/tmp/p396-real-jGfSom/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-jGfSom/lifecycle sleep 600
+3024443 3024332 3024443 Ss+        02:35 bash            bash /var/tmp/p396-real-jGfSom/lifecycle/launch.sh
+3199648 3024332 3199648 Ss+        01:03 bash            bash /var/tmp/p396-real-jGfSom/noentry/launch.sh
+3023689 3022611 3022611 Sl         02:40 MainThread      /usr/bin/node /var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+3024332       1 3024332 Ss         02:40 tmux: server    tmux -S /var/tmp/p396-real-jGfSom/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-jGfSom/lifecycle sleep 600
+3024443 3024332 3024443 Ss+        02:40 bash            bash /var/tmp/p396-real-jGfSom/lifecycle/launch.sh
+3199648 3024332 3199648 Ss+        01:08 bash            bash /var/tmp/p396-real-jGfSom/noentry/launch.sh
+3023689 3022611 3022611 Sl         02:45 MainThread      /usr/bin/node /var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+3024332       1 3024332 Ss         02:45 tmux: server    tmux -S /var/tmp/p396-real-jGfSom/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-jGfSom/lifecycle sleep 600
+3024443 3024332 3024443 Ss+        02:45 bash            bash /var/tmp/p396-real-jGfSom/lifecycle/launch.sh
+3199648 3024332 3199648 Ss+        01:13 bash            bash /var/tmp/p396-real-jGfSom/noentry/launch.sh
+3023689 3022611 3022611 Sl         02:50 MainThread      /usr/bin/node /var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+3024332       1 3024332 Ss         02:50 tmux: server    tmux -S /var/tmp/p396-real-jGfSom/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-jGfSom/lifecycle sleep 600
+3024443 3024332 3024443 Ss+        02:50 bash            bash /var/tmp/p396-real-jGfSom/lifecycle/launch.sh
+3199648 3024332 3199648 Ss+        01:18 bash            bash /var/tmp/p396-real-jGfSom/noentry/launch.sh
+3023689 3022611 3022611 Sl         02:55 MainThread      /usr/bin/node /var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+3024332       1 3024332 Ss         02:55 tmux: server    tmux -S /var/tmp/p396-real-jGfSom/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-jGfSom/lifecycle sleep 600
+3024443 3024332 3024443 Ss+        02:55 bash            bash /var/tmp/p396-real-jGfSom/lifecycle/launch.sh
+3199648 3024332 3199648 Ss+        01:23 bash            bash /var/tmp/p396-real-jGfSom/noentry/launch.sh
+3023689 3022611 3022611 Sl         03:00 MainThread      /usr/bin/node /var/tmp/p446-baseline-tree/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+3024332       1 3024332 Ss         03:00 tmux: server    tmux -S /var/tmp/p396-real-jGfSom/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-jGfSom/lifecycle sleep 600
+3024443 3024332 3024443 Ss+        03:00 bash            bash /var/tmp/p396-real-jGfSom/lifecycle/launch.sh
+3199648 3024332 3199648 Ss+        01:28 bash            bash /var/tmp/p396-real-jGfSom/noentry/launch.sh

@@ -1,0 +1,35 @@
+
+ ▀▀█  v1.5.1
+ █▀ █ escape interrupt · ctrl+c/ctrl+d clear/exit · / commands · ! bash ·
+ ctrl+o more
+ Press ctrl+o to show full startup help and loaded resources.
+
+ Pi can explain its own features and look up its docs. Ask it how to use or
+ extend Pi.
+
+[Skills]
+  teamsmith
+
+[Extensions]
+  reply-capture-provider.ts, team-bg.ts, team-inbox-watch.ts, team-remind.ts,
+team-reply.ts
+
+
+ <file name="/var/tmp/p396-real-ZQuaRz/lifecycle/.pi/team/state/pm-prompt.md">
+ CASE lifecycle
+
+ </file>
+ CASE lifecycle-after-tree
+
+
+ 决定 lifecycle 保留。
+
+ Resumed session
+
+────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────
+/var/tmp/p396-real-ZQuaRz/lifecycle (main)
+0.3%/128k                                                             controlled
+To resume this session: pi --session 01a1c6eb-c26c-77fc-a47a-38664abab120
+

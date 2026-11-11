@@ -1,0 +1,28 @@
+
+[1m== workflow · 发布不阻断答复（4.1） ==[0m
+  [32m✓[0m workflow：team paths 的 main_root 就是夹具仓库
+  [32m✓[0m workflow：账本快照非空（断言不是空对空）
+  [32m✓[0m workflow：saved 后仍输出同一正文
+  [32m✓[0m workflow：saved 不动 BOARD/outbox/inbox/pending/config（=23bd9559d5869eda4b2717cefd2dab3ccdde3aedc50d7036b0edb9650b67d885  /var/tmp/teamsmith-key-replies-pm_skills-deb708fe.fNrHwB/workflow/docs/team/BOARD.md
+45e354347b3894d2891316399c2c74c77d09d8c9af55cb71742240a9576d324b  /var/tmp/teamsmith-key-replies-pm_skills-deb708fe.fNrHwB/workflow/docs/team/outbox/0001-msg.txt
+ec71979aed0bb38b5103b4a29394ff9c55de94fef985d5ea74fd9404920077ef  /var/tmp/teamsmith-key-replies-pm_skills-deb708fe.fNrHwB/workflow/docs/team/inbox/dev2.md
+9c14b7facaf233a07c653dc5b7c3624caafa78f20993abb757596370caf1e8d6  /var/tmp/teamsmith-key-replies-pm_skills-deb708fe.fNrHwB/workflow/.pi/team/state/pending.env）
+  [32m✓[0m workflow：input-error 后仍输出同一正文
+  [32m✓[0m workflow：storage-error 后仍输出同一正文
+  [32m✓[0m workflow：busy 后仍输出同一正文
+  [32m✓[0m workflow：unconfirmed 后仍输出同一正文
+  [32m✓[0m workflow：任何诊断里没有正文
+  [32m✓[0m workflow：五种结果后账本仍不变（=23bd9559d5869eda4b2717cefd2dab3ccdde3aedc50d7036b0edb9650b67d885  /var/tmp/teamsmith-key-replies-pm_skills-deb708fe.fNrHwB/workflow/docs/team/BOARD.md
+45e354347b3894d2891316399c2c74c77d09d8c9af55cb71742240a9576d324b  /var/tmp/teamsmith-key-replies-pm_skills-deb708fe.fNrHwB/workflow/docs/team/outbox/0001-msg.txt
+ec71979aed0bb38b5103b4a29394ff9c55de94fef985d5ea74fd9404920077ef  /var/tmp/teamsmith-key-replies-pm_skills-deb708fe.fNrHwB/workflow/docs/team/inbox/dev2.md
+9c14b7facaf233a07c653dc5b7c3624caafa78f20993abb757596370caf1e8d6  /var/tmp/teamsmith-key-replies-pm_skills-deb708fe.fNrHwB/workflow/.pi/team/state/pending.env）
+  [32m✓[0m workflow：published 总数=2（saved+unconfirmed）（=2）
+
+[1m== guard-selfcheck · 隔离守卫的比对范围（P399，合成根上的双向自检） ==[0m
+  [32m✓[0m guard-selfcheck①：收尾钩子/patrol/审计/后台作业在写（含 inbox 追加与新建）→ 守卫保持绿
+  [32m✓[0m guard-selfcheck②：往回复存储写一个字节 → 守卫变红
+  [32m✓[0m guard-selfcheck③：往回复存储新增正文文件 → 守卫变红（整个 key-replies 子树都在范围里）
+  [32m✓[0m guard-selfcheck④：key-replies 之外的 state 变化 → 守卫保持绿（范围=编号回复存储，裁定如此）
+  [32m✓[0m 隔离守卫：真实仓库 /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2 的编号回复存储（.pi/team/state/key-replies）前后逐字节不变
+
+== P234 key-replies 结果 == ✓15 ✗0 SKIP0

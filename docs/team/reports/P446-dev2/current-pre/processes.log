@@ -1,0 +1,181 @@
+2405780 2405750 2405750 Rl         00:00 /usr/bin/node /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+2405780 2405750 2405750 Sl         00:05 /usr/bin/node /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+2407433       1 2407433 Ss         00:04 tmux -S /var/tmp/p396-real-3YQL4J/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-3YQL4J/lifecycle sleep 600
+2407454 2407433 2407454 Ss+        00:04 bash /var/tmp/p396-real-3YQL4J/lifecycle/launch.sh
+2410310 2407458 2407454 S+         00:02 flock -x 3
+2405780 2405750 2405750 Sl         00:10 /usr/bin/node /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+2407433       1 2407433 Ss         00:09 tmux -S /var/tmp/p396-real-3YQL4J/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-3YQL4J/lifecycle sleep 600
+2407454 2407433 2407454 Ss+        00:09 bash /var/tmp/p396-real-3YQL4J/lifecycle/launch.sh
+2410310 2407458 2407454 S+         00:07 flock -x 3
+2405780 2405750 2405750 Sl         00:15 /usr/bin/node /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+2407433       1 2407433 Ss         00:14 tmux -S /var/tmp/p396-real-3YQL4J/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-3YQL4J/lifecycle sleep 600
+2407454 2407433 2407454 Ss+        00:14 bash /var/tmp/p396-real-3YQL4J/lifecycle/launch.sh
+2410310 2407458 2407454 S+         00:12 flock -x 3
+2405780 2405750 2405750 Sl         00:20 /usr/bin/node /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+2407433       1 2407433 Ss         00:19 tmux -S /var/tmp/p396-real-3YQL4J/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-3YQL4J/lifecycle sleep 600
+2407454 2407433 2407454 Ss+        00:19 bash /var/tmp/p396-real-3YQL4J/lifecycle/launch.sh
+2410310 2407458 2407454 S+         00:17 flock -x 3
+2405780 2405750 2405750 Sl         00:25 /usr/bin/node /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+2407433       1 2407433 Ss         00:24 tmux -S /var/tmp/p396-real-3YQL4J/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-3YQL4J/lifecycle sleep 600
+2407454 2407433 2407454 Ss+        00:24 bash /var/tmp/p396-real-3YQL4J/lifecycle/launch.sh
+2410310 2407458 2407454 S+         00:22 flock -x 3
+2405780 2405750 2405750 Sl         00:30 /usr/bin/node /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+2407433       1 2407433 Ss         00:29 tmux -S /var/tmp/p396-real-3YQL4J/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-3YQL4J/lifecycle sleep 600
+2407454 2407433 2407454 Ss+        00:29 bash /var/tmp/p396-real-3YQL4J/lifecycle/launch.sh
+2410310 2407458 2407454 S+         00:27 flock -x 3
+2405780 2405750 2405750 Sl         00:35 /usr/bin/node /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+2407433       1 2407433 Ss         00:34 tmux -S /var/tmp/p396-real-3YQL4J/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-3YQL4J/lifecycle sleep 600
+2407454 2407433 2407454 Ss+        00:34 bash /var/tmp/p396-real-3YQL4J/lifecycle/launch.sh
+2410310 2407458 2407454 S+         00:32 flock -x 3
+2405780 2405750 2405750 Sl         00:40 /usr/bin/node /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+2407433       1 2407433 Ss         00:39 tmux -S /var/tmp/p396-real-3YQL4J/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-3YQL4J/lifecycle sleep 600
+2407454 2407433 2407454 Ss+        00:39 bash /var/tmp/p396-real-3YQL4J/lifecycle/launch.sh
+2410310 2407458 2407454 S+         00:37 flock -x 3
+2405780 2405750 2405750 Sl         00:45 /usr/bin/node /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+2407433       1 2407433 Ss         00:44 tmux -S /var/tmp/p396-real-3YQL4J/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-3YQL4J/lifecycle sleep 600
+2407454 2407433 2407454 Ss+        00:44 bash /var/tmp/p396-real-3YQL4J/lifecycle/launch.sh
+2410310 2407458 2407454 S+         00:42 flock -x 3
+2405780 2405750 2405750 Sl         00:50 /usr/bin/node /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+2407433       1 2407433 Ss         00:49 tmux -S /var/tmp/p396-real-3YQL4J/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-3YQL4J/lifecycle sleep 600
+2407454 2407433 2407454 Ss+        00:49 bash /var/tmp/p396-real-3YQL4J/lifecycle/launch.sh
+2410310 2407458 2407454 S+         00:47 flock -x 3
+2405780 2405750 2405750 Sl         00:55 /usr/bin/node /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+2407433       1 2407433 Ss         00:54 tmux -S /var/tmp/p396-real-3YQL4J/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-3YQL4J/lifecycle sleep 600
+2407454 2407433 2407454 Ss+        00:54 bash /var/tmp/p396-real-3YQL4J/lifecycle/launch.sh
+2410310 2407458 2407454 S+         00:52 flock -x 3
+2405780 2405750 2405750 Sl         01:00 /usr/bin/node /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+2407433       1 2407433 Ss         00:59 tmux -S /var/tmp/p396-real-3YQL4J/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-3YQL4J/lifecycle sleep 600
+2407454 2407433 2407454 Ss+        00:59 bash /var/tmp/p396-real-3YQL4J/lifecycle/launch.sh
+2410310 2407458 2407454 S+         00:57 flock -x 3
+2405780 2405750 2405750 Sl         01:05 /usr/bin/node /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+2407433       1 2407433 Ss         01:04 tmux -S /var/tmp/p396-real-3YQL4J/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-3YQL4J/lifecycle sleep 600
+2407454 2407433 2407454 Ss+        01:04 bash /var/tmp/p396-real-3YQL4J/lifecycle/launch.sh
+2410310 2407458 2407454 S+         01:02 flock -x 3
+2405780 2405750 2405750 Sl         01:10 /usr/bin/node /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+2407433       1 2407433 Ss         01:09 tmux -S /var/tmp/p396-real-3YQL4J/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-3YQL4J/lifecycle sleep 600
+2407454 2407433 2407454 Ss+        01:09 bash /var/tmp/p396-real-3YQL4J/lifecycle/launch.sh
+2410310 2407458 2407454 S+         01:07 flock -x 3
+2405780 2405750 2405750 Sl         01:15 /usr/bin/node /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+2407433       1 2407433 Ss         01:14 tmux -S /var/tmp/p396-real-3YQL4J/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-3YQL4J/lifecycle sleep 600
+2407454 2407433 2407454 Ss+        01:14 bash /var/tmp/p396-real-3YQL4J/lifecycle/launch.sh
+2410310 2407458 2407454 S+         01:12 flock -x 3
+2405780 2405750 2405750 Sl         01:20 /usr/bin/node /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+2407433       1 2407433 Ss         01:19 tmux -S /var/tmp/p396-real-3YQL4J/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-3YQL4J/lifecycle sleep 600
+2407454 2407433 2407454 Ss+        01:19 bash /var/tmp/p396-real-3YQL4J/lifecycle/launch.sh
+2410310 2407458 2407454 S+         01:17 flock -x 3
+2405780 2405750 2405750 Sl         01:25 /usr/bin/node /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+2407433       1 2407433 Ss         01:24 tmux -S /var/tmp/p396-real-3YQL4J/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-3YQL4J/lifecycle sleep 600
+2407454 2407433 2407454 Ss+        01:24 bash /var/tmp/p396-real-3YQL4J/lifecycle/launch.sh
+2410310 2407458 2407454 S+         01:22 flock -x 3
+2405780 2405750 2405750 Sl         01:30 /usr/bin/node /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+2407433       1 2407433 Ss         01:29 tmux -S /var/tmp/p396-real-3YQL4J/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-3YQL4J/lifecycle sleep 600
+2407454 2407433 2407454 Ss+        01:29 bash /var/tmp/p396-real-3YQL4J/lifecycle/launch.sh
+2410310 2407458 2407454 S+         01:27 flock -x 3
+2405780 2405750 2405750 Sl         01:35 /usr/bin/node /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+2407433       1 2407433 Ss         01:34 tmux -S /var/tmp/p396-real-3YQL4J/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-3YQL4J/lifecycle sleep 600
+2407454 2407433 2407454 Ss+        01:34 bash /var/tmp/p396-real-3YQL4J/lifecycle/launch.sh
+2410310 2407458 2407454 S+         01:32 flock -x 3
+2611288 2407433 2611288 Ss+        00:02 bash /var/tmp/p396-real-3YQL4J/noentry/launch.sh
+2612320 2611289 2611288 S+         00:01 flock -x 3
+2405780 2405750 2405750 Sl         01:40 /usr/bin/node /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+2407433       1 2407433 Ss         01:39 tmux -S /var/tmp/p396-real-3YQL4J/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-3YQL4J/lifecycle sleep 600
+2407454 2407433 2407454 Ss+        01:39 bash /var/tmp/p396-real-3YQL4J/lifecycle/launch.sh
+2410310 2407458 2407454 S+         01:37 flock -x 3
+2611288 2407433 2611288 Ss+        00:07 bash /var/tmp/p396-real-3YQL4J/noentry/launch.sh
+2612320 2611289 2611288 S+         00:06 flock -x 3
+2405780 2405750 2405750 Sl         01:45 /usr/bin/node /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+2407433       1 2407433 Ss         01:44 tmux -S /var/tmp/p396-real-3YQL4J/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-3YQL4J/lifecycle sleep 600
+2407454 2407433 2407454 Ss+        01:44 bash /var/tmp/p396-real-3YQL4J/lifecycle/launch.sh
+2410310 2407458 2407454 S+         01:43 flock -x 3
+2611288 2407433 2611288 Ss+        00:12 bash /var/tmp/p396-real-3YQL4J/noentry/launch.sh
+2612320 2611289 2611288 S+         00:11 flock -x 3
+2405780 2405750 2405750 Sl         01:50 /usr/bin/node /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+2407433       1 2407433 Ss         01:49 tmux -S /var/tmp/p396-real-3YQL4J/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-3YQL4J/lifecycle sleep 600
+2407454 2407433 2407454 Ss+        01:49 bash /var/tmp/p396-real-3YQL4J/lifecycle/launch.sh
+2410310 2407458 2407454 S+         01:48 flock -x 3
+2611288 2407433 2611288 Ss+        00:17 bash /var/tmp/p396-real-3YQL4J/noentry/launch.sh
+2612320 2611289 2611288 S+         00:16 flock -x 3
+2405780 2405750 2405750 Sl         01:55 /usr/bin/node /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+2407433       1 2407433 Ss         01:54 tmux -S /var/tmp/p396-real-3YQL4J/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-3YQL4J/lifecycle sleep 600
+2407454 2407433 2407454 Ss+        01:54 bash /var/tmp/p396-real-3YQL4J/lifecycle/launch.sh
+2410310 2407458 2407454 S+         01:53 flock -x 3
+2611288 2407433 2611288 Ss+        00:22 bash /var/tmp/p396-real-3YQL4J/noentry/launch.sh
+2612320 2611289 2611288 S+         00:21 flock -x 3
+2405780 2405750 2405750 Sl         02:00 /usr/bin/node /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+2407433       1 2407433 Ss         01:59 tmux -S /var/tmp/p396-real-3YQL4J/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-3YQL4J/lifecycle sleep 600
+2407454 2407433 2407454 Ss+        01:59 bash /var/tmp/p396-real-3YQL4J/lifecycle/launch.sh
+2410310 2407458 2407454 S+         01:58 flock -x 3
+2611288 2407433 2611288 Ss+        00:27 bash /var/tmp/p396-real-3YQL4J/noentry/launch.sh
+2612320 2611289 2611288 S+         00:26 flock -x 3
+2405780 2405750 2405750 Sl         02:05 /usr/bin/node /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+2407433       1 2407433 Ss         02:04 tmux -S /var/tmp/p396-real-3YQL4J/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-3YQL4J/lifecycle sleep 600
+2407454 2407433 2407454 Ss+        02:04 bash /var/tmp/p396-real-3YQL4J/lifecycle/launch.sh
+2410310 2407458 2407454 S+         02:03 flock -x 3
+2611288 2407433 2611288 Ss+        00:32 bash /var/tmp/p396-real-3YQL4J/noentry/launch.sh
+2612320 2611289 2611288 S+         00:31 flock -x 3
+2405780 2405750 2405750 Sl         02:10 /usr/bin/node /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+2407433       1 2407433 Ss         02:09 tmux -S /var/tmp/p396-real-3YQL4J/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-3YQL4J/lifecycle sleep 600
+2407454 2407433 2407454 Ss+        02:09 bash /var/tmp/p396-real-3YQL4J/lifecycle/launch.sh
+2410310 2407458 2407454 S+         02:08 flock -x 3
+2611288 2407433 2611288 Ss+        00:37 bash /var/tmp/p396-real-3YQL4J/noentry/launch.sh
+2612320 2611289 2611288 S+         00:36 flock -x 3
+2405780 2405750 2405750 Sl         02:15 /usr/bin/node /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+2407433       1 2407433 Ss         02:14 tmux -S /var/tmp/p396-real-3YQL4J/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-3YQL4J/lifecycle sleep 600
+2407454 2407433 2407454 Ss+        02:14 bash /var/tmp/p396-real-3YQL4J/lifecycle/launch.sh
+2410310 2407458 2407454 S+         02:13 flock -x 3
+2611288 2407433 2611288 Ss+        00:42 bash /var/tmp/p396-real-3YQL4J/noentry/launch.sh
+2612320 2611289 2611288 S+         00:41 flock -x 3
+2405780 2405750 2405750 Sl         02:20 /usr/bin/node /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+2407433       1 2407433 Ss         02:19 tmux -S /var/tmp/p396-real-3YQL4J/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-3YQL4J/lifecycle sleep 600
+2407454 2407433 2407454 Ss+        02:19 bash /var/tmp/p396-real-3YQL4J/lifecycle/launch.sh
+2410310 2407458 2407454 S+         02:18 flock -x 3
+2611288 2407433 2611288 Ss+        00:47 bash /var/tmp/p396-real-3YQL4J/noentry/launch.sh
+2612320 2611289 2611288 S+         00:46 flock -x 3
+2405780 2405750 2405750 Sl         02:25 /usr/bin/node /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+2407433       1 2407433 Ss         02:24 tmux -S /var/tmp/p396-real-3YQL4J/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-3YQL4J/lifecycle sleep 600
+2407454 2407433 2407454 Ss+        02:24 bash /var/tmp/p396-real-3YQL4J/lifecycle/launch.sh
+2410310 2407458 2407454 S+         02:23 flock -x 3
+2611288 2407433 2611288 Ss+        00:52 bash /var/tmp/p396-real-3YQL4J/noentry/launch.sh
+2612320 2611289 2611288 S+         00:52 flock -x 3
+2405780 2405750 2405750 Sl         02:30 /usr/bin/node /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+2407433       1 2407433 Ss         02:29 tmux -S /var/tmp/p396-real-3YQL4J/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-3YQL4J/lifecycle sleep 600
+2407454 2407433 2407454 Ss+        02:29 bash /var/tmp/p396-real-3YQL4J/lifecycle/launch.sh
+2410310 2407458 2407454 S+         02:28 flock -x 3
+2611288 2407433 2611288 Ss+        00:57 bash /var/tmp/p396-real-3YQL4J/noentry/launch.sh
+2612320 2611289 2611288 S+         00:57 flock -x 3
+2405780 2405750 2405750 Sl         02:35 /usr/bin/node /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+2407433       1 2407433 Ss         02:34 tmux -S /var/tmp/p396-real-3YQL4J/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-3YQL4J/lifecycle sleep 600
+2407454 2407433 2407454 Ss+        02:34 bash /var/tmp/p396-real-3YQL4J/lifecycle/launch.sh
+2410310 2407458 2407454 S+         02:33 flock -x 3
+2611288 2407433 2611288 Ss+        01:02 bash /var/tmp/p396-real-3YQL4J/noentry/launch.sh
+2612320 2611289 2611288 S+         01:02 flock -x 3
+2405780 2405750 2405750 Sl         02:40 /usr/bin/node /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+2407433       1 2407433 Ss         02:39 tmux -S /var/tmp/p396-real-3YQL4J/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-3YQL4J/lifecycle sleep 600
+2407454 2407433 2407454 Ss+        02:39 bash /var/tmp/p396-real-3YQL4J/lifecycle/launch.sh
+2410310 2407458 2407454 S+         02:38 flock -x 3
+2611288 2407433 2611288 Ss+        01:07 bash /var/tmp/p396-real-3YQL4J/noentry/launch.sh
+2612320 2611289 2611288 S+         01:07 flock -x 3
+2405780 2405750 2405750 Sl         02:45 /usr/bin/node /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+2407433       1 2407433 Ss         02:44 tmux -S /var/tmp/p396-real-3YQL4J/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-3YQL4J/lifecycle sleep 600
+2407454 2407433 2407454 Ss+        02:44 bash /var/tmp/p396-real-3YQL4J/lifecycle/launch.sh
+2410310 2407458 2407454 S+         02:43 flock -x 3
+2611288 2407433 2611288 Ss+        01:12 bash /var/tmp/p396-real-3YQL4J/noentry/launch.sh
+2612320 2611289 2611288 S+         01:12 flock -x 3
+2405780 2405750 2405750 Sl         02:50 /usr/bin/node /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+2407433       1 2407433 Ss         02:49 tmux -S /var/tmp/p396-real-3YQL4J/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-3YQL4J/lifecycle sleep 600
+2407454 2407433 2407454 Ss+        02:49 bash /var/tmp/p396-real-3YQL4J/lifecycle/launch.sh
+2410310 2407458 2407454 S+         02:48 flock -x 3
+2611288 2407433 2611288 Ss+        01:17 bash /var/tmp/p396-real-3YQL4J/noentry/launch.sh
+2612320 2611289 2611288 S+         01:17 flock -x 3
+2405780 2405750 2405750 Sl         02:55 /usr/bin/node /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+2407433       1 2407433 Ss         02:54 tmux -S /var/tmp/p396-real-3YQL4J/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-3YQL4J/lifecycle sleep 600
+2407454 2407433 2407454 Ss+        02:54 bash /var/tmp/p396-real-3YQL4J/lifecycle/launch.sh
+2410310 2407458 2407454 S+         02:53 flock -x 3
+2611288 2407433 2611288 Ss+        01:22 bash /var/tmp/p396-real-3YQL4J/noentry/launch.sh
+2612320 2611289 2611288 S+         01:22 flock -x 3
+2405780 2405750 2405750 Sl         03:00 /usr/bin/node /home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2/skills/teamsmith/tests/reply-capture-real.mjs --select=lifecycle
+2407433       1 2407433 Ss         02:59 tmux -S /var/tmp/p396-real-3YQL4J/socket -f /dev/null new-session -d -s p396-lifecycle -n pm -c /var/tmp/p396-real-3YQL4J/lifecycle sleep 600
+2407454 2407433 2407454 Ss+        02:59 bash /var/tmp/p396-real-3YQL4J/lifecycle/launch.sh
+2410310 2407458 2407454 S+         02:58 flock -x 3
+2611288 2407433 2611288 Ss+        01:28 bash /var/tmp/p396-real-3YQL4J/noentry/launch.sh
+2612320 2611289 2611288 S+         01:27 flock -x 3

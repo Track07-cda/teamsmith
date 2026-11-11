@@ -1,0 +1,24 @@
+
+ Warning: fd not found. Offline mode enabled, skipping download.
+ Warning: ripgrep not found. Offline mode enabled, skipping download.
+
+
+ <file name="/var/tmp/p396-real-jGfSom/lifecycle/.pi/team/state/pm-prompt.md">
+ CASE lifecycle
+
+ </file>
+
+
+ Warning: tmux extended-keys is off. Modified Enter keys may not work. Add `set
+ -g extended-keys on` to ~/.tmux.conf and restart tmux.
+
+ 决定 lifecycle 保留。
+
+────────────────────────────────────────────────────────────────────────────────
+
+ Reloading keybindings, extensions, skills, prompts, themes, and context
+ files...
+
+────────────────────────────────────────────────────────────────────────────────
+/var/tmp/p396-real-jGfSom/lifecycle (main)
+0.3%/128k                                                             controlled
