@@ -759,7 +759,7 @@ check_coverage() {
   [ "$aw" = "0" ] && ok "每个别名都打印主命令的页并点名该别名"
 
   # O2 · the dispatcher's internal entries are a closed set, declared in one place (here)
-  local internal="__inbox-write __notify-settle __panel-data"
+  local internal="__inbox-write __notify-settle __panel-data __remind-recover"
   local found want nm extra="" miss="" n
   found="$(team_internal_labels)"
   want="$(printf '%s\n' $internal | sort -u)"
@@ -1512,11 +1512,9 @@ if [ "$_TEAM_HELP_REQ" = "1" ]; then""", 1)' \
     coverage "__probe-x"
 
   # O2b: the declared internal set names one entry that is no longer a dispatcher label
-  # P417: 这里的字面量以前跟丢了声明本身（声明是三个名字 `__inbox-write __notify-settle __panel-data`，
-  # 而变异找的是中间没有 `__notify-settle` 的两词子串）——替换静默空转，⑪ 于是长期「没有红」：
-  # 一条自己什么都没测的红侧。字面量改成声明的原三词串；改完这条翻转必须变红。
+  # P417: 变异必须点名声明的完整当前值；替换静默空转会让这条红侧什么都没测。
   flip_case "internal-list-short" "⑪声明清单里删一个内部名" "tests/help-surface.sh" \
-    's = s.replace("__inbox-write __notify-settle __panel-data", "__notify-settle __panel-data", 1)' \
+    's = s.replace("__inbox-write __notify-settle __panel-data __remind-recover", "__notify-settle __panel-data __remind-recover", 1)' \
     coverage "__inbox-write"
 
   # O6a: a declared group disappears from the manifest while its commands still name it

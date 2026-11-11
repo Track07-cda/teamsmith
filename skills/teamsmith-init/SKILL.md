@@ -8,8 +8,7 @@ metadata:
 
 # teamsmith-init · bring a new project to "ready to dispatch"
 
-You are the first session in a repository that has no team yet. **Install first**, then settle the questions below
-with the user, run one command, then hand day-to-day operation to the **`teamsmith`** skill.
+You are the first session in a repository that has no team yet. **Install first**, then settle the questions below with the user, run one command, then hand day-to-day operation to the **`teamsmith`** skill.
 ## 0. Install the CLI and the project's skills
 
 ```bash
