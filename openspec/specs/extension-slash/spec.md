@@ -5,15 +5,11 @@ The `/team` slash command is the human's front door from a Pi conversation to th
 short, curated list of the commands a user runs by hand (status reads and the few actions they own) is executed as a
 child process and its output and exit status are brought back into the conversation. It adds no command of its own,
 no authorization of its own, and no model-callable tool: the user typed it, and the CLI's own guards decide.
-## Requirements
-### Requirement: `/team` runs the project's real CLI, and it is user input rather than a tool
 
-The extension SHALL register exactly one Pi slash command (`/team`) and MUST NOT register a model-callable tool, so
-that no model turn can invoke it. A listed invocation SHALL be executed by running the project's `team` CLI as a
-child process whose arguments are the user's own tokens, in order, unchanged — the extension MUST NOT implement,
-wrap or reinterpret any teamsmith command, and MUST NOT add, remove or rewrite a token. The child SHALL run with
-the project root as its working directory, and the project SHALL be resolved from the session's directory (the
-directory holding `.pi/team/config.sh`), not from the extension's own location.
+## Requirements
+
+### Requirement: `/team` runs the project's real CLI, and it is user input rather than a tool
+The extension SHALL register exactly one Pi slash command, `/team`, and no model-callable tool. A listed invocation SHALL run the project's real `team` CLI as a child process with the user's tokens in order and unchanged. The child SHALL use the project root resolved from the session directory containing `.pi/team/config.sh`, not the extension location, as its working directory.
 
 #### Scenario: It is a command, and nothing else
 
@@ -31,15 +27,7 @@ directory holding `.pi/team/config.sh`), not from the extension's own location.
   the project root as the working directory, and no token the user did not type
 
 ### Requirement: The whitelist is one table, and only the shapes it lists run
-
-The extension SHALL accept only the invocations listed in one table: read rows match a fixed shape (their command
-path plus, where the row carries one, a single `<ID>`/`<n>`/`<slug>` argument), and action rows match their command
-path followed by the user's remaining tokens, passed through unchanged. Every other invocation SHALL be refused
-before any process is started; the refusal SHALL name the refused command or token and SHALL say that this command
-belongs to the PM or a seat and is to be run in a terminal. The menu printed by `/team` with no arguments (and by
-`/team help`) and the command-line completion SHALL be rendered from the same table, and the table MUST be the only
-place the list lives: a row added to it appears in the menu, a row removed from it disappears from both the menu and
-the set of accepted invocations.
+The extension SHALL accept only shapes listed in one table. Read rows SHALL match their command path plus, where declared, one `<ID>`/`<n>`/`<slug>` argument; action rows SHALL pass remaining user tokens unchanged. Every other invocation SHALL be refused before starting a process; the refusal SHALL name the refused command or token and direct it to the PM or a seat in a terminal. `/team`, `/team help` and completion SHALL render from that same table, the list's only location.
 
 #### Scenario: A command outside the table is refused by name, and nothing runs
 
@@ -67,13 +55,14 @@ the set of accepted invocations.
 - **THEN** the CLI answers with its unknown-parameter or subcommand refusal, never with its top-level unknown-command
   refusal naming that row's command — a row naming a command the CLI does not dispatch fails this check
 
-### Requirement: The PM-restarting invocation is refused, and no listed invocation can hang the conversation
+#### Scenario: Editing the table edits both presentation and admission
+- **GIVEN** a copy whose table has one row added and another removed
+- **WHEN** the menu, completion and admission checks are rendered or run
+- **THEN** the added row appears and its listed shape is accepted, while the removed row disappears and its former invocation is refused before a child starts
+- **AND** no second hand-written command list supplies either result
 
-An invocation that is the CLI's `up` command, or that carries `--fresh-pm`, SHALL be refused and MUST NOT be started:
-its message SHALL say that the session it was typed in is the PM session, so starting it here would replace the
-conversation the user is in, and that it belongs in a terminal. Every listed invocation SHALL run without a
-controlling stdin and under a bounded wait: a child still running at that bound SHALL be terminated and reported as
-a failure that names the bound, and MUST NOT be left running or waited on further.
+### Requirement: The PM-restarting invocation is refused, and no listed invocation can hang the conversation
+The extension SHALL refuse `up` and any invocation carrying `--fresh-pm` before starting a child. The refusal SHALL explain that the current session is the PM session, restarting there would replace this conversation, and the command belongs in a terminal. Every listed invocation SHALL run without controlling stdin and with a bounded wait; a child exceeding the bound SHALL be terminated, reported as a failure naming the bound, and neither left running nor awaited further.
 
 #### Scenario: Restarting the PM from its own conversation is refused with the reason
 
@@ -90,15 +79,7 @@ a failure that names the bound, and MUST NOT be left running or waited on furthe
   waiting for it
 
 ### Requirement: The result is written where it is visible, and its exit status is never hidden
-
-A successful result SHALL be placed by its size: an output that is a single line of at most 200 characters SHALL
-be reported as a notification and SHALL NOT add an entry to the conversation; any other successful output SHALL be
-written into the conversation as an entry that carries the command line, the exit code and the output (stdout and
-stderr). A child that exited non-zero, or that was terminated, MUST be reported as a failure: a notification of
-the failure kind naming the exit code or the reason, and always an entry carrying the command line, the exit code
-and the output — a non-zero exit MUST NOT be presented as success. When the output exceeds the safety bound (500
-lines or 64 KiB, whichever is reached first) the entry SHALL carry the beginning and the end and a notice that the
-middle was elided and how to read the full output.
+Successful one-line output of at most 200 characters SHALL produce only a notification. Any other success SHALL add a conversation entry with command line, exit code, stdout and stderr. Non-zero or terminated children SHALL produce a failure notification and that entry, never success. Output beyond 500 lines or 64 KiB, whichever first, SHALL retain beginning and end and identify the elided middle and full-output command.
 
 #### Scenario: A multi-line success arrives in the conversation
 
@@ -128,12 +109,7 @@ middle was elided and how to read the full output.
   command prints the full output
 
 ### Requirement: The front door adds no authorization of its own and keeps the CLI's guards
-
-The extension MUST NOT ask for a confirmation of its own and MUST NOT inject an authorization flag: an invocation
-runs exactly the tokens the user typed, so every guard the CLI owns (write authorization, dispatch guards, capacity,
-identity and lifecycle checks) decides as it does in a terminal. The child environment SHALL be the session
-environment without the variables that authorize on the user's behalf — `TEAM_ASSUME_YES`, `TEAM_UPGRADE_CONFIRMED`
-and `TEAM_ALLOW_FOREIGN_SESSION` — which MUST NOT be inherited from the session.
+The extension MUST NOT add confirmation or inject authorization flags; CLI guards SHALL decide the user's unchanged invocation as in a terminal. The child SHALL inherit the session environment except `TEAM_ASSUME_YES`, `TEAM_UPGRADE_CONFIRMED` and `TEAM_ALLOW_FOREIGN_SESSION`, which MUST NOT be inherited.
 
 #### Scenario: A session's stray "yes" is not the user's authorization
 
@@ -145,14 +121,13 @@ and `TEAM_ALLOW_FOREIGN_SESSION` — which MUST NOT be inherited from the sessio
   `TEAM_ALLOW_FOREIGN_SESSION`, and its argv carries no injected `--yes`; the second child's argv carries the
   `--yes` the user typed — and against the real CLI the first run leaves the configuration's bytes unchanged
 
-### Requirement: The command is available where the project installed it
+#### Scenario: The CLI retains every authorization decision
+- **WHEN** a listed invocation reaches the CLI
+- **THEN** write-authorization, dispatch, capacity, identity and lifecycle guards decide exactly as they do for the same tokens in a terminal
+- **AND** the extension has added neither its own confirmation nor an authorization flag
 
-`/team` SHALL be available in the session that runs in the worktree the project-local install targets, and absent
-where that install did not happen: the extension is a project-local Pi extension discovered from the working
-directory's `.pi/extensions/` (the install mode, the conflict table and the doctor row are
-`init-skill#team init installs the project skills` and
-`init-skill#The project-local install is visible in team doctor, and repairable with team init`). It MUST NOT also
-be injected through a second load path for the same session, so the command is registered exactly once.
+### Requirement: The command is available where the project installed it
+`/team` SHALL be available only in the worktree targeted by the project-local install, discovered from that working directory's `.pi/extensions/`. Install mode, conflicts and doctor evidence SHALL remain governed by `init-skill#team init installs the project skills` and `init-skill#The project-local install is visible in team doctor, and repairable with team init`. A second load path MUST NOT register it twice.
 
 #### Scenario: The main worktree session has it; a checkout without the install does not
 
@@ -160,4 +135,3 @@ be injected through a second load path for the same session, so the command is r
 - **WHEN** a Pi session starts in each and its commands are listed
 - **THEN** the main-worktree session offers `/team` and the worktree session does not, and neither registered it
   twice
-

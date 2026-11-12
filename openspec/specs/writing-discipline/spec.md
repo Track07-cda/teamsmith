@@ -4,17 +4,11 @@
 This capability defines evidence-supported writing: claims, cautions and boundaries are kept only when they name
 checkable support and state their effect on the implementation, the next step or the conclusion. It judges support
 and consequence rather than prescribing tone.
-## Requirements
-### Requirement: A caution is kept only with the fact or gap it cites
 
-The writing rule this capability ships SHALL be stated as a criterion about support, never as a preference about
-tone: a sentence that hedges, qualifies, warns or sets a boundary SHALL be kept only when it names something the
-reader can check — a measurement, a counterexample, a gap in the reasoning, or a boundary that was not observed —
-and otherwise SHALL be deleted; when the evidence no longer supports a claim, the text SHALL say what the evidence
-does support instead of narrowing the claim. The rule MUST NOT be phrased as "be more confident", "sound
-assertive", or as any other instruction about tone. It MUST NOT be read as licence to delete boundary statements
-that carry their evidence: such a sentence names exactly what the criterion asks for, so it SHALL survive, and the
-change that ships this rule MUST NOT delete one.
+## Requirements
+
+### Requirement: A caution is kept only with the fact or gap it cites
+The writing rule SHALL judge each caution, qualification, warning or boundary by the evidence it names. It SHALL keep a sentence that names a checkable measurement, counterexample, reasoning gap or unobserved boundary, and SHALL delete one that names none. When evidence no longer supports a claim, the text SHALL state what the evidence does support instead of narrowing the claim.
 
 #### Scenario: A caution that names nothing is a finding; one that names a gap stays
 
@@ -30,13 +24,13 @@ change that ships this rule MUST NOT delete one.
 - **AND** it carries no instruction about sounding more confident or more assertive, and no claim that shorter or
   more forceful prose is the goal
 
-### Requirement: A finding states what it changes, and a change-free observation stays out of the body
+#### Scenario: An evidence-backed boundary survives the rewrite
+- **WHEN** the shipped rule and its change are read
+- **THEN** no instruction to "be more confident", "sound assertive", or otherwise adjust tone replaces the support test
+- **AND** no evidence-backed boundary is deleted, and an unsupported claim is rewritten to state only what its evidence supports
 
-A finding SHALL state what it changes: the implementation, the next step, the conclusion, or nothing at all. The
-consequence SHALL be written in the finding's own text and MUST NOT become a new required column, heading or
-report section, because a required box turns the criterion into ceremony that can be filled without the judgement.
-An observation that changes nothing SHALL NOT be carried in the body of a report, a review or an answer to the
-user; if it is kept at all it goes where it does not stand between the reader and the answer.
+### Requirement: A finding states what it changes, and a change-free observation stays out of the body
+A finding SHALL state in its own text what it changes: the implementation, the next step, the conclusion, or nothing. This consequence MUST NOT become a required column, heading or report section. An observation that changes nothing SHALL NOT appear in the body of a report, review or user answer; if retained, it SHALL be placed where it does not precede or obscure the answer.
 
 #### Scenario: Two observations, one consequence
 
@@ -46,22 +40,7 @@ user; if it is kept at all it goes where it does not stand between the reader an
 - **AND** the shipped report shape gains no new required heading, column or section
 
 ### Requirement: The rule travels on its surfaces, and the review holds it rather than the gate
-
-The rule SHALL travel with the tool instead of living in one project's memory, on the surfaces its authors read.
-The worker-facing protocol section (`templates/AGENTS.section.md.tmpl`) SHALL carry a short block stating that the
-brief's question is answered before its evidence, that a caution naming nothing is deleted, that a boundary is
-claimed only with its evidence and kept when it carries it, and that a finding states what it changed. The prompt
-template the PM is started from (`templates/pm-prompt.md.tmpl`) SHALL state the same four obligations for what the
-PM writes to the user, in the section that already governs user-facing output. The protocol reference SHALL state
-the criterion and its reason in its user-facing section, keeping the vocabulary rule that section already carries.
-The PM's review runbook (`references/workflows.md`, its verification section) SHALL carry the reading rule: every
-finding in a deliverable states what it changed, a caution with no support is a finding rather than thoroughness,
-and a longer or more defensive report is not stronger evidence. The capability SHALL be held by reading rather
-than by the gate: it SHALL add, change or remove no gate assertion and no exit code, because whether a sentence
-earns its place is a judgement about wording. The protocol reference and the review runbook SHALL state that limit
-— no tool verifies that a live author follows the rule, and the gate claims nothing about it — so a surface that
-later loses the rule is caught by the review that reads the diff, never by the gate. The change that ships the rule
-MUST NOT remove a sentence that carries its own evidence.
+The writing rule SHALL travel with the tool on the worker template, PM template, protocol reference and PM review runbook rather than living only in project memory. Those surfaces SHALL state the answer-first, evidence-backed-caution and finding-consequence obligations assigned to them. Human review SHALL hold the rule; no gate assertion or exit code SHALL claim to judge live wording.
 
 #### Scenario: Each surface carries what it owes
 
@@ -81,19 +60,20 @@ MUST NOT remove a sentence that carries its own evidence.
 - **THEN** every deleted sentence is shown to name no fact or gap
 - **AND** no sentence that carries its evidence is removed
 
-### Requirement: The rule's effect is judged by a human read, never by an AI reviewer's score
+#### Scenario: The named surfaces carry their distinct obligations
+- **WHEN** `templates/AGENTS.section.md.tmpl`, `templates/pm-prompt.md.tmpl`, the protocol reference's user-facing section and `references/workflows.md`'s verification section are read
+- **THEN** the worker template answers the brief's question before its evidence, deletes unsupported cautions, keeps evidence-backed boundaries and states what each finding changed
+- **AND** the PM template carries those four obligations in its existing user-facing-output section
+- **AND** the protocol reference states the criterion and its reason while preserving its vocabulary rule
+- **AND** the review runbook requires every finding to state its consequence and rejects unsupported cautions and the idea that longer or more defensive reports are stronger evidence
 
-Whether the rule improves the delivered text SHALL be judged by a human reading two comparable deliverables, one
-produced where the surfaces carry the rule and one where they do not, against a rubric fixed before the read. An
-AI reviewer's score MUST NOT be the acceptance signal, and the reason SHALL stay stated with the requirement: on
-the published measurements an AI reviewer scores the reviewer-oriented rewrite higher (+1.22 on a ten-point scale)
-while human readers (four of them) find it harder to read (−0.70 on a seven-point scale) with comprehension
-unchanged, and LLM judges prefer assertive wording in style-only pairwise comparisons (1,276 of 1,280) even where
-pointwise accuracy shows no hedged-versus-assertive gap. A measurement built on AI scoring would therefore reward
-the text this rule removes. The two deliverables, the rubric and the reader's sheet SHALL be kept where the record
-names them, the arm-to-label mapping SHALL be recorded apart from the reader's sheet, and the comparison SHALL be
-recomputable from those materials. Its outcome SHALL be recorded as one reader's judgement on one task, with that
-limit stated, and MUST NOT be presented as a statistical result.
+#### Scenario: Review owns the wording judgement
+- **WHEN** the protocol reference, review runbook and gate are inspected
+- **THEN** the reference and runbook state that no tool verifies a live author's compliance and the gate claims nothing about it
+- **AND** the capability adds, changes or removes no gate assertion or exit code, so a later wording loss is a review finding rather than a gate result
+
+### Requirement: The rule's effect is judged by a human read, never by an AI reviewer's score
+Whether the rule improves delivered text SHALL be judged by a human reading two comparable deliverables against a rubric fixed before the read. An AI reviewer's score MUST NOT be the acceptance signal. The deliverables, rubric, reader sheet and separately recorded arm-to-label mapping SHALL make the comparison recomputable; its outcome SHALL be presented as one reader's judgement on one task, not a statistical result.
 
 #### Scenario: The comparison is fixed before it is read
 
@@ -107,3 +87,7 @@ limit stated, and MUST NOT be presented as a statistical result.
 - **THEN** no model was asked to score the two deliverables and the acceptance signal is the reader's sheet
 - **AND** the record states the sample's limit (one task, one reader) instead of claiming a statistical result
 
+#### Scenario: Published measurements explain why AI scoring is excluded
+- **WHEN** the requirement's text, or the record it points to, states why AI scoring is excluded
+- **THEN** it cites the reviewer-oriented rewrite's +1.22 AI score on a ten-point scale, four human readers' −0.70 readability result on a seven-point scale with unchanged comprehension, and LLM judges' 1,276-of-1,280 preference for assertive wording in style-only pairwise comparisons despite no pointwise accuracy gap
+- **AND** it explains that AI scoring would therefore reward the text this rule removes, without turning those measurements into the acceptance signal

@@ -4,43 +4,11 @@
 This capability defines a command help surface driven by one command manifest for the menu, group pages and command
 pages. It keeps documented commands, flags and examples aligned with actual behavior, including language, formatting,
 compatibility and evidence that every printed route works.
+
 ## Requirements
+
 ### Requirement: The help surface is a level-0 menu, a page per group and a page per command
-
-The CLI's help surface SHALL have three levels. `team` with no arguments and `team help` print the entry level (the
-level-0 menu). `team help <group>` prints that group's page (level 1). `team help <command>` and
-`team <command> --help` / `team <command> -h` print that command's page (level 2); these two entries SHALL be
-byte-identical to each other and SHALL NOT fall back to the menu. A page belongs to one command; that command's
-subcommands are explained on its page, and a usage line always begins with the top-level command name so that it
-names its own command path.
-
-The surface's structure SHALL come from one machine-readable command manifest (`scripts/strings/commands.tsv`)
-that carries one row per command the dispatcher accepts — its group, usage fragment, flags, subcommands, aliases,
-example commands and its declared effect, authorization, touched-face and reversibility fields — plus the group
-table; the menu, the group pages and the command pages SHALL all render from it, and the walk
-`dispatch#The printed route is a route that works` SHALL take its working set from it. A group id is the token
-level 1 accepts and MUST NOT collide with a command name.
-
-Every command the dispatcher accepts SHALL be reachable through the three levels, and the dispatcher's
-**internal entries** SHALL be the only names outside the surface: an internal entry is a dispatcher label whose
-name begins with `__`, that set SHALL be closed and declared in one place, and the declared set SHALL equal the
-dispatcher's `__`-prefixed labels — a dispatcher label beginning with `__` that the declared set does not name,
-and a declared internal name that is no longer a dispatcher label, SHALL each fail the surface's check naming the
-name. No internal name SHALL be printed on any page, and the manifest MUST NOT carry one. Reachability SHALL be
-judged from the manifest, not from whatever a rendered page happens to yield: the menu SHALL name every group the
-manifest declares and no group it does not, each group page SHALL list that group's commands, and every command
-SHALL have a page; a command whose group has no entry point in the menu, or whose group page does not list it,
-SHALL fail the check naming that command. A name the dispatcher keeps only as an alias is documented on its
-primary's page: asking for it prints the primary's page plus an alias line naming the alias and its primary.
-
-A token that is neither a group nor a command SHALL NOT be answered with a page: `team help <unknown>`,
-`team <unknown> --help` and `team <unknown> -h` SHALL exit 2 — the status the non-help path already uses for an
-unknown subcommand — naming the token and pointing at `team help`. A name the dispatcher accepts MUST NOT be
-refused this way, and a refusal MUST NOT execute any command or write any state.
-
-The help paths SHALL resolve without a project: they MUST NOT load, require or write `.pi/team/config.sh`, they
-SHALL work in a directory that is not a git worktree, and requesting a page MUST NOT run the command the page
-documents nor start any process.
+The help surface SHALL provide a level-0 menu, group pages and command pages rendered from `scripts/strings/commands.tsv` and its group table. Every non-internal dispatcher command SHALL be reachable; declared `__`-prefixed internal entries SHALL be excluded. Unknown help tokens SHALL exit 2 without running commands or writing state. Help SHALL work without a project and MUST NOT execute the documented command.
 
 #### Scenario: The three levels are reachable, and each level answers its own question
 
@@ -86,25 +54,32 @@ documents nor start any process.
 - **WHEN** `team`, `team help`, `team help dispatch` and `team dispatch --help` run there
 - **THEN** all four exit 0 and print the menu or the dispatch page, and the directory gained no file
 
+#### Scenario: Entry forms and manifest fields retain their exact shapes
+- **WHEN** `team`, `team help`, `team help <group>`, `team help <command>`, `team <command> --help` and `team <command> -h` are exercised
+- **THEN** the first two print the level-0 menu, the group form prints level 1, and each command form prints the same level-2 page rather than the menu
+- **AND** a page explains its own command's subcommands and starts every usage line with the top-level command path
+- **AND** the manifest carries each accepted command's group, usage fragment, flags, subcommands, aliases, examples, effect, authorization, touched faces and reversibility, and `dispatch#The printed route is a route that works` takes its working set from that manifest
+- **AND** every level-1 group id resolves without colliding with a command name
+
+#### Scenario: Internal entries and aliases follow the declared manifest contract
+- **GIVEN** the dispatcher labels, the single declared set of internal entries and the manifest
+- **WHEN** their coverage is checked
+- **THEN** the declared set equals the dispatcher's `__`-prefixed labels, with either an undeclared label or a stale declaration failing by name
+- **AND** no internal name appears in the manifest or on a rendered page
+- **AND** reachability is judged from the manifest, whose menu names exactly its groups, whose group pages list their commands and whose commands all have pages, with an unreachable command failing by name
+- **AND** an alias prints its primary's page plus a line naming both the alias and primary
+
+#### Scenario: Unknown help never rejects an accepted command or executes a refusal
+- **WHEN** `team help <unknown>`, `team <unknown> --help` and `team <unknown> -h` run
+- **THEN** each uses the non-help unknown-subcommand status 2, names the token and points at `team help`, without executing a command or writing state
+- **AND** every name the dispatcher accepts remains reachable rather than receiving this refusal
+
+#### Scenario: Help never resolves or runs the project it documents
+- **WHEN** any help page is requested inside or outside a project
+- **THEN** rendering neither loads, requires nor writes `.pi/team/config.sh`, runs the documented command, nor starts any process
+
 ### Requirement: The help surface is English by default and switches language through `TEAM_LANG`
-
-The help surface's prose SHALL be English when `TEAM_LANG` is unset, empty or `en`, and Chinese when it is `zh`.
-Any other value SHALL print one visible warning line naming the value and then the English surface, with the help
-path's exit status unchanged. The language SHALL be resolved from the environment only: the help paths MUST NOT
-read the project contract for it, so the default and the switch behave identically outside a project.
-
-The language SHALL select prose only. Command paths, flag names, usage fragments and the page's part order SHALL
-be byte-identical between the two languages.
-
-A key the selected table lacks SHALL NOT be silent: the printed line SHALL carry a marker naming the missing key
-(the marker contains the key id, so the gap can be searched for), and when the other table carries that key the
-other language's value SHALL be printed in its place; an empty value MUST NOT be printed. Whether the two tables
-are complete is a review question, not a gate's: the gate checks the behaviour (a missing key is visible, never
-blank and never a crash), and the reviewer reads both tables.
-
-`TEAM_LANG` MUST NOT change any command's behaviour or any machine-readable output: for every command whose
-output is consumed by a program (`--json`, `--print`), the bytes SHALL be identical under both languages and
-SHALL be unaffected by the content of the help tables.
+Help prose SHALL default to English when `TEAM_LANG` is unset, empty or `en`, use Chinese for `zh`, and warn once in English for other values without changing exit status. Language SHALL come only from environment. It SHALL change prose, never command paths, flags, usage, part order, command behavior or machine-readable output. Missing keys SHALL be visibly named and fall back to the other language rather than print blank.
 
 #### Scenario: The default is English and the switch is complete
 
@@ -133,33 +108,14 @@ SHALL be unaffected by the content of the help tables.
 - **THEN** every output is byte-identical across the three runs — the help surface changes prose, never a
   program's input
 
+#### Scenario: Table completeness stays a review question while gaps stay visible
+- **GIVEN** a selected prose table that lacks a key present in the other language
+- **WHEN** a page needing that key is rendered
+- **THEN** its marker contains the missing key id, the other language's value is printed, and neither an empty value nor a crash occurs
+- **AND** the gate checks that visible behavior while the reviewer, not the gate, judges whether both tables are complete
+
 ### Requirement: Every behaviour a help page states is declared and probed
-
-The surface's prose SHALL come from the manifest's rows and two parallel language tables keyed by the same prose
-keys, one per language; a page's statement about behaviour SHALL come from its command's manifest row rather
-than from free prose. The row SHALL carry the command's effect, authorization, touched faces and reversibility
-as fields whose values come from closed vocabularies. (What the prose may say about those fields — wording,
-counts, ordering — is a review question; the gate checks the declarations and their probes.)
-
-Interpolation into that prose SHALL go through a closed placeholder set declared in one place. A prose value or a
-manifest field whose text carries a `{…}` token outside that set SHALL NOT be printed literally: rendering a page
-that would print it SHALL fail, naming the token and the table or the field it came from. The same check SHALL
-fail when the declaration names a placeholder the tree no longer uses, so the declared set and the tokens in the
-tree stay equal in both directions.
-
-Every value in those vocabularies SHALL name a probe that makes the claimed effect happen in a scratch fixture:
-a value with no probe SHALL fail the surface's check naming the command and the value, and a probe that does not
-show the claimed effect SHALL fail naming the command. The probes assert effects, never exit codes alone:
-`read-only` runs the command and compares the state fingerprints; `writes-<face>` shows that face changed;
-`starts-<process>` shows the launch recorded by the fixture's shims; `needs-yes` shows the command refuses
-without `--yes`, names `--yes` and writes nothing, and proceeds with it; `idempotent` shows a second run leaves
-the state byte-identical; `undo-by-<cmd>` shows running that command restores the fingerprint.
-
-The usage-line half of the contract lives in `dispatch#The printed route is a route that works`, which judges
-every level's usage lines against the real parser and takes its working set from this surface's manifest. A
-page's `Usage` block SHALL print its manifest row's usage fragment unchanged, and the menu's and group pages'
-lines SHALL print the same fragment, so an argument cannot be printed or explained without the walk that probes
-it.
+Help prose SHALL come from manifest rows and parallel language tables; behavioral statements SHALL use the row's closed-vocabulary effect, authorization, touched-face and reversibility fields. Placeholders SHALL come from one declared closed set, with unknown or stale declarations failing by name. Every vocabulary value SHALL have a fixture probe of its claimed effect. Usage fragments SHALL render unchanged and remain probed by `dispatch#The printed route is a route that works`.
 
 #### Scenario: A claim with no probe is a defect
 
@@ -188,23 +144,24 @@ it.
 - **THEN** the renderer exits non-zero naming the token and the table it came from, and the unmodified tree stays
   green
 
+#### Scenario: Vocabulary values demonstrate effects rather than exit codes alone
+- **WHEN** the declared values are probed in scratch fixtures
+- **THEN** `read-only` compares state fingerprints, `writes-<face>` shows that face changed and `starts-<process>` shows the fixture's recorded launch
+- **AND** `needs-yes` proves refusal without `--yes`, names `--yes`, writes nothing and proceeds with it; `idempotent` proves a second run byte-identical; and `undo-by-<cmd>` proves that command restores the fingerprint
+- **AND** wording, counts and ordering of prose about those fields remain review questions while declarations and probes stay executable
+
+#### Scenario: A stale placeholder declaration fails in the opposite direction
+- **GIVEN** a scratch copy whose declared placeholder set names a token no prose value or manifest field uses
+- **WHEN** the placeholder check runs
+- **THEN** it fails by naming the stale declaration, keeping the declared set and used tokens equal in both directions
+
+#### Scenario: An unknown placeholder identifies its source instead of printing
+- **GIVEN** a prose value or manifest field containing a `{…}` token outside the declared set
+- **WHEN** a page that would print it renders
+- **THEN** rendering fails by naming the token and its source table or field rather than printing the token literally
+
 ### Requirement: The help rewrite changes no command, flag, exit code or machine output
-
-Except for the explicitly retired `team say --now`, command names and flag names SHALL stay unchanged and the
-help surface SHALL print, for every command, at least the flags the pre-change surface printed for it.
-Say's `--now` SHALL be absent from both English and Chinese menus, group/command help, usage and command baselines;
-there is no alias. The old invocation SHALL exit 2 through the existing unknown-flag path, including a flag before
-the recipient and after the message, with no keys, inbox/spool writes, forced audit or active/held Outbox changes.
-This exception retires only say's flag: `outbox flush --now` and `draft send --now` remain visible and functional. The literal expectations other requirements place on help lines
-SHALL keep holding: the `init` line names `.pi/skills`, `--copy` and `--no-skills`; the `add-agent` line prints
-`--register`, `--create`, `--no-install` and `--print` and not `--model`; the `teardown` line prints
-`--register`; the `dispatch` line prints `--branch <name>`.
-
-Apart from the retired say invocation's defined unknown-flag refusal, every existing command's exit codes SHALL be unchanged, and `--print` and `--json` outputs SHALL be
-byte-identical to their pre-change bytes: they are produced by paths that do not read the manifest or the
-language tables, and the help rewrite MUST NOT route them through the help surface. The surface's own defined
-statuses are: a reachable page exits 0, and an unknown token with a help request exits 2 through the same
-refusal the non-help path uses.
+Except for retiring `team say --now`, the help rewrite SHALL preserve command and flag names, existing exit codes, and byte-identical `--print`/`--json` outputs. Say's retired flag SHALL be absent from both languages and exit 2 before delivery; `outbox flush --now` and `draft send --now` SHALL remain. Reachable help SHALL exit 0 and unknown-token help SHALL exit 2. Named literal help expectations SHALL remain.
 
 #### Scenario: The rewritten surface keeps the flags other requirements name
 
@@ -238,24 +195,18 @@ refusal the non-help path uses.
 - **WHEN** `team say --now dev "correction"` and `team say dev "correction" --now` run separately
 - **THEN** each exits 2 naming the unknown flag and every delivery fingerprint is unchanged
 
+#### Scenario: The literal flag expectations remain intact
+- **WHEN** the `init`, `add-agent`, `teardown` and `dispatch` help lines render
+- **THEN** `init` names `.pi/skills`, `--copy` and `--no-skills`; `add-agent` prints `--register`, `--create`, `--no-install` and `--print` but not `--model`; `teardown` prints `--register`; and `dispatch` prints `--branch <name>`
+- **AND** the pre-change surface's remaining command and flag names stay present, apart from the explicitly retired `team say --now`
+
+#### Scenario: Machine output never routes through help rendering
+- **WHEN** `--print` and `--json` outputs are compared before and after the rewrite
+- **THEN** their bytes remain identical because those paths read neither the manifest nor the language tables
+- **AND** the only newly defined refusal is the retired say invocation's exit 2; all other existing command statuses remain unchanged
+
 ### Requirement: The surface's layout is the same in every locale, and never exceeds its width
-
-The bytes the help surface prints SHALL NOT depend on the process locale. For one tree, one `TEAM_LANG` and one
-`TEAM_HELP_WIDTH`, the menu, every group page and every command page SHALL be byte-identical when rendered under
-a non-UTF-8 locale (`LC_ALL=C`) and under a UTF-8 locale (`C.UTF-8` or `en_US.UTF-8`), and every byte the surface
-prints SHALL be valid UTF-8 in every locale.
-
-The surface SHALL measure display width with its own locale-independent counter: a character the surface counts
-as wide counts two cells, and the classification SHALL come from the character's own code point rather than from
-the locale — the renderer MUST NOT take its widths from the locale's multibyte handling (`wcwidth`, `wc -L`, or
-expanding the input at character indices). No printed line SHALL exceed `TEAM_HELP_WIDTH` display cells as
-counted by that counter.
-
-The width knob's behaviour is unchanged: `TEAM_HELP_WIDTH` is read from the environment only, an invalid value
-prints one visible warning and falls back, and the value the surface wraps to never comes from the project
-contract. Wording, the indent ladder, the page depth and the section order are review questions, not this
-requirement's: what is judged here is the same input producing the same bytes in any locale, and the width the
-surface claims to wrap to actually bounding every line.
+For fixed tree, `TEAM_LANG` and `TEAM_HELP_WIDTH`, help output SHALL be byte-identical and valid UTF-8 under non-UTF-8 and UTF-8 locales. A locale-independent code-point counter SHALL measure wide characters as two cells without locale width functions, and no line SHALL exceed `TEAM_HELP_WIDTH`. The environment-only width setting SHALL warn once and fall back when invalid; project configuration SHALL NOT supply it.
 
 #### Scenario: The same page renders the same bytes in a non-UTF-8 locale
 
@@ -271,3 +222,8 @@ surface claims to wrap to actually bounding every line.
 - **THEN** no line exceeds that width in display cells as counted by the fixture's own locale-independent
   counter, and a scratch copy whose renderer measures width through the locale fails naming the page and the line
 
+#### Scenario: Width measurement and review boundaries remain explicit
+- **WHEN** the width renderer and environment-only `TEAM_HELP_WIDTH` handling are inspected
+- **THEN** width classification uses code points rather than `wcwidth`, `wc -L`, locale multibyte handling or expansion at character indices
+- **AND** an invalid width prints one visible warning and falls back without consulting the project contract
+- **AND** wording, indentation, page depth and section order remain review questions; locale-independent bytes and the declared width bound remain the behavioral checks
