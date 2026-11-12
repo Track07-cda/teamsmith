@@ -26,12 +26,13 @@ function regular(path, flags, mode = 0o600) {
   return fd
 }
 
-function configValue(text, key) {
+export function configValue(text, key) {
   const match = new RegExp(`^\\s*(?:export\\s+)?${key}=(.*)\\s*$`, 'm').exec(text)
   if (!match) return null
   const raw = match[1].trim()
-  if ((raw.startsWith("'") && raw.endsWith("'")) || (raw.startsWith('"') && raw.endsWith('"'))) return raw.slice(1, -1)
-  return raw
+  const quoted = /^(["'])(.*)\1(?:[ \t]+#.*)?$/.exec(raw)
+  if (quoted) return quoted[2]
+  return raw.replace(/[ \t]+#.*$/, '').trimEnd()
 }
 
 function verifyConfiguration(identity) {
@@ -78,9 +79,9 @@ function launchRecord(identity, required = false) {
 }
 
 /** Current directed PM proof plus the late-published launch nonce (which may be absent at session_start). */
-export function resolveRemindIdentity(context, env = process.env, { requireLaunch = false } = {}) {
+export function resolveRemindIdentity(context, env = process.env, { requireLaunch = false, checkConfiguration = true } = {}) {
   const identity = resolvePMIdentity(context, env)
-  verifyConfiguration(identity)
+  if (checkConfiguration) verifyConfiguration(identity)
   const launch = launchRecord(identity, requireLaunch)
   return { ...identity, launchNonce: launch.nonce, launchTime: launch.time }
 }
@@ -185,7 +186,10 @@ export function inspectRemindCapability({ root, state, config, session, window, 
       throw new Error('dead/reused/foreign process')
     }
     const actual = tmuxEvidence(runtime.tmux.socket, runtime.tmux.pane)
-    if (!isDeepStrictEqual(actual, runtime.tmux) || actual.session !== session || actual.window !== window || !ancestor(actual.panePid, runtime.pid)) {
+    // A config mismatch makes the generated session/window differ from the live pane by definition.
+    // Error evidence still requires the same live process/pane; ready/hidden evidence also matches current config names.
+    if (!isDeepStrictEqual(actual, runtime.tmux) || !ancestor(actual.panePid, runtime.pid) ||
+        (runtime.status !== 'error' && (actual.session !== session || actual.window !== window))) {
       throw new Error('pane/session changed')
     }
     if (!currentLaunchProof(runtime)) throw new Error('current PM launch proof missing')

@@ -62,7 +62,20 @@ export default async function (pi: ExtensionAPI) {
   const activate = (ctx: ExtensionContext): boolean => {
     let candidate: any
     try { candidate = capability.resolveRemindIdentity(context(ctx), process.env) }
-    catch { return false } // Missing/forged PM evidence stays unknown; no state or error record is invented.
+    catch (e: any) {
+      try {
+        // A valid current PM with invalid generated config gets an explicit load error. This bypasses
+        // only the config comparison for evidence; the tool remains hidden and no Reminder state is touched.
+        expected = capability.resolveRemindIdentity(context(ctx), process.env, { checkConfiguration: false })
+        pi.registerTool({ ...definition('hidden'), defaultActive: false } as any)
+        removeFromModel()
+        publish('error', 'hidden', e?.message ?? String(e))
+      } catch {
+        // Missing/forged PM evidence, or evidence that cannot be written, stays unknown.
+        expected = null
+      }
+      return false
+    }
     expected = candidate
     try {
       pi.registerTool(definition('direct') as any)

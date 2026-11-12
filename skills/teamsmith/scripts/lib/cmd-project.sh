@@ -771,29 +771,32 @@ team_cmd_doctor() {
   # P442 · PM 自我提醒工具：证据只来自当前扩展自己发布的注册/错误记录，并与活进程和启动记录核对。
   # 查不到另一个 Pi 进程里的工具表，所以缺失/过期/不匹配只能报 unknown，不能报加载失败或成功。
   check "PM 提醒工具"
-  if [ -n "$(team_trim "${TEAM_PM_CMD:-}${TEAM_PM_BIN:-}")" ]; then
-    warn "unknown：自定义 PM adapter 不支持 team_remind 能力证据"
-  elif [[ "$pmstate" != running:* ]]; then
-    warn "not-running：PM 未在运行（$pmstate）"
-  else
-    local remind_runner remind_runtime
-    remind_runner="$(team_js_runner)"
-    if [ -z "$remind_runner" ]; then
-      warn "unknown：无可用 JS 运行时，未核实注册证据"
-    elif remind_runtime="$(team_readonly_run "$remind_runner" -e '
+  local remind_runner remind_runtime="" remind_inspect_rc=0
+  remind_runner="$(team_js_runner)"
+  if [ -n "$remind_runner" ] && { [[ "$pmstate" == running:* ]] || [ -f "$TEAM_STATE_DIR/remind-tool/current.json" ]; }; then
+    remind_runtime="$(team_readonly_run "$remind_runner" -e '
       import(require("node:url").pathToFileURL(process.argv[1]).href).then(m => {
         const [root,state,config,session,window,skill] = process.argv.slice(2);
         const r = m.inspectRemindCapability({root,state,config,session,window,skill});
         console.log(`${r.state} ${r.reason}; at=${r.at || "unknown"}; loaded=${r.loaded || "unknown"}; disk=${r.disk || "unknown"}`);
       }).catch(e => { console.error(`capability diagnostic unavailable: ${e.code || e.name}`); process.exitCode=1 })
-      ' "$TEAM_SKILL_DIR/scripts/remind-capability.mjs" "$TEAM_MAIN_ROOT" "$TEAM_STATE_DIR" "${TEAM_CONFIG:-${TEAM_CONFIG_FILE:-}}" "$TEAM_SESSION" "$TEAM_PM_WINDOW" "$TEAM_SKILL_DIR")"; then
-      case "$remind_runtime" in
-        ready\ *) pass "$remind_runtime" ;;
-        error\ *) warn "$remind_runtime" ;;
-        *) warn "$remind_runtime" ;;
-      esac
-    else warn "unknown：注册证据诊断执行失败（未当作启用或加载失败）"; fi
+      ' "$TEAM_SKILL_DIR/scripts/remind-capability.mjs" "$TEAM_MAIN_ROOT" "$TEAM_STATE_DIR" "${TEAM_CONFIG:-${TEAM_CONFIG_FILE:-}}" "$TEAM_SESSION" "$TEAM_PM_WINDOW" "$TEAM_SKILL_DIR")" || remind_inspect_rc=$?
   fi
+  if [ -n "$(team_trim "${TEAM_PM_CMD:-}${TEAM_PM_BIN:-}")" ]; then
+    warn "unknown：自定义 PM adapter 不支持 team_remind 能力证据"
+  elif [[ "$remind_runtime" == error\ * ]]; then
+    # A live extension can diagnose a bad generated session/window even though that same config hides the PM pane.
+    warn "$remind_runtime"
+  elif [[ "$pmstate" != running:* ]]; then
+    warn "not-running：PM 未在运行（$pmstate）"
+  elif [ -z "$remind_runner" ]; then
+    warn "unknown：无可用 JS 运行时，未核实注册证据"
+  elif [ "$remind_inspect_rc" -eq 0 ] && [ -n "$remind_runtime" ]; then
+    case "$remind_runtime" in
+      ready\ *) pass "$remind_runtime" ;;
+      *) warn "$remind_runtime" ;;
+    esac
+  else warn "unknown：注册证据诊断执行失败（未当作启用或加载失败）"; fi
 
   # M46 · 投递通道：PM 没有 inbox-watch 注册时，通知会退回输入框粘贴慢路径 —— 这条降级必须看得见。
   # 只在「内置 Pi 的 PM」这条 lane 上判（自定义 PM CLI 不吃这个扩展，绝不劝告）；PM 没在跑且

@@ -77,7 +77,7 @@ function doctor(info) {
 }
 async function start(name, respond, opts = {}) {
   const dir = join(evidence, name), root = join(temporary, name), home = join(root, 'home'), state = join(root, '.pi/team/state'), config = join(root, '.pi/team/config.sh')
-  for (const path of [dir, home, state, join(root, 'docs/team/tasks'), join(root, 'docs/team/inbox'), join(root, 'docs/team/outbox'), join(home, '.pi/agent')]) mkdirSync(path, { recursive: true })
+  for (const path of [dir, home, join(home, '.pi/agent')]) mkdirSync(path, { recursive: true })
   const runSkill = opts.skillCopy ? join(root, 'skill') : skill
   if (opts.skillCopy) cpSync(skill, runSkill, { recursive: true })
   if (opts.mutate) opts.mutate(runSkill)
@@ -85,10 +85,15 @@ async function start(name, respond, opts = {}) {
   command('git', ['init', '-q', '-b', 'main'], { cwd: root })
   const session = `p442-${name}`, fixture = join(tests, 'fixtures/remind-tool-provider.ts')
   const extra = `--offline --no-extensions --no-skills --no-context-files -e ${sh(fixture)}`
-  writeFileSync(config, `TEAM_PROJECT='${session}'\nTEAM_SESSION='${session}'\nTEAM_PM_WINDOW='pm'\nTEAM_PM_MODEL='p442/controlled'\nTEAM_TASK_MODELS='routine=p442/controlled analysis=p442/controlled verify=p442/controlled code=p442/controlled'\nTEAM_VCS='local'\nTEAM_PI_THEME='dark'\nTEAM_PI_BIN=${sh(pi)}\nTEAM_PM_EXTRA_PI_ARGS=${sh(extra)}\n`)
+  command('bash', [join(skill, 'scripts/team'), 'init', '--no-skills', '--session', session,
+    '--agents', 'dev', '--vcs', 'local', '--gates', 'true', '--pm-model', 'p442/controlled',
+    '--task-models', 'routine=p442/controlled analysis=p442/controlled verify=p442/controlled code=p442/controlled'], { cwd: root, env: base })
+  writeFileSync(join(dir, 'config.generated.sh'), readFileSync(config))
+  for (const path of [state, join(root, 'docs/team/tasks'), join(root, 'docs/team/inbox'), join(root, 'docs/team/outbox')]) mkdirSync(path, { recursive: true })
   const prompt = join(state, 'pm-prompt.md'); writeFileSync(prompt, `CASE ${name}\n`)
   const env = { ...base, HOME: home, PI_CODING_AGENT_DIR: join(home, '.pi/agent'), P442_EVIDENCE: dir,
-    P442_ENDPOINT: `http://127.0.0.1:${port}/${name}/v1`, TEAM_REMIND_POLL_MS: '200', ...(opts.env ?? {}) }
+    P442_ENDPOINT: `http://127.0.0.1:${port}/${name}/v1`, TEAM_REMIND_POLL_MS: '200',
+    TEAM_PI_BIN: pi, TEAM_PM_EXTRA_PI_ARGS: extra, ...(opts.env ?? {}) }
   const info = { name, dir, root, home, state, config, session, env, skill: runSkill, pane: '', done: join(dir, 'done') }
   let launch
   if (['ordinary', 'worker'].includes(opts.invalid)) {
@@ -104,6 +109,9 @@ async function start(name, respond, opts = {}) {
     launch = command('bash', ['-c', sourceScript], { cwd: root, env })
     if (opts.invalid === 'no-entry') launch = launch.replace(` -e ${join(runSkill, 'extension/team-remind.ts')}`, '')
   }
+  // Mutate after computing the directed launch so its environment still belongs to the real pane.
+  // The extension then rejects the changed file, matching a live config edit rather than a forged launch.
+  if (opts.configure) opts.configure(config)
   if (opts.earlierHandler) {
     const watcher = join(runSkill, 'extension/team-inbox-watch.ts')
     const earlier = join(runSkill, 'tests/fixtures/remind-adversarial-delay.ts')
@@ -246,6 +254,26 @@ const final = text => ({ text })
 const large = `${'x'.repeat(64 * 1024)}\n`
 const hasExact = (value, target) => value === target || (Array.isArray(value) ? value.some(item => hasExact(item, target))
   : value && typeof value === 'object' ? Object.values(value).some(item => hasExact(item, target)) : false)
+const mismatchGeneratedSession = config => {
+  const source = readFileSync(config, 'utf8')
+  const changed = source.replace(/^TEAM_SESSION=.*$/m, "TEAM_SESSION='p442-not-the-directed-session'")
+  assert.notEqual(changed, source, 'change only the generated TEAM_SESSION line')
+  writeFileSync(config, changed)
+}
+function assertConfigMismatch(info) {
+  const evidence = join(info.state, 'remind-tool/current.json')
+  assert(existsSync(evidence), 'mismatched config leaves visible error evidence')
+  const record = json(evidence)
+  assert.equal(record.status, 'error', 'mismatched config records status=error')
+  assert.equal(record.exposure, 'hidden', 'mismatched config never exposes the tool')
+  assert.match(record.reason, /PM config TEAM_SESSION does not match the directed launch/, 'error evidence names the mismatched key')
+  const started = events(info).filter(e => e.type === 'session_start').at(-1)
+  assert.equal(started.reminderTools[0]?.exposure, 'hidden', 'real Pi registers only the hidden tool')
+  assert(!started.activeTools.includes('team_remind'), 'real Pi active tools exclude team_remind')
+  assert.match(doctor(info), /PM 提醒工具\s+.*error PM config TEAM_SESSION does not match the directed launch/,
+    'doctor reports the configuration error instead of unknown or ready')
+  assert(!existsSync(join(info.state, 'reminders/state.json')), 'rejected config touches no Reminder state')
+}
 
 try {
   if (selection.includes('pm')) await test('PM add/list/show/cancel, retry, observed same-key renewal and no-key IDs', async () => {
@@ -264,6 +292,9 @@ try {
       if (n === 9) return sse(res, { name: 'pm', tool: { n, input: { action: 'cancel', id: ids()[3] } } })
       return sse(res, { name: 'pm', ...final('PM reminder tool sequence complete') })
     }, { deferFirstResponse: true })
+    const generated = readFileSync(info.config, 'utf8')
+    assert.match(generated, /^TEAM_SESSION=.*\s+# tmux session name/m, 'fixture keeps the generated TEAM_SESSION trailing comment')
+    assert.match(generated, /^TEAM_PM_WINDOW=.*\s+# window running the PM/m, 'fixture keeps the generated TEAM_PM_WINDOW trailing comment')
     try {
       await until(() => requests(info).length >= 3 && events(info).some(e => e.type === 'agent_settled'), 'initial add and retry settle')
       let snap = snapshot(info.state)
@@ -660,6 +691,34 @@ try {
         await until(() => events(info).some(e => e.type === 'agent_settled'), 'no-entry response')
         assert.match(doctor(info), /PM 提醒工具\s+.*unknown evidence:ENOENT/)
         assert(!existsSync(join(info.state, 'reminders/state.json')))
+      } finally { await stop(info) }
+    })
+    await test('generated config mismatch hides the tool and leaves a specific doctor error', async () => {
+      const info = await start('config-mismatch', async ({ n, res }) => sse(res, { name: 'config-mismatch', ...final('config mismatch') }), {
+        configure: mismatchGeneratedSession, deferFirstResponse: true,
+      })
+      try {
+        await until(() => existsSync(join(info.state, 'remind-tool/current.json')) && events(info).some(e => e.type === 'agent_settled'), 'config mismatch settles')
+        assertConfigMismatch(info)
+      } finally { await stop(info) }
+    })
+    await test('flip: deleting config-error evidence turns the named visibility assertion red', async () => {
+      const info = await start('config-error-flip', async ({ n, res }) => sse(res, { name: 'config-error-flip', ...final('config error flip') }), {
+        skillCopy: true, configure: mismatchGeneratedSession, deferFirstResponse: true,
+        mutate: copied => {
+          const path = join(copied, 'extension/team-remind.ts'), source = readFileSync(path, 'utf8')
+          const anchor = "        publish('error', 'hidden', e?.message ?? String(e))"
+          assert.equal(source.split(anchor).length, 2)
+          writeFileSync(path, source.replace(anchor, '        // P450 flip: config-error evidence write removed'))
+        },
+      })
+      try {
+        await until(() => events(info).some(e => e.type === 'agent_settled'), 'config error flip settles')
+        let failure
+        try { assertConfigMismatch(info) } catch (e) { failure = e }
+        assert.match(failure?.message ?? '', /mismatched config leaves visible error evidence/,
+          'removing the write must fail the named error-evidence assertion')
+        console.log(`EXPECTED RED config-error evidence: ${failure.message.split('\n')[0]}`)
       } finally { await stop(info) }
     })
     await test('explicit bootstrap failure is error while fresh', async () => {

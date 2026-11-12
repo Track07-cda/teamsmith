@@ -25115,7 +25115,7 @@ if [ ! -f "$P442_NODE_FIX" ]; then
 else
   node "$P442_NODE_FIX" >"$TMP/p442-remind-tool-node.log" 2>&1; P442_NODE_RC=$?
   if [ "$P442_NODE_RC" -eq 0 ]; then
-    assert_has "$TMP/p442-remind-tool-node.log" "remind-tool-node: passed=7 failed=0" "P442 假宿主：身份零读写与全文红绿全绿"
+    assert_has "$TMP/p442-remind-tool-node.log" "remind-tool-node: passed=9 failed=0" "P442 假宿主：身份零读写、配置解析与全文红绿全绿"
   else
     bad "P442 假宿主工具夹具红（rc=$P442_NODE_RC）"
     tail -12 "$TMP/p442-remind-tool-node.log" | sed 's/^/      /'
@@ -25131,7 +25131,7 @@ elif ! command -v "${P442_PI:-$HOME/.bun/bin/pi}" >/dev/null 2>&1; then
 else
   bash "$P442_REAL_FIX" >"$TMP/p442-remind-tool-real.log" 2>&1; P442_REAL_RC=$?
   if [ "$P442_REAL_RC" -eq 0 ]; then
-    assert_has "$TMP/p442-remind-tool-real.log" "remind-tool-real: passed=8 failed=0" "P442 真实 Pi：PM 工具/身份/doctor 八组全绿"
+    assert_has "$TMP/p442-remind-tool-real.log" "remind-tool-real: passed=10 failed=0" "P442 真实 Pi：PM 工具/身份/配置错误/doctor 十组全绿"
   else
     bad "P442 真实 Pi 工具夹具红（rc=$P442_REAL_RC）"
     tail -16 "$TMP/p442-remind-tool-real.log" | sed 's/^/      /'

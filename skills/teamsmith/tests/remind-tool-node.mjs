@@ -86,6 +86,38 @@ try {
   // Direct authority presentation: no key means independent IDs; a 64 KiB body and its final newline survive.
   rmSync(snapshot, { force: true })
   const capability = await import(pathToFileURL(join(skill, 'scripts/remind-capability.mjs')).href)
+  const assertConfigValues = module => {
+    const parse = (value, key = 'TEAM_SESSION') => module.configValue(`${key}=${value}\n`, key)
+    assert.equal(parse('"p442-node"    # tmux session name'), 'p442-node', 'default generated quoted value with trailing comment')
+    assert.equal(parse('"p442#node" # hash inside quotes'), 'p442#node', 'quoted # belongs to the value')
+    assert.equal(parse("'p442#node'\t# hash inside quotes"), 'p442#node', 'single-quoted # belongs to the value')
+    assert.equal(parse('p442-node    # tmux session name'), 'p442-node', 'unquoted value loses its whitespace-delimited comment')
+    assert.equal(parse('p442#node'), 'p442#node', 'unquoted # without preceding whitespace belongs to the value')
+  }
+  assertConfigValues(capability)
+  pass('config: default comments, quoted hashes and unquoted values parse by behavior')
+
+  const legacyParser = `export function configValue(text, key) {
+  const match = new RegExp(\`^\\\\s*(?:export\\\\s+)?\${key}=(.*)\\\\s*$\`, 'm').exec(text)
+  if (!match) return null
+  const raw = match[1].trim()
+  if ((raw.startsWith("'") && raw.endsWith("'")) || (raw.startsWith('"') && raw.endsWith('"'))) return raw.slice(1, -1)
+  return raw
+}`
+  const currentParser = readFileSync(join(skill, 'scripts/remind-capability.mjs'), 'utf8').match(/export function configValue\(text, key\) \{[\s\S]*?\n\}/)?.[0]
+  assert(currentParser, 'locate the current configValue for the legacy flip')
+  const legacyPath = join(root, 'legacy-config.mjs')
+  writeFileSync(legacyPath, readFileSync(join(skill, 'scripts/remind-capability.mjs'), 'utf8')
+    .replace(currentParser, () => legacyParser)
+    .replace("'./reply-capture.mjs'", JSON.stringify(pathToFileURL(join(skill, 'scripts/reply-capture.mjs')).href)))
+  const legacy = await import(pathToFileURL(legacyPath).href)
+  let legacyFailure
+  try { assertConfigValues(legacy) } catch (e) { legacyFailure = e }
+  assert.match(legacyFailure?.message ?? '', /default generated quoted value with trailing comment/,
+    'restoring the old parser must turn the named default-config assertion red')
+  console.log(`EXPECTED RED configValue: ${legacyFailure.message.split('\n')[0]}`)
+  pass('flip: restoring old configValue turns the named default-config assertion red')
+
   const identity = { root: repo, state, config }
   const capabilityRecord = generation => ({ generation, extensionVersion: 'fixture', status: 'registered', exposure: 'direct' })
   capability.publishRemindCapability(identity, capabilityRecord('before-remove'))
