@@ -654,7 +654,7 @@
 | P405 | §2 init 段自带 cwd | dev | - | - | done |
 | P406 | 自我提醒 1.1-1.2 共享权威 | dev | - | - | done |
 | P407 | CI 钉 OpenSpec 1.16 + 非 strict 门禁 | dev | - | - | done |
-| P408 | 长需求拆分试点（3 份小规格） | dev | - | - | review |
+| P408 | 长需求拆分试点（3 份小规格） | dev | - | - | wip |
 | V128 | P406 独立复验 | dev | - | - | done |
 | P409 | team remind CLI 与视图 | dev | - | - | done |
 | P410 | 一阶/二阶测试分层 | dev | - | - | done |
