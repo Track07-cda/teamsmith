@@ -1,0 +1,3 @@
+A: PASS — digest/BOARD/task-branch report/Git reconciled; committed implementation recognized; existing non-implementer review route selected; no acceptance gates or pane reads.
+B: PASS — live job and uncommitted draft reconciled; no delivery declared; wait retained; no acceptance gates or pane reads.
+Old-prompt control: not run; no prompt flip is claimed.

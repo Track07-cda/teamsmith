@@ -89,8 +89,13 @@ when they conflict, the creed wins and the process gets fixed.
    `category:` picks a new dispatch's model; dispatching again to the same agent resumes its session, and `--fresh` is
    the explicit new-session route. The `change:`/`specs:`/`anchor:`/`deltas:` header is checked **before the window
    opens**, and a refusal names the offending line, the sibling and the fix.
-3. **Wait for notifications**: when a worker's turn ends it appends to `inbox/<agent>.md` and knocks on your window.
-   Do not poll agent screens; read `team inbox --ack` and `team digest`.
+3. **Wait with notifications first and files as the authority**: when a worker's turn ends it appends to
+   `inbox/<agent>.md` and knocks on your window; read `team inbox --ack` and `team digest`. Before repeating an
+   unchanged waiting report, reconcile the digest, BOARD, task-branch report and task-worktree `git log`/`status`.
+   Use `git show <task-branch>:docs/team/reports/<ID>-<agent>.md` without switching branches; an uncommitted report
+   is a draft. An old tip, no new notice or a merged line does not prove unfinished work. Recognize a committed
+   final report through the existing acceptance route, keep a live job without one on wait/harvest, do not poll
+   agent screens, and do not rerun the assigned non-implementer verifier's acceptance tests yourself.
 4. **Delegate verification (never skip)**: prepare a clean, independent checkout; a non-implementer verifier runs
    `team review <ID> --dir <checkout>` and the tool writes the named central record/log. **A report is a claim; the
    verifier's execution is the evidence; your evidence/diff review is acceptance, not a gate run.** Re-read the diff

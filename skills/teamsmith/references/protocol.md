@@ -74,7 +74,10 @@ Guards and limitations:
   never falls back to `send-keys`, and a failed enqueue is logged while the inbox line stays.
 - The inbox is transient state (gitignored); the durable record is still the report + verification + decision log.
 - **Settles inside one stretch of work become one line, not one line each**: consecutive notices with the same
-  merge key (seat, task, state class, `awaiting=` set) fold into the line at the end of the inbox file, which then
+  merge key (seat, task, state class, `awaiting=` set, delivered revision) fold into the line at the end of the
+  inbox file. The last component is the twelve-character `tip=` only for delivered lines, or one shared no-revision
+  marker when no tip can be proven; suspended and interrupted progress ignore tips and keep merging. Different
+  delivered tips start separate lines and wake once each; same-tip events merge without another wake. A merged line
   carries `×N first=<ISO> last=<ISO>` and the **field values of the last event** (`tip=`, `branch=`, `uncommitted=`).
   The line is a **window summary**, not the seat's current state: `last=` names the event whose revision it
   describes, and the run's earlier events are read from the detail file with `team inbox <agent> --detail` (raw
@@ -132,7 +135,11 @@ Guards and limitations:
   it, a harvested job stays silent, several finishing jobs arrive as one message, and every turn end appends
   `settled-with-unharvested=<n>` to `state/bg.log` (runbook: `workflows.md` §E2).
   - **The identity record** (P159): the extension writes `state/bg/<id>.job` **before** it returns the id — `id`,
-    `pid`, `pgid`, `start` (the start-time fingerprint from `/proc/<pid>/stat`), `cwd`, `log`, `cmd`.
+    `pid`, `pgid`, `start` (the start-time fingerprint from `/proc/<pid>/stat`), `session_cwd`, `cwd`, `log`, `cmd`.
+    `session_cwd` is the absolute initiating session directory; `cwd` remains the command's execution directory and
+    may be an independent checkout. Suspension ownership uses only `session_cwd` after the same live
+    `(pid, start-time)` validation. A legacy record without that field is accepted only when `cwd` resolves exactly
+    to the seat worktree; relative, missing, foreign, subdirectory and independent-checkout paths belong to no seat.
     `team bg list` prints one row per record of **this** project's state directory and signals nothing;
     `team bg stop <id>` signals exactly the recorded job and prints what it signalled. Identity is
     `(pid, start-time)`: the pid must be alive **and** the fingerprint must match, so a reused pid is refused

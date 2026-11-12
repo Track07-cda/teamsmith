@@ -16,13 +16,12 @@
 #                  死 pid / pid 复用 / 畸形记录 → 今天的形状；中断 + 活记录 → [auto·interrupted] + awaiting=；
 #                  车道目录按**车道自己的规则**解析（worktree 自带 config / 显式 TEAM_STATE_DIR 都不许被
 #                  notify 自己的 root 顶替）。
-#   owner-scope   挂起判定**按归属范围**（P236）：同一车道目录里的记录可能属于别的席位 —— 记录里的
-#                  cwd 必须解析到本会话自己的工作树/cwd 才算「我的作业」；多席位各有作业时各自只认自己的
-#                  id；空席位（dev2 与 dev3 两个非拥有者）不被别人的作业打成挂起；缺 cwd / 相对 cwd /
-#                  解析不出来的畸形记录不判挂起（fail-closed）；软链与尾斜杠按真实路径归一。
-#   merge         turn-notice-merge 的写入面（P251）：合并键四分量（席位/任务/状态类/awaiting 集合）、
+#   owner-scope   挂起判定**按发起身份**：新记录只看 session_cwd，执行 cwd 可以是独立 clone；显式外来身份
+#                  不回退到 cwd。旧记录只在 cwd 恰好解析到席位工作树时兼容；子目录、独立 clone、他人与
+#                  无效路径都不收养。独立 clone 的挂起不敲，最终 delivered 新行恰好敲一次。
+#   merge         turn-notice-merge 的写入面：合并键五分量（席位/任务/状态类/awaiting 集合/delivered tip）、
 #                  汇总行的形状（最后一条事件的行 + ×N first= last=）与最后一条的值、尾行锚、跨类/跨任务/
-#                  跨 awaiting 不合并、去重窗口语义、行计数读者（未读 + --ack）与陈旧判据。
+#                  跨 awaiting 不合并；不同 delivered tip 新行，同 tip 合并，suspended/interrupted 跨 tip 合并。
 #   detail        明细文件（state/notify.log）：一行一事件、先明细后合并（×N 与记录数一致）、
 #                  TEAM_NOTIFY_DETAIL_MAX 上界与一代轮转（轮转头 + 扩展日志）、`team inbox --detail`
 #                  的读面（缺文件/被轮转出去要点名 state/notify.log.1 并非零退出、只读不 ack）。
@@ -168,7 +167,7 @@ run_harness() { # <tag> <groups> [<bg> <notify>] → rc；stdout+stderr 落 $TMP
   # P251：带 wake 的组要「有 PM 窗口」的形状 —— 假 tmux 必须在 runner **启动前**进 PATH（bun 缓存在
   # 启动时读的 PATH，运行中改 process.env.PATH 对子进程查找无效；实测）。只加给带 wake 的组。
   local tag="$1" groups="$2" bg="${3:-$BG_EXT}" notify="${4:-$NOTIFY_EXT}" path_pre="$PATH"
-  case ",$groups," in *,wake,*) path_pre="$KNOCK_SHIM:$PATH" ;; esac
+  case ",$groups," in *,wake,*|*,owner-scope,*) path_pre="$KNOCK_SHIM:$PATH" ;; esac
   env PATH="$path_pre" "$RUNNER" "$HARNESS" --bg "$bg" --notify "$notify" --root "$FIX" --groups "$groups" --marker "$MARKER" \
     >"$TMP/h-$tag.log" 2>&1
 }
@@ -285,7 +284,7 @@ if selects flip; then
   expect_red flip-own-root "suspend: a worktree carrying its own config uses its own lane records" "$TMP/h-flip-green.log"
 
   # ⑥ 删掉归属判据（退回「同一车道目录里有活作业即算」）→ 归属用例必须红
-  M6="$(flip_mut owner-scope "$NOTIFY_EXT" "s#if (!isOwnedCwd(fields.cwd ?? '', owned)) continue#if (false) continue#")"
+  M6="$(flip_mut owner-scope "$NOTIFY_EXT" "s#if (!isOwnedJob(fields, owned, legacyWorktree)) continue#if (false) continue#")"
   flip_premise owner-scope "$M6" 'if (false) continue' has
   run_harness flip-owner-scope owner-scope "$BG_EXT" "$M6"
   expect_red flip-owner-scope "owner-scope: each seat suspends on its own job only" "$TMP/h-flip-green.log"
@@ -293,6 +292,13 @@ if selects flip; then
   expect_red flip-owner-scope "owner-scope: a seat with no job of its own is not suspended by another seat’s job (dev3)" "$TMP/h-flip-green.log"
   expect_red flip-owner-scope "owner-scope: a live record with a missing, relative or unresolvable cwd does not suspend (fail-closed)" "$TMP/h-flip-green.log"
   expect_red flip-owner-scope "owner-scope: a job started from the main worktree does not suspend a seat" "$TMP/h-flip-green.log"
+
+  # ⑥b 丢掉发起身份、退回执行 cwd：独立 clone 不再挂起，显式他人身份还会被错误收养。
+  M6B="$(flip_mut initiator-fallback "$NOTIFY_EXT" "s#if (!isOwnedJob(fields, owned, legacyWorktree)) continue#if (!isOwnedCwd(fields.cwd ?? '', owned)) continue#")"
+  flip_premise initiator-fallback "$M6B" "if (!isOwnedCwd(fields.cwd ?? '', owned)) continue" has
+  run_harness flip-initiator-fallback owner-scope "$BG_EXT" "$M6B"
+  expect_red flip-initiator-fallback "owner-scope: an independent-checkout job becomes one final delivery wake" "$TMP/h-flip-green.log"
+  expect_red flip-initiator-fallback "owner-scope: a live record with a missing, relative or unresolvable cwd does not suspend (fail-closed)" "$TMP/h-flip-green.log"
 
   # ── P251 · turn-notice-merge 的写入面红侧（merge/detail/wake）────────────────────────────
   # 扩展的 skillDir() = 它自己目录的父目录 → CLI 侧的合并/明细代码与扩展侧的叫醒代码必须在**同一棵
@@ -387,8 +393,8 @@ if selects flip; then
 
   # ⑯ 用摘要文本当 knock 去重键 → 文本逐字相同的两条不同行互吞
   M16="$(flip_tree wake-summarykey)"
-  F16="$(flip_tree_sed wake-summarykey extension/team-notify.ts 's#const lineIdentity = .*#const lineIdentity = `line|${agent}|${summary}`#')"
-  flip_premise wake-summarykey "$F16" 'const lineIdentity = `line|${agent}|${summary}`' has
+  F16="$(flip_tree_sed wake-summarykey extension/team-notify.ts 's#identity = `line|${mergeKey}|${firstEvent}`#identity = `line|${agent}|${summary}`#')"
+  flip_premise wake-summarykey "$F16" 'identity = `line|${agent}|${summary}`' has
   run_harness flip-wake-summarykey wake "$BG_EXT" "$M16"
   expect_red flip-wake-summarykey "wake: two text-identical lines are not conflated" "$TMP/h-flip-green-notify.log"
 
@@ -416,6 +422,14 @@ if selects flip; then
   flip_premise merge-off "$F19" 'P368FLIP pointer leg does not merge' has
   run_harness flip-merge-off merge "$BG_EXT" "$M19"
   expect_red flip-merge-off "merge: line-counting readers count a merged line once" "$TMP/h-flip-green-notify.log"
+
+  # ⑳ 删除 delivered 的 tip 分量：不同修订又静默合并，记录行与叫醒两组都必须按名变红。
+  M20="$(flip_tree merge-delivered-tip)"
+  F20="$(flip_tree_sed merge-delivered-tip scripts/lib/cmd-agents.sh 's#"$seat" "$class" "$t" "$nrm" "$rev"#"$seat" "$class" "$t" "$nrm" "-"#')"
+  flip_premise merge-delivered-tip "$F20" '"$seat" "$class" "$t" "$nrm" "-"' has
+  run_harness flip-merge-delivered-tip merge,wake "$BG_EXT" "$M20"
+  expect_red flip-merge-delivered-tip "merge: each delivered revision starts a new line and same-tip events merge" "$TMP/h-flip-green-notify.log"
+  expect_red flip-merge-delivered-tip "wake: each delivered revision wakes once and same-tip churn stays merged" "$TMP/h-flip-green-notify.log"
 
   # 还原后绿：pristine 树重跑一遍（上面所有破坏都只写 scratch 副本）
   section "flip · 还原后绿（pristine 树重跑）"

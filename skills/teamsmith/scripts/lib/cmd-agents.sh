@@ -1763,13 +1763,14 @@ team_inbox_append() { # <agent> <tag> <msg> [<sender>]
 #      明细记录数；明细写失败 → 本事件不合并、行带 `detail=unavailable`、日志点名，该行也不做锚；
 #   ④ 只有 [auto*] 类行参与合并与明细；[manual]/[draft]/[nudge]/pulse 行原样追加。
 
-# 行 → 合并键（seat|class|task|awaiting）。非 [auto*] 类 / 解析不成立 → rc 1（调用方按「不可合并」处理）。
+# 行 → 合并键（seat|class|task|awaiting|delivered-tip）。非 [auto*] 类 / 解析不成立 → rc 1。
 # awaiting 是**集合**（去重、排序；缺字段与空集是两个不同的值）；task 取 task= 戳里的 ID，否则取
-# agent 后的第一个 <ID> token；branch/tip/uncommitted 不进键（它们只更新显示值）。
+# agent 后的第一个 <ID> token。只有 delivered 用十二位 tip 分量区分修订；无戳发送者用统一的 NOREV，
+# suspended/interrupted 用空标记，所以它们的跨 tip 进度仍合并。branch/uncommitted 只更新显示值。
 team_notify_line_key() {
   local body="$1"
   case "$body" in '- '*) body="${body#- }" ;; esac
-  local iso rest tag class seat fields aw nrm t
+  local iso rest tag class seat fields aw nrm t rev
   iso="${body%% *}"
   case "$iso" in ''|*[!0-9TZ:.-]*) return 1 ;; esac
   rest="${body#"$iso" }"
@@ -1811,7 +1812,12 @@ team_notify_line_key() {
     t="${t%% *}"
   fi
   [ -n "$t" ] || t='?'
-  printf '%s|%s|%s|%s\n' "$seat" "$class" "$t" "$nrm"
+  rev='-'
+  if [ "$class" = delivered ]; then
+    rev='NOREV'
+    if [[ "$fields" =~ tip=([0-9a-f]{12})([[:space:]]|$) ]]; then rev="T:${BASH_REMATCH[1]}"; fi
+  fi
+  printf '%s|%s|%s|%s|%s\n' "$seat" "$class" "$t" "$nrm" "$rev"
 }
 
 # 尾行能不能当锚：带 detail=unavailable 的行不是锚（否则下一次成功的事件会把它抹掉，缺口就不可见了）。

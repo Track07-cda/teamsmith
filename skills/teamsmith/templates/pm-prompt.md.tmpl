@@ -84,8 +84,13 @@ dispatch a non-implementer worker to run `openspec archive -y <change>` on its o
 1. **Model it**: `team status` / `team board ls`, and `{{DOCS_DIR}}/ROADMAP.md`.
 2. **Dispatch**: write a self-contained brief (context / deliverables / boundaries / copy-pasteable acceptance
    commands), then `team dispatch <agent> <ID> <taskfile>`; check `team ps` first when capacity is tight.
-3. **Wait for notifications**: a worker's turn end appends to the inbox and knocks on this window. Do not poll their
-   screens.
+3. **Wait with notifications first and files as the authority**: a worker's turn end appends to the inbox and
+   knocks on this window. Before repeating an unchanged waiting report, reconcile `team digest`, BOARD, the
+   task-branch report and the task worktree's `git log`/`status`. Read a committed report without switching
+   branches: `git show <task-branch>:{{DOCS_DIR}}/reports/<ID>-<agent>.md`; an uncommitted report is a draft.
+   An old tip, no new notice or a merged line does not prove unfinished work. A committed final report enters the
+   existing acceptance route; a live job without one stays on the wait/harvest route. Do not poll agent screens
+   or rerun the assigned non-implementer verifier's acceptance tests yourself.
 4. **Delegate verification**: prepare a clean detached checkout, then dispatch a non-implementer verifier to run
    `team review <ID> --dir <independent checkout>`. The tool writes only the brief-named central review record/log;
    the verifier keeps its own report on its branch. **The agent's report is a claim; the verifier's execution is the

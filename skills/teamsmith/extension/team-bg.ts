@@ -27,6 +27,7 @@ type Job = {
   root: string // 起作业时解析到的车道根 —— 账本/记录/wait 行都落它下面（会话中途换 cwd 也不漂）
   pid: number
   command: string
+  sessionCwd: string // 发起会话的目录；cwd 可以是独立执行检出，不能顶替发起身份
   cwd: string
   log: string
   startedAt: number
@@ -195,7 +196,7 @@ function writeJobRecord(root: string, job: Job): void {
     const { pgid, start } = procStat(job.pid)
     const one = job.command.replace(/[\r\n]+/g, ' ')
     writeFileSync(join(dir, `${job.id}.job`),
-      `id=${job.id}\npid=${job.pid}\npgid=${pgid}\nstart=${start}\ncwd=${job.cwd}\nlog=${job.log}\ncmd=${one}\n`)
+      `id=${job.id}\npid=${job.pid}\npgid=${pgid}\nstart=${start}\nsession_cwd=${job.sessionCwd}\ncwd=${job.cwd}\nlog=${job.log}\ncmd=${one}\n`)
   } catch {
     /* 记录写不进去 = 这个作业停不了（fail-closed，且 team bg list 里可见）；作业本身照常跑 */
   }
@@ -291,7 +292,8 @@ export default function (pi: ExtensionAPI) {
       additionalProperties: false,
     } as any,
     async execute(_toolCallId: string, params: any, _signal: any, _onUpdate: any, ctx: any) {
-      const root = findRoot(String(ctx?.cwd ?? process.cwd()))
+      const sessionCwd = resolve(String(ctx?.cwd ?? process.cwd()))
+      const root = findRoot(sessionCwd)
       if (!root) throw new Error('team_bg_run: not a teamsmith project (no .pi/team/config.sh found)')
       const command = String(params?.command ?? '')
       if (!command.trim()) throw new Error('team_bg_run: empty command')
@@ -310,7 +312,7 @@ export default function (pi: ExtensionAPI) {
         closeSync(fd)
       }
       const job: Job = {
-        id, root, pid: child.pid ?? 0, command, cwd, log, startedAt: Date.now(),
+        id, root, pid: child.pid ?? 0, command, sessionCwd, cwd, log, startedAt: Date.now(),
         done: false, exitCode: null, harvested: false, notified: false, waiters: [],
       }
       jobs.set(id, job)

@@ -89,8 +89,8 @@ const newBgHost = mod => {
 }
 const makeRunner = (host, cwd) => {
   const ctx = { cwd }
-  const run = async (command, name) => {
-    const res = await host.tools.team_bg_run.execute('call-run', { command, name }, null, null, ctx)
+  const run = async (command, name, options = {}) => {
+    const res = await host.tools.team_bg_run.execute('call-run', { command, name, ...options }, null, null, ctx)
     const id = String(res?.details?.id ?? '')
     const pid = Number(res?.details?.pid ?? 0)
     trackPid(pid)
@@ -161,10 +161,12 @@ const procStartTime = pid => {
 }
 
 /** 写一条 `state/bg/<id>.job` 记录（与 team-bg 的记录同形状）。 */
-const writeRecord = (bgDir, id, { pid, pgid = pid, start, cwd = '', log = '', cmd = 'fixture' }) => {
+const writeRecord = (bgDir, id, { pid, pgid = pid, start, sessionCwd, cwd = '', log = '', cmd = 'fixture' }) => {
   mkdirSync(bgDir, { recursive: true })
+  const initiator = sessionCwd === undefined ? [] : [`session_cwd=${sessionCwd}`]
   writeFileSync(join(bgDir, `${id}.job`),
-    `id=${id}\npid=${pid}\npgid=${pgid}\nstart=${start}\ncwd=${cwd}\nlog=${log}\ncmd=${cmd}\n`)
+    [`id=${id}`, `pid=${pid}`, `pgid=${pgid}`, `start=${start}`, ...initiator,
+      `cwd=${cwd}`, `log=${log}`, `cmd=${cmd}`, ''].join('\n'))
 }
 const spawnSleep = (seconds) => {
   const child = spawn('sleep', [String(seconds)], { stdio: 'ignore' })
@@ -256,6 +258,10 @@ const groupLedger = async () => {
     !!startLine && new RegExp(` start id=${escapeRe(j1.id)} pid=${j1.pid}$`).test(startLine) &&
     existsSync(join(STATE, 'bg', `${j1.id}.job`)),
     startLine || '(no start line)')
+  const defaultRecord = readFileSync(join(STATE, 'bg', `${j1.id}.job`), 'utf8')
+  check('ledger: a default-cwd job records the same initiating and execution directory',
+    defaultRecord.includes(`session_cwd=${ROOT}\n`) && defaultRecord.includes(`cwd=${ROOT}\n`),
+    defaultRecord.replace(/\n/g, ' | '))
   await R.wait(j1.id, 5000)
 
   // ② 原地收割：wait 行量的是这次调用（≈ 作业运行时长）
@@ -527,11 +533,9 @@ const groupSuspendShape = async () => {
   await bgHost.emit('session_shutdown', { reason: 'fixture' }, { cwd: ROOT })
 }
 
-// ── owner-scope：挂起判定只认**本会话自己的**作业（P236）────────────────────────
-// 缺陷现场（2026-10-12 真实运行）：两个席位共享同一个车道 state 目录，dev 的作业躺在里面，
-// dev2 结束回合时被打上 awaiting=<dev 的作业>。归属判据 = 记录里的 cwd（作业启动时的工作目录，
-// 也就是拥有它的那个席位的工作树）与本会话自己的工作树/cwd 解析到同一个真实路径；别人的记录、
-// 缺 cwd / 相对 cwd / 解析不出来的畸形记录一律不算（fail-closed）。
+// ── owner-scope：挂起判定只认**本会话发起的**作业 ────────────────────────────────
+// 新记录的 session_cwd 与执行 cwd 分开：独立 clone 不丢发起身份，显式外来身份也不回退到 cwd。
+// 旧记录仅在 cwd 恰好等于席位工作树时兼容；别人的、子目录的、独立 clone 与无效路径都不收养。
 const groupOwnerScope = async () => {
   const bgMod = await loadModule(BG)
   const bgHost = newBgHost(bgMod)
@@ -577,9 +581,10 @@ const groupOwnerScope = async () => {
     }
   }
 
-  // ③ 活 pid 的畸形记录：缺 cwd / 相对 cwd / 解析不出来的 cwd → 都不判挂起（fail-closed）
+  // ③ 活 pid 也不能补猜身份：legacy 坏 cwd，以及显式空/相对/失效/他人 session_cwd 都不挂起。
+  //    显式 session_cwd 的记录故意把执行 cwd 写成本席位，证明不会回退到执行目录。
   {
-    const b = makeBase('owner-nocwd')
+    const b = makeBase('owner-nocwd', { seats: ['dev', 'dev2'] })
     const sleeper = spawnSleep(30)
     const start = procStartTime(sleeper.pid)
     const bgDir = join(b.state, 'bg')
@@ -588,8 +593,12 @@ const groupOwnerScope = async () => {
       `id=bg-ledger-nocwd\npid=${sleeper.pid}\npgid=${sleeper.pid}\nstart=${start}\nlog=\ncmd=fixture\n`)
     writeRecord(bgDir, 'bg-ledger-relcwd', { pid: sleeper.pid, pgid: sleeper.pid, start, cwd: '.worktrees/dev' })
     writeRecord(bgDir, 'bg-ledger-gonecwd', { pid: sleeper.pid, pgid: sleeper.pid, start, cwd: '/nonexistent/p236/worktree' })
+    for (const [id, sessionCwd] of [
+      ['bg-ledger-empty-initiator', ''], ['bg-ledger-relative-initiator', '.worktrees/dev'],
+      ['bg-ledger-gone-initiator', '/nonexistent/p449/initiator'], ['bg-ledger-foreign-initiator', b.wts.dev2],
+    ]) writeRecord(bgDir, id, { pid: sleeper.pid, pgid: sleeper.pid, start, sessionCwd, cwd: b.wt })
     resetNotify(b.base)
-    await notify.settle(b.wt, 'stop', 'BG-LEDGER-NOCWD records without an owning cwd must not suspend')
+    await notify.settle(b.wt, 'stop', 'BG-LEDGER-NOCWD records without an owning initiator must not suspend')
     const line = inboxLine(b.base)
     check('owner-scope: a live record with a missing, relative or unresolvable cwd does not suspend (fail-closed)',
       line.includes('[auto] ') && !line.includes('awaiting=') && line.includes('⚠ 未提交'),
@@ -597,20 +606,29 @@ const groupOwnerScope = async () => {
     try { process.kill(sleeper.pid, 'SIGKILL') } catch { /* ignore */ }
   }
 
-  // ④ 软链 + 尾斜杠：记录里的 cwd 文本不同、真实路径相同 → 仍然是本会话的作业（挂起）
+  // ④ legacy 只接受恰好等于席位工作树的 cwd（软链/尾斜杠归一）；其余形状一律无归属。
   {
-    const b = makeBase('owner-realpath')
+    const b = makeBase('owner-realpath', { seats: ['dev', 'dev2'] })
     const sleeper = spawnSleep(30)
+    const start = procStartTime(sleeper.pid)
     const link = join(b.base, 'link-to-dev')
+    const subdir = join(b.wt, 'nested')
+    const independent = join(SCRATCH, 'legacy-independent')
+    rmSync(independent, { recursive: true, force: true })
+    mkdirSync(subdir, { recursive: true })
     symlinkSync(b.wt, link)
-    writeRecord(join(b.state, 'bg'), 'bg-ledger-symlink', {
-      pid: sleeper.pid, pgid: sleeper.pid, start: procStartTime(sleeper.pid), cwd: `${link}/`,
-    })
+    git(['clone', '-q', '--no-local', b.base, independent], SCRATCH)
+    const bgDir = join(b.state, 'bg')
+    writeRecord(bgDir, 'bg-ledger-symlink', { pid: sleeper.pid, pgid: sleeper.pid, start, cwd: `${link}/` })
+    writeRecord(bgDir, 'bg-legacy-subdir', { pid: sleeper.pid, pgid: sleeper.pid, start, cwd: subdir })
+    writeRecord(bgDir, 'bg-legacy-independent', { pid: sleeper.pid, pgid: sleeper.pid, start, cwd: independent })
+    writeRecord(bgDir, 'bg-legacy-other-seat', { pid: sleeper.pid, pgid: sleeper.pid, start, cwd: b.wts.dev2 })
     resetNotify(b.base)
-    await notify.settle(b.wt, 'stop', 'BG-LEDGER-REALPATH symlink and trailing slash resolve to the seat worktree')
+    await notify.settle(b.wt, 'stop', 'BG-LEDGER-REALPATH only an exact legacy worktree match is owned')
     const line = inboxLine(b.base)
-    check('owner-scope: a job cwd reaching the session worktree through a symlink still belongs to it',
-      line.includes('[auto·suspended]') && line.includes('awaiting=bg-ledger-symlink'),
+    check('owner-scope: legacy ownership accepts only an exact seat-worktree match',
+      line.includes('[auto·suspended]') && line.includes('awaiting=bg-ledger-symlink') &&
+      !line.includes('bg-legacy-subdir') && !line.includes('bg-legacy-independent') && !line.includes('bg-legacy-other-seat'),
       line || '(no inbox line)')
     try { process.kill(sleeper.pid, 'SIGKILL') } catch { /* ignore */ }
   }
@@ -627,6 +645,52 @@ const groupOwnerScope = async () => {
     check('owner-scope: a job started from the main worktree does not suspend a seat',
       line.includes('[auto] ') && !line.includes('awaiting=') && line.includes('⚠ 未提交'),
       line || '(no inbox line)')
+  }
+
+  // ⑥ 独立执行 clone：发起身份仍属于 dev；挂起不敲，最终报告的新 delivered tip 恰好敲一次。
+  {
+    const b = makeBase('owner-independent', { seats: ['dev', 'dev2'] })
+    taskProof(b.base, 'dev', 'P230')
+    const independent = join(SCRATCH, 'owner-independent-checkout')
+    rmSync(independent, { recursive: true, force: true })
+    git(['clone', '-q', '--no-local', b.base, independent], SCRATCH)
+    const R = makeRunner(bgHost, b.wt)
+    const job = await R.run('sleep 30', jobName('independent-final'), { cwd: independent })
+    const record = readFileSync(join(b.state, 'bg', `${job.id}.job`), 'utf8')
+    check('owner-scope: a job record separates its initiating session from its execution directory',
+      record.includes(`session_cwd=${b.wt}\n`) && record.includes(`cwd=${independent}\n`) &&
+      record.includes(`pid=${job.pid}\n`) && /start=\d+\n/.test(record) && record.includes(`log=${job.log}\n`),
+      record.replace(/\n/g, ' | '))
+    const prevPane = process.env.TMUX_PANE
+    process.env.TMUX_PANE = 'p449-independent-pane'
+    try {
+      resetNotify(b.base)
+      const k0 = knockEntries(b.base)
+      await notify.settle(b.wt, 'stop', 'P449 independent clone suspended progress')
+      const suspended = inboxLine(b.base)
+      const k1 = knockEntries(b.base)
+      await notify.settle(b.wts.dev2, 'stop', 'P449 another seat does not adopt the independent job')
+      const other = inboxLine(b.base, 'dev2')
+      const k2 = knockEntries(b.base)
+      await R.stop(job)
+      mkdirSync(join(b.wt, 'docs/team/reports'), { recursive: true })
+      writeFileSync(join(b.wt, 'docs/team/reports/P230-dev.md'), '# P230\n\nstatus: delivered\n')
+      git(['add', 'docs/team/reports/P230-dev.md'], b.wt)
+      git(['-c', 'user.email=fixture@teamsmith', '-c', 'user.name=fixture', 'commit', '-qm', 'final report'], b.wt)
+      await notify.settle(b.wt, 'stop', 'P449 independent clone final report delivered')
+      const lines = inboxAll(b.base)
+      const pointers = inboxAll(b.base, 'pm').filter(l => l.includes('agent:dev '))
+      const k3 = knockEntries(b.base)
+      check('owner-scope: an independent-checkout job becomes one final delivery wake',
+        suspended.includes('[auto·suspended]') && suspended.includes(`awaiting=${job.id}`) && k1 === k0 &&
+        other.includes('[auto] ') && !other.includes('awaiting=') && !other.includes(job.id) &&
+        lines.length === 2 && lines[0] === suspended && lines[1].includes('[auto] ') &&
+        tipOfLine(lines[0]) !== tipOfLine(lines[1]) && pointers.length === 2 && k3 === k2 + 1,
+        `knocks=${k0},${k1},${k2},${k3} lines=${lines.length} pointers=${pointers.length} :: ${lines.join(' || ')}`)
+    } finally {
+      if (prevPane === undefined) delete process.env.TMUX_PANE
+      else process.env.TMUX_PANE = prevPane
+    }
   }
 
   // 收尾：只按登记过的作业停（kill + 收割），然后清掉扩展的会话资源
@@ -728,27 +792,69 @@ const groupMerge = async () => {
       dl.join(' | ').slice(0, 200))
   }
 
-  // ② 汇总行取**最后一条**的值（uncommitted/tip/last）；取最大值、平均或第一条的值都在这里变红
+  // ② 非交付类不按 tip 拆行：suspended 三次跨 tip 仍 ×3，interrupted 两次跨 tip 仍 ×2；
+  //    汇总行始终取最后事件的 uncommitted/tip/last。
   {
     const b = makeBase('merge-last')
     taskProof(b.base, 'dev', 'P230')
     resetNotify(b.base)
+    const pid = liveRecord(b.base, 'JLAST', b.wt)
     for (const f of ['w2.txt', 'w3.txt', 'w4.txt']) writeFileSync(join(b.wt, f), 'x\n')
-    await notify.settle(b.wt, 'stop', 'MERGE-LAST one')
+    await notify.settle(b.wt, 'stop', 'MERGE-LAST suspended one')
     const rec1 = detailRecs(b.base).at(-1) ?? ''
     git(['add', '-A'], b.wt)
     git(['-c', 'user.email=fixture@teamsmith', '-c', 'user.name=fixture', 'commit', '-qm', 'merge-last one'], b.wt)
     writeFileSync(join(b.wt, 'w5.txt'), 'x\n')
-    await notify.settle(b.wt, 'stop', 'MERGE-LAST two')
+    await notify.settle(b.wt, 'stop', 'MERGE-LAST suspended two')
     rmSync(join(b.wt, 'w5.txt'), { force: true })
-    await notify.settle(b.wt, 'stop', 'MERGE-LAST three')
+    await notify.settle(b.wt, 'stop', 'MERGE-LAST suspended three')
     const rec3 = detailRecs(b.base).at(-1) ?? ''
-    const line = inboxAll(b.base)[0] ?? ''
-    const tip1 = tipOfLine(rec1); const tip3 = tipOfLine(rec3)
+    await notify.settle(b.wt, 'aborted', 'MERGE-LAST interrupted one')
+    writeFileSync(join(b.wt, 'w6.txt'), 'x\n')
+    git(['add', '-A'], b.wt)
+    git(['-c', 'user.email=fixture@teamsmith', '-c', 'user.name=fixture', 'commit', '-qm', 'merge-last two'], b.wt)
+    await notify.settle(b.wt, 'aborted', 'MERGE-LAST interrupted two')
+    const rec5 = detailRecs(b.base).at(-1) ?? ''
+    const lines = inboxAll(b.base)
+    const line = lines[0] ?? ''
+    const interrupted = lines[1] ?? ''
+    const tip1 = tipOfLine(rec1); const tip3 = tipOfLine(rec3); const tip5 = tipOfLine(rec5)
     check('merge: the merged line carries the last event’s values',
-      tip1 !== '' && tip3 !== '' && tip1 !== tip3 && /uncommitted=0( |·)/.test(line) && line.includes(`tip=${tip3}`) &&
-      !line.includes(`tip=${tip1}`) && /last=(\S+)/.exec(line)?.[1] === isoOfLine(rec3) && line.includes('×3'),
-      `tip1=${tip1} tip3=${tip3} :: ${line}`)
+      tip1 !== '' && tip3 !== '' && tip5 !== '' && tip1 !== tip3 && tip3 !== tip5 && lines.length === 2 &&
+      line.includes('[auto·suspended]') && /uncommitted=0( |·)/.test(line) && line.includes(`tip=${tip3}`) &&
+      !line.includes(`tip=${tip1}`) && /last=(\S+)/.exec(line)?.[1] === isoOfLine(rec3) && line.includes('×3') &&
+      interrupted.includes('[auto·interrupted]') && interrupted.includes('×2') && interrupted.includes(`tip=${tip5}`) &&
+      detailRecs(b.base).length === 5,
+      `tip1=${tip1} tip3=${tip3} tip5=${tip5} :: ${lines.join(' || ')}`)
+    killPid(pid); dropRecord(b.base, 'JLAST')
+  }
+
+  // ②b delivered 才按修订拆行：三个 tip 三行，同 tip 的后续事件只扩展自己的那一行。
+  {
+    const b = makeBase('merge-revisions')
+    taskProof(b.base, 'dev', 'P230')
+    resetNotify(b.base)
+    await notify.settle(b.wt, 'stop', 'MERGE-REVISIONS delivered one')
+    const tip1 = tipOfLine(detailRecs(b.base).at(-1) ?? '')
+    writeFileSync(join(b.wt, 'revision-2.txt'), 'two\n')
+    git(['add', '-A'], b.wt)
+    git(['-c', 'user.email=fixture@teamsmith', '-c', 'user.name=fixture', 'commit', '-qm', 'revision two'], b.wt)
+    await notify.settle(b.wt, 'stop', 'MERGE-REVISIONS delivered two')
+    await notify.settle(b.wt, 'stop', 'MERGE-REVISIONS same tip churn')
+    const tip2 = tipOfLine(detailRecs(b.base).at(-1) ?? '')
+    writeFileSync(join(b.wt, 'revision-3.txt'), 'three\n')
+    git(['add', '-A'], b.wt)
+    git(['-c', 'user.email=fixture@teamsmith', '-c', 'user.name=fixture', 'commit', '-qm', 'revision three'], b.wt)
+    await notify.settle(b.wt, 'stop', 'MERGE-REVISIONS delivered three')
+    const tip3 = tipOfLine(detailRecs(b.base).at(-1) ?? '')
+    const lines = inboxAll(b.base)
+    const pointers = inboxAll(b.base, 'pm')
+    check('merge: each delivered revision starts a new line and same-tip events merge',
+      lines.length === 3 && pointers.length === 3 && new Set([tip1, tip2, tip3]).size === 3 &&
+      !lines[0].includes('×') && lines[1].includes('×2') && !lines[2].includes('×') &&
+      lines[0].includes(`tip=${tip1}`) && lines[1].includes(`tip=${tip2}`) && lines[2].includes(`tip=${tip3}`) &&
+      detailRecs(b.base).length === 4,
+      `tips=${tip1},${tip2},${tip3} lines=${lines.length} pointers=${pointers.length} :: ${lines.join(' || ')}`)
   }
 
   // ③ 状态类变化必然新起一行（两个同 awaiting 的 suspended 不跨过 delivered 合并）
@@ -873,16 +979,17 @@ const groupMerge = async () => {
       `before=${before} after=${after} :: pm=${pmLine} || dev=${recLine}`)
   }
 
-  // ⑩ 陈旧判据在合并行上读最后一条的 tip（更早的事件从明细里判）
+  // ⑩ 陈旧判据在 suspended 合并行上读最后一条的 tip（更早的事件从明细里判）。
   {
     const b = makeBase('merge-stale')
     taskProof(b.base, 'dev', 'P230')
     resetNotify(b.base)
-    await notify.settle(b.wt, 'stop', 'MERGE-STALE one')
+    const pid = liveRecord(b.base, 'JSTALE', b.wt)
+    await notify.settle(b.wt, 'stop', 'MERGE-STALE suspended one')
     const tip1 = tipOfLine(detailRecs(b.base).at(-1) ?? '')
     git(['add', '-A'], b.wt)
     git(['-c', 'user.email=fixture@teamsmith', '-c', 'user.name=fixture', 'commit', '-qm', 'merge-stale one'], b.wt)
-    await notify.settle(b.wt, 'stop', 'MERGE-STALE two')
+    await notify.settle(b.wt, 'stop', 'MERGE-STALE suspended two')
     const tip2 = tipOfLine(detailRecs(b.base).at(-1) ?? '')
     const line = inboxAll(b.base)[0] ?? ''
     mkdirSync(join(b.base, 'docs/team/reviews'), { recursive: true })
@@ -890,8 +997,10 @@ const groupMerge = async () => {
     const reviewed = new RegExp(tip1).test(readFileSync(join(b.base, 'docs/team/reviews/P230.md'), 'utf8'))
     const judged = t => tip1.startsWith(t) || t.startsWith(tip1)
     check('merge: a merged line is judged by its last event, not as current state',
-      /×2/.test(line) && tip1 !== tip2 && line.includes(`tip=${tip2}`) && !judged(tip2) && judged(tip1) && reviewed,
+      /×2/.test(line) && line.includes('[auto·suspended]') && tip1 !== tip2 && line.includes(`tip=${tip2}`) &&
+      !judged(tip2) && judged(tip1) && reviewed,
       `tip1=${tip1} tip2=${tip2} :: ${line}`)
+    killPid(pid); dropRecord(b.base, 'JSTALE')
   }
 }
 
@@ -1047,6 +1156,81 @@ const groupWake = async () => {
         k0 === 0 && k1 === 1 && k2 === 2,
         `k=${k0},${k1},${k2} :: ${inboxAll(b.base).map(l => l.slice(0, 60)).join(' || ')}`)
       killPid(pid2); dropRecord(b.base, 'W3')
+    }
+
+    // ③b delivered 每个新 tip 各敲一次；同 tip 的进度只合并、不再敲。
+    {
+      const b = makeBase('wake-revisions')
+      configAdd(b.base, 'TEAM_NOTIFY_DEDUP_SEC=0')
+      taskProof(b.base, 'dev', 'P230')
+      resetNotify(b.base)
+      await notify.settle(b.wt, 'stop', 'WAKE-REVISIONS delivered one')
+      const k1 = knockEntries(b.base)
+      writeFileSync(join(b.wt, 'revision-2.txt'), 'two\n')
+      git(['add', '-A'], b.wt)
+      git(['-c', 'user.email=fixture@teamsmith', '-c', 'user.name=fixture', 'commit', '-qm', 'wake revision two'], b.wt)
+      await notify.settle(b.wt, 'stop', 'WAKE-REVISIONS delivered two')
+      await notify.settle(b.wt, 'stop', 'WAKE-REVISIONS same tip churn')
+      const k2 = knockEntries(b.base)
+      writeFileSync(join(b.wt, 'revision-3.txt'), 'three\n')
+      git(['add', '-A'], b.wt)
+      git(['-c', 'user.email=fixture@teamsmith', '-c', 'user.name=fixture', 'commit', '-qm', 'wake revision three'], b.wt)
+      await notify.settle(b.wt, 'stop', 'WAKE-REVISIONS delivered three')
+      const k3 = knockEntries(b.base)
+      const lines = inboxAll(b.base)
+      const pointers = inboxAll(b.base, 'pm')
+      check('wake: each delivered revision wakes once and same-tip churn stays merged',
+        k1 === 1 && k2 === 2 && k3 === 3 && lines.length === 3 && pointers.length === 3 &&
+        !lines[0].includes('×') && lines[1].includes('×2') && !lines[2].includes('×'),
+        `knocks=${k1},${k2},${k3} lines=${lines.length} pointers=${pointers.length} :: ${lines.join(' || ')}`)
+    }
+
+    // ③b-2 无法证明 tip 的 delivered 发送者保持 NOREV 合并边界：两次仍一行、只敲一次。
+    //    不写 taskProof，分支名本身不能伪造 task/tip 戳；有 tip 的对照就是上面的 wake-revisions。
+    {
+      const b = makeBase('wake-no-revision')
+      configAdd(b.base, 'TEAM_NOTIFY_DEDUP_SEC=0')
+      resetNotify(b.base)
+      await notify.settle(b.wt, 'stop', 'WAKE-NOREV delivered one')
+      const k1 = knockEntries(b.base)
+      await notify.settle(b.wt, 'stop', 'WAKE-NOREV delivered two')
+      const k2 = knockEntries(b.base)
+      const lines = inboxAll(b.base)
+      const pointers = inboxAll(b.base, 'pm')
+      check('wake: delivered events without a proven tip merge without a second wake',
+        k1 === 1 && k2 === 1 && lines.length === 1 && pointers.length === 1 &&
+        lines[0].includes('[auto] ') && lines[0].includes('×2') && pointers[0].includes('×2') &&
+        !lines[0].includes('tip=') && !pointers[0].includes('tip=') && detailRecs(b.base).length === 2,
+        `knocks=${k1},${k2} :: ${lines[0]} || ${pointers[0]}`)
+    }
+
+    // ③c 非交付进度跨 tip 合并：suspended 始终安静，interrupted 只有首行的一次叫醒。
+    {
+      const b = makeBase('wake-progress-revisions')
+      configAdd(b.base, 'TEAM_NOTIFY_DEDUP_SEC=0')
+      taskProof(b.base, 'dev', 'P230')
+      resetNotify(b.base)
+      const pid = liveRecord(b.base, 'WPROGRESS', b.wt)
+      await notify.settle(b.wt, 'stop', 'WAKE-PROGRESS suspended one')
+      writeFileSync(join(b.wt, 'progress-2.txt'), 'two\n')
+      git(['add', '-A'], b.wt)
+      git(['-c', 'user.email=fixture@teamsmith', '-c', 'user.name=fixture', 'commit', '-qm', 'wake progress two'], b.wt)
+      await notify.settle(b.wt, 'stop', 'WAKE-PROGRESS suspended two')
+      const ks = knockEntries(b.base)
+      await notify.settle(b.wt, 'aborted', 'WAKE-PROGRESS interrupted one')
+      const ki1 = knockEntries(b.base)
+      writeFileSync(join(b.wt, 'progress-3.txt'), 'three\n')
+      git(['add', '-A'], b.wt)
+      git(['-c', 'user.email=fixture@teamsmith', '-c', 'user.name=fixture', 'commit', '-qm', 'wake progress three'], b.wt)
+      await notify.settle(b.wt, 'aborted', 'WAKE-PROGRESS interrupted two')
+      const ki2 = knockEntries(b.base)
+      const lines = inboxAll(b.base)
+      check('wake: suspended and interrupted progress merge across tips without another wake',
+        ks === 0 && ki1 === 1 && ki2 === 1 && lines.length === 2 &&
+        lines[0].includes('[auto·suspended]') && lines[0].includes('×2') &&
+        lines[1].includes('[auto·interrupted]') && lines[1].includes('×2'),
+        `knocks=${ks},${ki1},${ki2} :: ${lines.join(' || ')}`)
+      killPid(pid); dropRecord(b.base, 'WPROGRESS')
     }
 
     // ④ 计数抖动不叫醒：先显式清掉上一条 knock（否则 outbox 自己的去重会替实现挡住这条断言）

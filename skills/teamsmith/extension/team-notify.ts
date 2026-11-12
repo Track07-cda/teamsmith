@@ -205,20 +205,26 @@ function ownedSessionPaths(cwd: string, worktree: string): Set<string> {
   return owned
 }
 
-/** P236 · 归属判据：作业记录里的 `cwd`（作业启动时的工作目录，也就是拥有它的那个席位的工作树）
- *  解析到本会话自己的工作树/cwd（真实路径相等）才算「我的作业」。缺 `cwd`、相对路径、解析失败、
- *  或指向别人的工作树 → 都不算（fail-closed）。 */
+/** 新记录只看发起会话的 `session_cwd`；执行目录可以是独立 clone，不能顶替发起身份。
+ *  旧记录没有该字段时才走有界兼容：`cwd` 必须恰好解析到席位工作树，不能是会话恰好所在的子目录。 */
 function isOwnedCwd(jobCwd: string, owned: Set<string>): boolean {
   const real = realPathOf(jobCwd)
   return real !== '' && owned.has(real)
 }
 
+function isOwnedJob(fields: Record<string, string>, owned: Set<string>, legacyWorktree: string): boolean {
+  if (Object.prototype.hasOwnProperty.call(fields, 'session_cwd')) {
+    return isOwnedCwd(fields.session_cwd ?? '', owned)
+  }
+  const real = realPathOf(fields.cwd ?? '')
+  return real !== '' && real === legacyWorktree
+}
+
 /** 在跑作业集合：读车道目录下的 `bg/*.job`，逐条做 (pid, start-time) 活体验证（与 `team bg list`
- *  同一条身份规则），再按 `cwd` 只留**本会话自己的**作业（P236 归属范围 —— 同一车道目录里的记录
- *  可能属于别的席位，把别人的长作业算成自己挂起会污染 `awaiting=`）。任何一条失败都**跳过**
- *  （目录/记录读不了、软链-FIFO 记录、pid 非正整数、start 缺失、/proc 读不到、指纹不符、cwd 缺失
- *  或不属于本会话）—— fail-closed：判定的不确定方向永远是「不挂起」，绝不假造挂起（design 决策 4）。 */
-function runningLaneJobs(laneDir: string, owned: Set<string>): string[] {
+ *  同一条身份规则），再按发起身份只留**本会话自己的**作业（同一车道目录里的记录可能属于别的席位）。
+ *  任何一条失败都**跳过**（目录/记录读不了、软链-FIFO 记录、pid 非正整数、start 缺失、/proc 读不到、
+ *  指纹不符、发起目录缺失或不属于本会话）—— fail-closed：绝不假造挂起。 */
+function runningLaneJobs(laneDir: string, owned: Set<string>, legacyWorktree: string): string[] {
   if (!laneDir || owned.size === 0) return []
   let names: string[]
   try {
@@ -243,7 +249,7 @@ function runningLaneJobs(laneDir: string, owned: Set<string>): string[] {
       const start = fields.start ?? ''
       if (!Number.isInteger(pid) || pid <= 0 || !start) continue
       if (procStartTime(pid) !== start) continue // 死进程 / pid 复用 / /proc 读不到：都不算在跑
-      if (!isOwnedCwd(fields.cwd ?? '', owned)) continue // P236：别人的作业不算自己挂起
+      if (!isOwnedJob(fields, owned, legacyWorktree)) continue // 别人的作业不算自己挂起
       ids.push(id)
     } catch {
       continue // 读不了：不算在跑
@@ -561,15 +567,16 @@ export default function (pi: ExtensionAPI) {
     // 逐条 (pid, start-time) 验活、再按 cwd 只留**本会话自己的**作业；判定失败一律退回非挂起形状
     // （fail-closed）——既不假造挂起，也不拿 notify 自己的 root 顶替车道目录（两侧分歧时它只负责把
     // 这件事记进日志）。
-    // P236（缺陷现场）：同一车道目录里的记录可能属于**别的席位** —— 只看「项目里有活作业」会把别人的
-    // 长作业算成自己挂起。归属判据 = 作业的 cwd 与本会话自己的工作树/cwd 解析到同一个真实路径。
+    // 同一车道目录里的记录可能属于**别的席位**。新记录按 session_cwd 认发起会话，执行 cwd 可指向
+    // 独立 clone；只有旧记录才按恰好等于席位工作树的 cwd 兼容，其它路径一律不收养。
     const laneDir = laneStateDir(cwd)
     const ownDir = notifyStateDir(root)
     if (laneDir && ownDir && laneDir !== ownDir) {
       log(`suspend check reads the lane's directory ${laneDir} (notify's own root would be ${ownDir})`, cfg)
     }
-    const owned = ownedSessionPaths(cwd, join(wtPrefix, agent))
-    const running = runningLaneJobs(laneDir, owned)
+    const worktree = join(wtPrefix, agent)
+    const owned = ownedSessionPaths(cwd, worktree)
+    const running = runningLaneJobs(laneDir, owned, realPathOf(worktree))
     const awaiting = running.length > 0 ? `awaiting=${running.join(',')}` : ''
     const suspended = completed && running.length > 0
 

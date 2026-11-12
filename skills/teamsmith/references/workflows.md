@@ -142,9 +142,18 @@ renders (board `done`/`closed` skipped, drafts listed but *not* counted), and a 
 re-executes itself as soon as `scripts/lib/**` changes on disk, so the reason it wakes the PM is never older than
 the digest the PM then reads.
 
-When a "turn ended" notification arrives, look at `git -C .worktrees/<a> log --oneline -5` and `status` first, then
-decide: dispatch the next task, send it back, or verify. After a long absence (end of day, machine reboot): **run
-`team up` first**.
+Notifications are the first prompt, but files decide the state. **Before repeating an unchanged waiting report**,
+reconcile `team digest`, BOARD, the task-branch report and the task worktree's `git log`/`status`. Read the report
+from the branch without switching: `git show <task-branch>:docs/team/reports/<ID>-<agent>.md`; an uncommitted
+report is a draft, not delivery. An old tip, no new notice or a merged inbox line does not by itself prove that
+work is unfinished.
+
+A committed final report enters the existing acceptance route: prepare the independent checkout and hand it to the
+assigned non-implementer verifier; the PM reviews evidence and does not rerun that verifier's acceptance tests. A
+live job without a committed final report stays on the existing wait/harvest route and is not declared delivered.
+Do not poll seat screens. This reconciliation happens on the ordinary notification/patrol loop; it adds no timer,
+notification channel or PM verification lane. After a long absence (end of day, machine reboot): **run `team up`
+first**.
 
 ## E. Delegated verification (the verifier executes; the PM accepts)
 
