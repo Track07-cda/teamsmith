@@ -7,7 +7,9 @@ box glued a watchdog notice to a half-written human draft and pushed the draft o
 E3 §1.1(e)); the queue file format is the interface a future PM-side delivery channel reuses. Why a queued message
 must stay visible, bounded and recoverable: `references/philosophy.md` (principle 2) and
 `references/troubleshooting.md` §3.
+
 ## Requirements
+
 ### Requirement: An automated send never types into a non-empty input box
 
 The protected automated senders (`team notify`'s pane delivery, the watchdog wake line, the notify extension's
@@ -237,6 +239,8 @@ enqueue order. The file SHALL start with the header fields `kind`, `target`, `fr
 location MUST follow `TEAM_STATE_DIR` alone, so a fixture that points it at a temporary directory writes nothing
 into the repository.
 
+These are ordinary Outbox entries. A PM self-Reminder's direct watcher delivery is not an Outbox entry and MUST NOT create a second copy or change ordinary Outbox admission, ordering, freshness, drain or explicit `flush --now` behavior.
+
 #### Scenario: The entry carries the documented header and a verbatim payload
 
 - **GIVEN** a dirty box and a message containing `$(touch <sentinel>)`, backticks and a newline
@@ -255,6 +259,12 @@ into the repository.
 - **GIVEN** a fixture project with `TEAM_STATE_DIR=<temp>`
 - **WHEN** a message is enqueued
 - **THEN** the entry exists under `<temp>/outbox/` and `<repo>/.pi/team/state/outbox/` does not exist
+
+#### Scenario: A self-Reminder does not alter explicit ordinary delivery
+
+- **GIVEN** one due self-Reminder and an independent ordinary Outbox message
+- **WHEN** ordinary Outbox drain or an authorized `team outbox flush --now` is performed
+- **THEN** that message follows its existing contract and no second Outbox entry is created for the self-Reminder
 
 ### Requirement: One drain delivers each entry once, and claims it before typing
 
@@ -820,4 +830,3 @@ The obstructing command SHALL print `held`, the reason and the recovery command 
 - **GIVEN** a never-typed `geometry-untrusted` hold, a never-typed `queue-stalled` hold and a terminal `draft-raced` hold
 - **WHEN** trustworthy empty geometry returns and `team outbox flush` then `team outbox flush --now` run
 - **THEN** the never-typed entries can each be submitted once through the guard, while the terminal entry receives no key and remains held; no payload is silently dropped
-

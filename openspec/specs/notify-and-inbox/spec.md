@@ -1153,6 +1153,8 @@ read tick and never after it has passed the freshness horizon of the requirement
 than the journal's eviction floor MUST NOT be woken about again — the journal can no longer prove it was not
 delivered — and MUST be counted as `unprovable`.
 
+This requirement governs ordinary inbox-spool wakes. A PM self-Reminder uses the separate authority and direct custom-message contract in `agent-self-reminder`, not a second spool or this journal; its Pi call return and ambiguous failure SHALL NOT be treated as a receipt or safe retry.
+
 #### Scenario: Killed after the read, before the intent — one recovery, never two
 
 - **GIVEN** a fixture that kills the watcher process (SIGKILL, a separate process) after it appended the
@@ -1195,7 +1197,7 @@ delivered — and MUST be counted as `unprovable`.
 
 ### Requirement: A wake names its source line so a recipient can prove what it is
 
-Every wake SHALL carry, in its text: a monotonically increasing wake sequence number and the absolute send
+Every ordinary inbox-spool wake SHALL carry, in its text: a monotonically increasing wake sequence number and the absolute send
 time of the wake; and for each line it lists, that line's own absolute timestamp and its identity. When the
 line carries a sender record id, the identity shown MUST be that id; otherwise it MUST be the same string the
 delivery journal uses for that line. The sender SHALL write that id into the spool line (the id of its own
@@ -1208,6 +1210,8 @@ which state file holds it. The purpose is that a recipient can
 decide from durable files alone whether two wake texts are two lines or one line twice: two byte-identical
 payloads from two distinct lines MUST be distinguishable by identity and source time, and a wake text that
 repeats an identity is a replay the recipient can name.
+
+A direct PM self-Reminder is not a spool preview: its full text, IDs, scheduled and actual timestamps, source and overdue indication follow `agent-self-reminder` and SHALL NOT be clipped to this preview.
 
 #### Scenario: Identical text, two lines — distinguishable, and neither replayed
 
@@ -1240,6 +1244,8 @@ compaction MUST NOT be able to resurrect a delivery, and the records it keeps MU
 imported once, additively, as already-delivered identities so that an upgrade does not replay; from then on
 the journal MUST be the only memory, and deleting, emptying or corrupting `<key>.seen` MUST NOT change a
 single delivery decision.
+
+This journal is the only dedup memory for ordinary inbox-spool lines. A PM self-Reminder's separate authoritative batch intent is never imported into it and this journal cannot authorize a Reminder resend.
 
 #### Scenario: An upgrade imports `.seen` once, and then `.seen` stops mattering
 

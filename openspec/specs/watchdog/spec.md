@@ -5,7 +5,9 @@
 Wake the PM only when there is work: one patrol loop in a tmux window of the same session, a precise definition of
 "pending", a stand-down switch, and limits so a broken PM cannot be restarted forever. Why this shape (and why the
 watchdog is not a heartbeat): `references/workflows.md` §I and `references/philosophy.md` (govern less).
+
 ## Requirements
+
 ### Requirement: One backend, inside the team's tmux session
 
 `team pulse up` SHALL run the patrol in a window named `TEAM_PULSE_WINDOW` (default `pulse`) of the session
@@ -15,6 +17,8 @@ when the human collapses the console — and both shapes are the same one window
 pulse MUST NOT depend on a container, a systemd unit or any second backend, and `status`, `logs`, `restart` and
 `down` SHALL act on that one window in either shape. `team pulse up` against the headless shape SHALL restore
 the console in place, and `status` SHALL report which shape the window is in.
+
+Both shapes SHALL also own the lightweight Reminder due check in `agent-self-reminder`; it is not a second backend or a full patrol. A long full patrol SHALL NOT prevent due admission, and overlapping recovery requests SHALL coalesce to one recheck after the in-flight patrol/recovery ends.
 
 #### Scenario: Up creates exactly one patrol window
 
@@ -45,6 +49,8 @@ per-project read position and MUST NOT include this project's own turns), or (on
 `TEAM_PULSE_PENDING_BOARD=1`) `todo`/`wip` board rows. The pending summary SHALL name the unread-meeting count
 (`未读会议 N`) so the nudge text carries it. With nothing pending it MUST do nothing beyond the log line: no message
 typed into the PM window and no PM start.
+
+This definition governs the ordinary patrol's pending work and its ordinary nudge/start. An eligible PM self-Reminder has the separate direct admission and Reminder-only recovery path in `agent-self-reminder`; its presence does not add other pending categories to that path.
 
 #### Scenario: Nothing pending is silent
 
@@ -97,11 +103,13 @@ is nonempty and unchanged, a tick inside the gap MUST append no reminder to `sta
 new pulse reminder to the delivery channel; suppression MUST NOT postpone the next allowed reminder. A changed
 nonempty set (addition or removal) SHALL allow a reminder immediately, regardless of the previous reminder's age.
 A tick that observes no pending categories SHALL rearm the next nonempty batch, including when emptiness is
-observed under standby. Standby MUST still suppress reminders and PM startup; rearming MUST NOT itself send a
+observed under standby. Standby MUST still suppress these ordinary pulse reminders and their PM startup; rearming MUST NOT itself send a
 message. PM startup and its quota, and the delivery guard's handling of a reminder, remain unchanged. The
 reminder text and `state/nudges.log` SHALL keep the current counts whenever a reminder is generated. Rationale
 for pending-only patrols and the gap configuration: `skills/teamsmith/references/workflows.md` §I and
 `skills/teamsmith/references/config.md`.
+
+These pulse pending-batch reminders are distinct from a PM self-Reminder. The self-Reminder exception is specified in `agent-self-reminder` and MUST NOT relax the ordinary nudge gap.
 
 #### Scenario: The second tick stays quiet
 
@@ -169,9 +177,9 @@ for pending-only patrols and the gap configuration: `skills/teamsmith/references
 
 ### Requirement: Standby stops the wake-ups but keeps the backlog visible
 
-With `team standby on --reason "…"`, patrol ticks MUST NOT nudge or start the PM; the pending work MUST still be
+With `team standby on --reason "…"`, ordinary pending work MUST NOT make patrol ticks nudge or start the PM; the pending work MUST still be
 written to `state/watchdog.log`, and `team standby status` SHALL report that standby is on together with the reason.
-`team standby off` restores the wake-ups. For the whole alias period the patrol keeps its historical state file
+`team standby off` restores ordinary wake-ups. A due PM self-Reminder MAY invoke the guarded Reminder-only recovery path in `agent-self-reminder`; queueing, starting or an unobserved send alone MUST NOT switch Standby off. An actual correlated Reminder wake switches off only its provably bound current generation, once per batch; a newer ambiguous generation stays on and is reported. Explicit ordinary Outbox drain remains independently authorized as before. For the whole alias period the patrol keeps its historical state file
 names (`state/watchdog.log`, `state/watchdog.pid`, `state/watchdog.last`, `state/watchdog.nudge`,
 `state/watchdog.tick.log`) and creates no `state/pulse.*` file.
 
@@ -198,6 +206,12 @@ names (`state/watchdog.log`, `state/watchdog.pid`, `state/watchdog.last`, `state
 - **WHEN** two patrol ticks run
 - **THEN** `state/capacity.log` has two new lines, each with a timestamp and the memory/swap figures
 
+#### Scenario: A due self-Reminder does not release ordinary backlog prematurely
+
+- **GIVEN** Standby is on, the PM is stopped, ordinary inbox work is pending and a self-Reminder is due
+- **WHEN** the Reminder-only recovery starts the PM but its correlated Pi wake has not been observed
+- **THEN** Standby stays on, no ordinary pending nudge or generic startup prompt is sent, and separately authorized ordinary Outbox handling remains unchanged
+
 ### Requirement: Restart quota and capacity logging
 
 The pulse SHALL start the PM at most `TEAM_PULSE_MAX_RESTARTS` times per hour (default 5). Beyond that it MUST
@@ -205,6 +219,8 @@ stop starting the PM and warn instead. Each tick MUST append one line to `.pi/te
 timestamp and the measured capacity readings — the RAM/swap figures and the agent estimate plus, for the temp root
 and the worktrees root, the available bytes and free inodes — so capacity has a trend across the filesystem
 dimension too, not just a current value.
+
+A PM start for an eligible self-Reminder SHALL use this same quota and the existing capacity and starting/identity guards; it SHALL NOT gain a separate restart allowance.
 
 #### Scenario: The quota refuses further restarts
 
@@ -222,8 +238,9 @@ dimension too, not just a current value.
 ### Requirement: The pulse never manages tmux layout, agents or quota
 
 The pulse SHALL NOT rebuild a missing session or window while `TEAM_PULSE_REBUILD_TMUX=0` (the default) — it
-reports the state instead; it MUST NOT resume stopped agents; and it MUST NOT merge, change the board or spend model
-quota. A stopped worker retains its assignment; patrol SHALL NOT reselect category policy or launch a fresh worker. A PM continuity/config refusal SHALL be reported with its explicit correction/fresh route, no PM launch and no consumed restart slot. Those are the PM's calls (`team up`, `team resume`).
+reports the state instead; it MUST NOT resume stopped agents; and it MUST NOT merge, change the board or directly
+select a model or spend model quota itself. A correlated PM self-Reminder can trigger a Pi model turn under the
+existing PM model; it gives Pulse no authority to change model policy. A stopped worker retains its assignment; patrol SHALL NOT reselect category policy or launch a fresh worker. A PM continuity/config refusal SHALL be reported with its explicit correction/fresh route, no PM launch and no consumed restart slot. Those are the PM's calls (`team up`, `team resume`).
 
 #### Scenario: A missing window is reported, not rebuilt
 
@@ -236,6 +253,12 @@ quota. A stopped worker retains its assignment; patrol SHALL NOT reselect catego
 - **GIVEN** an agent with a recorded unfinished task whose window does not exist
 - **WHEN** a tick runs with pending work
 - **THEN** the agent is listed as pending work for the PM, and no agent window is started
+
+#### Scenario: A Reminder does not override a missing PM-window guard
+
+- **GIVEN** a queued self-Reminder, no PM window and `TEAM_PULSE_REBUILD_TMUX=0`
+- **WHEN** Reminder-only recovery is considered
+- **THEN** it reports the missing window and does not create one or select a fresh model
 
 ### Requirement: The old command names keep working during the alias period
 
@@ -735,4 +758,3 @@ Session-side size/activity/death readers SHALL identify the complete current ass
 #### Scenario: Missing metadata and stopped workers stay honest
 - **WHEN** assignment/SID is missing or malformed and a stopped seat retains an unfinished task
 - **THEN** readers state unavailable identity, preserve task/evidence, count no running-model slot and patrol only notifies PM; explicit PM resume uses normal assignment guards
-

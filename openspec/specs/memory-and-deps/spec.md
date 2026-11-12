@@ -5,7 +5,9 @@
 What teamsmith requires from its environment (long-lived PM memory and an OpenSpec root) and where the truth lives:
 OpenSpec owns specs and the change workflow, teamsmith owns the evidence ledger, and the disk wins over any memory.
 Why: `references/philosophy.md` (handover-ready, no rival spec system) and `references/openspec.md`.
+
 ## Requirements
+
 ### Requirement: magic-context and OpenSpec are required dependencies
 
 The project SHALL treat the PM's cross-session memory (magic-context) and OpenSpec as required: `team doctor` MUST
@@ -37,6 +39,7 @@ The resolved JS runtime SHALL be reported the same way: `team paths` MUST carry 
 `TEAM_JS_BIN` first, else `node`, `bun` or `tsx` on `PATH`) and `require_js` (the effective value of
 `TEAM_REQUIRE_JS`, default `1`) next to the existing keys.
 
+The `flock` utility needed for serialized Standby/Reminder mutation SHALL likewise be resolved and shown as `flock_runner` by `team paths`. `team doctor` SHALL name a missing or unusable executable and its concrete repair; it MUST NOT claim serialized mutations are available without it. Mutation against a filesystem that does not support the exclusive lock SHALL fail visibly without an unlocked fallback. This is an additional OS utility requirement even for Standby in a project without Reminders, not a new scheduler service.
 #### Scenario: Paths expose the resolved tools
 
 - **WHEN** `team paths` runs with `TEAM_OPENSPEC_BIN=/usr/bin/true TEAM_SPEC_DIR=openspec`
@@ -47,6 +50,18 @@ The resolved JS runtime SHALL be reported the same way: `team paths` MUST carry 
 - **WHEN** `team paths` runs with `TEAM_JS_BIN=/usr/bin/node`, and then with `TEAM_REQUIRE_JS=0`
 - **THEN** the first output contains `"/usr/bin/node"` as `js_runner` and `"1"` as `require_js`, and the second
   contains `"0"` as `require_js`
+
+#### Scenario: Missing flock is visible and does not silently downgrade Standby
+
+- **GIVEN** a verified project on a PATH without `flock` and with no Reminders
+- **WHEN** `team paths`, `team doctor` and `team standby on --reason test` run
+- **THEN** paths exposes the unresolved lock utility, doctor identifies it and its repair, and Standby fails without an unlocked write
+
+#### Scenario: Unsupported lock operation is diagnosed
+
+- **GIVEN** `flock` resolves but exclusive locking the actual canonical project-state filesystem fails
+- **WHEN** a Reminder mutation is attempted
+- **THEN** it fails visibly without changing the authority and the diagnostic identifies the lock or filesystem failure
 
 ### Requirement: Spec management belongs to OpenSpec
 
@@ -738,4 +753,3 @@ The registration SHALL be local operational evidence, updated through existing l
 - **WHEN** an explicitly authorized private PM reload replaces an already injected capture entry
 - **THEN** the new live generation reports the fingerprint actually loaded and old-generation cleanup cannot erase it
 - **AND** a fresh matching runtime can be reported ready without adding a new config key or changing adapter semantics
-
