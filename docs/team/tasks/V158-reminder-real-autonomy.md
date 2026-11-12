@@ -32,3 +32,7 @@ branch: task/V158-reminder-real-autonomy
 ## 交付
 
 `docs/team/reports/V158-dev3.md`：先给 PASS / NEEDS-CHANGES，逐项映射 AC-02、AC-09，附原始 session/工具/提醒/投递证据路径与时间线、停止与清理结果、OpenSpec CRITICAL/WARNING。若通过，说明 `agent-self-reminder` 是否具备最终归档条件；只提交报告，通知 PM。
+
+## 08:50 续跑提示
+
+上一轮已完成 P450 定点复核，不要重做。因 opencode-go 网络断连切到 kimi-coding/k3.1-pro:high 新会话；先检查 `/var/tmp/v158-lab-r2`、`v158r2-lab-4` 与最新后台日志并收割现有隔离 lab。真实 PM 使用 kimi-coding/k3.1-pro:max，`team init` 配置保持原样。只补 AC-02/AC-09、停止后不续建与最终报告，不碰真实团队。
