@@ -6,7 +6,9 @@ The asynchronous channel between workers and the PM: a worker's turn end lands i
 on the PM's window, and the PM's one-line messages reach a running agent's TUI or fall back to the inbox. Why
 delivery must be verifiable and never touch a shell prompt: `references/protocol.md` (safety model) and
 `references/philosophy.md`.
+
 ## Requirements
+
 ### Requirement: A turn-end notification appends one inbox line and knocks once
 
 The Pi notify extension SHALL record a turn-end notification as one line in `docs/team/inbox/<agent>.md`
@@ -34,13 +36,17 @@ delay or duplicate the knock, MUST NOT be reported as if the PM's inbox held the
 
 Consecutive turn-end notifications from one seat that describe the same run SHALL be summarised in one line instead
 of appending a new one. Two notifications describe the same run when their merge keys are equal: the key is the tuple
-(seat, task, state class, `awaiting` set), where the seat is the resolved sender, the task is the line's `<ID>` token
-(the string the `task=` stamp carries when the stamp exists, and a value of its own when the line has no task
-identifier), the state class is the line's tag (`delivered` for `[auto]`, `suspended` for `[auto·suspended]`,
-`interrupted` for `[auto·interrupted]`), and the `awaiting` set is the ids of the `awaiting=` field, deduplicated and
-compared without regard to their order; an absent `awaiting=` field and an empty one are different values. A
-notification whose key differs from the run already at the end of the seat's inbox SHALL start a new line, and a run
-SHALL only be extended while its line is the last line of that file — any other line appended in between ends it.
+(seat, task, state class, `awaiting` set, delivered revision), where the seat is the resolved sender, the task is the
+line's `<ID>` token (the string the `task=` stamp carries when the stamp exists, and a value of its own when the line
+has no task identifier), the state class is the line's tag (`delivered` for `[auto]`, `suspended` for
+`[auto·suspended]`, `interrupted` for `[auto·interrupted]`), and the `awaiting` set is the ids of the `awaiting=`
+field, deduplicated and compared without regard to their order; an absent `awaiting=` field and an empty one are
+different values. For a delivered line, the delivered revision is its twelve-character `tip=` value or a distinct
+no-revision value when no stamp can be proven, so a different delivered tip SHALL start a new line while repeated
+delivered events at one tip and otherwise equal keys SHALL merge. For suspended and interrupted lines this component is empty: their progress
+tips MAY merge without changing the existing wake rules. A notification whose key differs from the run already at
+the end of the seat's inbox SHALL start a new line, and a run SHALL only be extended while its line is the last line
+of that file — any other line appended in between ends it.
 The line the first notification of a run writes SHALL be byte-identical to the line today's rules produce for a
 single event; once a run summarises more than one event, its line SHALL carry the count and the run's window
 (`×N first=<ISO> last=<ISO>`) in the field block before ` :: `, and its `branch=`, `uncommitted=`, `unpushed=` and
@@ -104,12 +110,14 @@ the tag and its fields reach the inbox and the detail record, while the wake-up 
 writes its records to, located by the lane's own rule — an explicit `TEAM_STATE_DIR` first, else the lane's
 project-root rule (a session whose working tree carries the project's config resolves to that working tree, one
 without it to the main worktree) — and the notify extension MUST NOT substitute its own project root for
-that directory. Only a job the settling session itself started SHALL count: a record belongs to the
-session when its recorded `cwd` — the working directory the job was started in, which is the owning
-seat's working tree — resolves, through symlinks and trailing slashes, to the session's own working
-tree or working directory. A record with a missing, relative or unresolvable `cwd`, or one resolving
-to another session's directory, SHALL NOT make the turn suspended — the ownership check fails closed
-rather than guessing. A record SHALL count as running only while
+that directory. Only a job the settling session itself started SHALL count: a current record belongs to the session
+when its `session_cwd` resolves, through symlinks and trailing slashes, to the session's own working tree or working
+directory; the command's execution `cwd` MAY name an independent checkout and MUST NOT replace that initiating
+identity. A record with an empty, relative or unresolvable `session_cwd`, or one resolving to another session's
+directory, SHALL NOT make the turn suspended and MUST NOT fall back to `cwd`. Only for a legacy record with no
+`session_cwd` field, `cwd` SHALL establish ownership when it resolves exactly to the settling seat's worktree; an
+independent checkout, a subdirectory, another seat or an invalid path belongs to no seat. The ownership check fails
+closed rather than guessing. A record SHALL count as running only while
 its recorded `(pid, start-time)` identity verifies live, the same identity rule
 `boundary#\`team bg\` stops a job by the pid it recorded, and prints what it signalled` applies: a dead pid, a
 reused pid and an unreadable or malformed record MUST NOT make a turn "suspended", and a failure in the check
@@ -230,25 +238,31 @@ same-key event SHALL start a new line, so the missing record stays visible and t
 #### Scenario: Seats, one job each
 
 - **GIVEN** three linked worktrees whose seat sessions share one lane state directory, each holding one
-  live-verified record whose `cwd` names its own worktree
+  live-verified record whose `session_cwd` names its own worktree and whose `cwd` names an independent checkout
 - **WHEN** each session ends a completed turn
 - **THEN** each line carries `awaiting=` with only the job its own session started — the other seats' jobs
   are neither named nor counted, so each seat's turn reports exactly its own parked work
 
+#### Scenario: An independent-checkout job becomes one final delivery wake
+
+- **GIVEN** a seat's live-verified job record whose `session_cwd` names that seat and whose `cwd` names an independent checkout
+- **WHEN** the seat first ends a completed turn while the job runs, then harvests the finished job, commits its final report at a new tip and ends delivered
+- **THEN** the first line is suspended and enqueues no wake, the final delivered tip starts a new line and enqueues exactly one wake, and no other seat names or adopts that job
+
 #### Scenario: An idle seat is not suspended by another seat's job
 
-- **GIVEN** a live-verified record whose `cwd` names the `dev` worktree while two other seat sessions
-  (`dev2` and `dev3`) share the same lane state directory and hold no record of their own
+- **GIVEN** a live-verified record whose `session_cwd` names the `dev` worktree and whose `cwd` names `dev2`, while the
+  `dev2` and `dev3` sessions share the same lane state directory and hold no record of their own
 - **WHEN** each of the two idle sessions ends a completed turn
-- **THEN** each notification keeps the `[auto]` shape with no `awaiting=` field
+- **THEN** each notification keeps the `[auto]` shape with no `awaiting=` field, and neither session falls back to the execution `cwd`
 
 #### Scenario: A record with no owning directory does not suspend
 
-- **GIVEN** live-verified records whose `cwd` is absent, relative, or a path that no longer resolves, in a
-  session whose own worktree is known
+- **GIVEN** live-verified current records whose `session_cwd` is empty, relative, unresolvable or names another seat,
+  plus legacy records without that field whose `cwd` names an independent checkout, a seat subdirectory or another seat
 - **WHEN** a completed turn ends
 - **THEN** the notification keeps the `[auto]` shape with no `awaiting=` field — the ownership check fails
-  closed instead of guessing
+  closed instead of guessing, and only a legacy `cwd` resolving exactly to this seat's worktree is accepted
 
 #### Scenario: An explicit state directory is the lane's directory
 
@@ -261,8 +275,8 @@ same-key event SHALL start a new line, so the missing record stays visible and t
 
 #### Scenario: A run of same-key notifications is one line with its window
 
-- **GIVEN** three turn-end notifications from the `dev` worktree, all on branch `task/P9-parser`, each ending a
-  completed turn with nothing running and each carrying a different summary text
+- **GIVEN** three turn-end notifications from the `dev` worktree, all on branch `task/P9-parser` at the same delivered
+  tip, each ending a completed turn with nothing running and each carrying a different summary text
 - **WHEN** the three settles run
 - **THEN** `docs/team/inbox/dev.md` holds exactly one line for them, its field block carries `×3` with `first=` and
   `last=` naming the first and the third event's timestamps, and `state/notify.log` holds three records — one per
@@ -270,11 +284,20 @@ same-key event SHALL start a new line, so the missing record stays visible and t
 
 #### Scenario: The merged line carries the last event's values
 
-- **GIVEN** three same-run notifications whose `uncommitted` counts are 4, 2 and 0, whose `branch=` is the same, and
-  whose `task=P9 tip=` stamps name three different revisions
+- **GIVEN** three same-run suspended notifications whose `uncommitted` counts are 4, 2 and 0, whose `branch=` and
+  `awaiting=` values are the same, and whose `task=P9 tip=` stamps name three different revisions, followed by two
+  same-run interrupted notifications with the same `awaiting=` set and two different tips
+- **WHEN** the suspended and interrupted settles run in their respective runs
+- **THEN** the suspended line carries `×3`, `uncommitted=0`, the third event's `tip=` and `last=`, all three raw
+  records remain, and no wake is enqueued; the interrupted pair also forms one `×2` line and enqueues only its
+  initial wake — an implementation splitting either non-delivered class by tip or taking an averaged value is caught here
+
+#### Scenario: Each delivered revision starts a new line and wakes once
+
+- **GIVEN** three consecutive delivered notifications for one task whose `tip=` values name three different revisions
 - **WHEN** the three settles run
-- **THEN** the merged line's `uncommitted=` is 0 and its `tip=` is the third event's tip, and `last=` names the
-  third event — an implementation taking a maximum, an average or the first event's value is caught here
+- **THEN** the seat inbox and PM pointer inbox each hold three separate lines, each delivered line enqueues exactly one
+  wake, and an implementation merging across delivered tips fails this scenario
 
 #### Scenario: A state-class change starts a new line
 
@@ -304,7 +327,7 @@ same-key event SHALL start a new line, so the missing record stays visible and t
 
 #### Scenario: Count churn does not wake
 
-- **GIVEN** a delivered run whose first notification already knocked
+- **GIVEN** a delivered run whose first notification already knocked and whose later events keep the same `tip=`
 - **WHEN** three more same-key settles extend the line
 - **THEN** the line carries `×4`, `state/outbox/` gains no new entry from those settles, and no text was typed into
   the PM window — an implementation enqueueing one knock per settle is caught here
@@ -336,8 +359,8 @@ same-key event SHALL start a new line, so the missing record stays visible and t
 
 #### Scenario: A merged line is judged by its last event, not as current state
 
-- **GIVEN** a merged line whose last tip is the revision `docs/team/reviews/P9.md` already records, and a second
-  merged line for `P9` whose last tip is a revision no record covers
+- **GIVEN** a merged suspended-progress line whose last tip is the revision `docs/team/reviews/P9.md` already records,
+  and a second such line for `P9` whose last tip is a revision no record covers
 - **WHEN** each line's identifier is compared with the review record and the board row
 - **THEN** the first is stale and the second is not, exactly as for a single-event line — the verdict comes from the
   line alone, applied to the event the `last=` timestamp names — and the earlier events of the run stay judgeable
@@ -384,7 +407,7 @@ same-key event SHALL start a new line, so the missing record stays visible and t
 
 #### Scenario: Same run, one pointer line
 
-- **GIVEN** three same-key settles from one seat
+- **GIVEN** three same-key delivered settles from one seat at the same `tip=`
 - **WHEN** the settles run
 - **THEN** `docs/team/inbox/pm.md` holds exactly one pointer line carrying `×3` with `first=` and `last=`, its merge key
   equals the record line's, `team inbox pm --detail` reconciles both, and `state/notify.log` still holds three records
@@ -418,8 +441,6 @@ same-key event SHALL start a new line, so the missing record stays visible and t
 - **WHEN** the merge completes
 - **THEN** the manual line is present and byte-identical, the run's line is readable, the file contains no partial
   line, and the append path and the merge path did not lose each other's write
-
----
 
 ### Requirement: `--from-file` delivers the summary byte for byte
 
@@ -1606,4 +1627,3 @@ traffic in that reason set.
 - **GIVEN** two projects whose PM inboxes hold the same unread pointer lines, one with `asks=` present
 - **WHEN** the patrol computes its pending reasons in each
 - **THEN** the two reason sets are identical — the asking line is a display surface only
-

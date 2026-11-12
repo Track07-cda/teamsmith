@@ -5,7 +5,9 @@ The PM is a process with a lifecycle, not a window: liveness is proven from evid
 state, and a reload request is bookkeeping rather than a restart. It exists so no command ever reports a PM that is
 not there — and never kills the PM that is coming up. Why each rule exists: `references/protocol.md` (the liveness
 model) and `references/troubleshooting.md`.
+
 ## Requirements
+
 ### Requirement: PM liveness is proven, not inferred
 
 Every command that reports whether the PM runs — `team ps`, `team watchdog-status`, `team digest`, `team up` — SHALL
@@ -256,3 +258,23 @@ Duplicate extension copies SHALL have one current owner/generation per runtime i
 - **THEN** one current owner sanitizes and stages the message, and old callbacks cannot replace new runtime evidence or earn another writer attempt
 - **AND** a dead/reused PID, wrong starttime/cwd/pane or changed config/state ceases to qualify as active capture evidence
 
+### Requirement: PM waiting reconciles durable work records
+
+PM guidance SHALL prefer new notifications while treating project files as authoritative. Before repeating an unchanged waiting state, the PM SHALL reconcile the digest, board, task-branch report and Git log/status. An old tip, no new notice or a merged line SHALL NOT alone prove incomplete work; guidance MUST NOT require pane reading or PM reruns of assigned verification.
+
+#### Scenario: A committed final report is found without its final wake
+
+- **GIVEN** an isolated PM with a board task still in progress, a final report committed on that task branch, and no final notification or wake for that report
+- **WHEN** the PM performs its ordinary waiting reconciliation
+- **THEN** it reads the durable digest/board/report/Git evidence, recognizes the delivery and proceeds to the existing acceptance route rather than merely repeating the same waiting state or rerunning the verifier's tests
+
+#### Scenario: A running job is not mistaken for a final delivery
+
+- **GIVEN** an isolated PM whose seat still has a live background job and no committed final report
+- **WHEN** the same reconciliation runs without a new notification
+- **THEN** the PM retains or resumes the existing wait/harvest route and does not declare the task delivered from an old tip, a draft report or the absence of a notice
+
+#### Scenario: Reconciliation adds no second scheduler or verification lane
+
+- **WHEN** the PM prompt template, skill and workflow guidance are inspected and the isolated reconciliation is exercised
+- **THEN** they use the existing notification, digest, board, task branch and patrol mechanisms, create no additional timer or notification service, and preserve the non-implementer verifier's responsibility for running acceptance gates
