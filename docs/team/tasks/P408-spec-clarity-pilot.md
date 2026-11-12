@@ -42,7 +42,14 @@ OpenSpec 1.16 把"需求文本 > 500 字符"升为 warning、`--strict` 判失�
 - **不要**归档这个 change（归档要用户确认）；只交付 change 目录本身
 - 报告 `docs/team/reports/P408-dev.md`，含"给剩余 17 份规格的可复制做法"（不超过 10 行），提交推分支，通知 PM
 
+## Purpose 补写例外（PM 2026-11-12 授权）
+
+为完成三份各自 0 warning，允许在本任务分支**仅**修改 `openspec/specs/writing-discipline/spec.md` 与 `openspec/specs/help-surface/spec.md` 的 `## Purpose`，用真实职责说明替换既有 TBD，并单独提交。不得借例外修改任何 requirement/scenario 或其它 canonical 内容，不得收窄 0-warning 判据。
+
+- writing-discipline：说明证据支持的写作判据——主张、警告与边界只有能点名可核查依据及对实现、下一步或结论的影响才保留，不把语气偏好变成规则。
+- help-surface：说明同一份命令清单如何驱动菜单、分组页和命令页，使文档中的命令、参数与示例与实际行为一致，并覆盖语言、格式、兼容性与可用路线证据。
+
 ## 边界
 
-- 只改 `openspec/changes/spec-clarity-burn-down/**`；**不**直接编辑 `openspec/specs/**`。
+- 只改 `openspec/changes/spec-clarity-burn-down/**`；**不**直接编辑 `openspec/specs/**`（上述两段 Purpose 除外）。
 - 不改产品代码、不改测试、不跑全量 smoke、不合并/归档/发布。
