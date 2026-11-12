@@ -1229,7 +1229,7 @@ team_branch_for_agent() { # <agent> <ID> → 该 agent 在这个任务上应该�
 
 # 输出一份「可直接写进派单提示词」的路径清单（agent_adapter = 当前生效的 agent 适配器）
 team_paths_json() {
-  printf '{ "project": "%s", "main_root": "%s", "worktree": "%s", "docs": "%s", "worktrees": "%s", "session": "%s", "pm_window": "%s", "agent_adapter": "%s", "agent_bin": "%s", "openspec_bin": "%s", "spec_dir": "%s", "require_magic_context": "%s", "require_openspec": "%s", "pulse_window": "%s", "pulse_interval": "%s", "js_runner": "%s", "require_js": "%s" }\n' \
+  printf '{ "project": "%s", "main_root": "%s", "worktree": "%s", "docs": "%s", "worktrees": "%s", "session": "%s", "pm_window": "%s", "agent_adapter": "%s", "agent_bin": "%s", "openspec_bin": "%s", "spec_dir": "%s", "require_magic_context": "%s", "require_openspec": "%s", "pulse_window": "%s", "pulse_interval": "%s", "js_runner": "%s", "require_js": "%s", "flock_runner": "%s" }\n' \
     "$(team_json_escape "$TEAM_PROJECT")" "$(team_json_escape "$TEAM_MAIN_ROOT")" "$(team_json_escape "$TEAM_ROOT")" \
     "$(team_json_escape "$TEAM_DOCS_ABS")" "$(team_json_escape "$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR")" \
     "$(team_json_escape "$TEAM_SESSION")" "$(team_json_escape "$TEAM_PM_WINDOW")" \
@@ -1237,7 +1237,8 @@ team_paths_json() {
     "$(team_json_escape "$(team_openspec_bin_path)")" "$(team_json_escape "$(team_spec_dir_abs)")" \
     "$(team_json_escape "$TEAM_REQUIRE_MAGIC_CONTEXT")" "$(team_json_escape "$TEAM_REQUIRE_OPENSPEC")" \
     "$(team_json_escape "$(team_pulse_window)")" "$(team_json_escape "$TEAM_PULSE_INTERVAL")" \
-    "$(team_json_escape "$(team_js_runner)")" "$(team_json_escape "$TEAM_REQUIRE_JS")"
+    "$(team_json_escape "$(team_js_runner)")" "$(team_json_escape "$TEAM_REQUIRE_JS")" \
+    "$(team_json_escape "$(team_flock_runner)")"
 }
 
 # ---------------------------------------------------------------- JS 运行时（必需依赖，D19）
@@ -1257,6 +1258,22 @@ team_js_runner() { # → 解析出的运行时绝对路径；解析不到（含 
   for p in node bun tsx; do
     if p="$(command -v "$p")" && [ -n "$p" ]; then printf '%s\n' "$p"; return 0; fi
   done
+  return 0
+}
+
+# flock 的解析只有 state-authority.mjs 一份：paths、doctor 与实际事务都读它。
+# 输出 <ok|missing|unusable|unavailable>\t<路径>\t<说明>；unavailable 表示连解析助手都跑不了。
+team_flock_check() {
+  local runner out
+  runner="$(team_js_runner)"
+  if [ -z "$runner" ]; then printf 'unavailable\t\t缺 JS 运行时，无法调用共享 flock 解析器\n'; return 0; fi
+  out="$("$runner" "${TEAM_SKILL_DIR:-$(team_skill_dir)}/scripts/state-authority.mjs" --flock-check 2>/dev/null)"
+  if [ -n "$out" ]; then printf '%s\n' "$out"; else printf 'unavailable\t\t共享 flock 解析器执行失败\n'; fi
+}
+team_flock_runner() {
+  local st path detail
+  IFS=$'\t' read -r st path detail <<< "$(team_flock_check)"
+  [ "$st" = "ok" ] && printf '%s\n' "$path"
   return 0
 }
 
@@ -1714,6 +1731,16 @@ team_authority_cli() { # <resolve|init|read|allocate> [参数]；助手自己取
       ;;
   esac
   "$runner" "${TEAM_SKILL_DIR:-$(team_skill_dir)}/scripts/state-authority.mjs" --cli "$main" "$state" "$@"
+}
+# 只读诊断：已初始化的项目对它真实的 authority.lock 取一次排他锁，不读改快照、不建文件。
+team_authority_flock_probe() {
+  local runner main state
+  runner="$(team_js_runner)"
+  [ -n "$runner" ] || { team_err "state-authority：缺 JS 运行时，无法验证 flock"; return 1; }
+  main="$(team_authority_main_root)" || return 1
+  state="${TEAM_STATE_DIR:-}"
+  [ -n "$state" ] || { team_err "state-authority：TEAM_STATE_DIR 未解析"; return 1; }
+  "$runner" "${TEAM_SKILL_DIR:-$(team_skill_dir)}/scripts/state-authority.mjs" --flock-lock-check "$main" "$state"
 }
 team_authority_state_root() { TEAM_AUTHORITY_CALL=1 team_authority_cli resolve --print stateRoot; }
 team_authority_init() { TEAM_AUTHORITY_CALL=1 team_authority_cli init; }

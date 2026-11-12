@@ -13744,6 +13744,42 @@ else
 fi
 p10m env TEAM_REQUIRE_JS=0 $TEAM paths >"$TMP/p10-paths-reqjs.log" 2>&1
 assert_has "$TMP/p10-paths-reqjs.log" '"require_js": "0"' "26-k paths：TEAM_REQUIRE_JS=0 反映在 paths 里"
+P10_FLOCK_FIXTURE="$(command -v flock || true)"
+if [ -n "$P10_FLOCK_FIXTURE" ] && [ -n "$P10_JS_FIXTURE" ]; then
+  assert_has "$TMP/p10-paths.log" "\"flock_runner\": \"$P10_FLOCK_FIXTURE\"" "26-k paths：报出事务实际使用的 flock 绝对路径"
+  P10_NOFLOCK="$TMP/p10-noflock-bin"
+  cp -a "$P10_NOJS" "$P10_NOFLOCK"
+  rm -f "$P10_NOFLOCK/flock"
+  p10nojs env PATH="$P10_NOFLOCK" TEAM_JS_BIN="$P10_JS_FIXTURE" $TEAM paths >"$TMP/p10-paths-noflock.log" 2>&1
+  assert_has "$TMP/p10-paths-noflock.log" '"flock_runner": ""' "26-k paths：缺 flock 时如实给出空解析结果"
+  if p10nojs env PATH="$P10_NOFLOCK" TEAM_JS_BIN="$P10_JS_FIXTURE" $TEAM doctor >"$TMP/p10-doctor-noflock.log" 2>&1; then
+    bad "26-k flock：缺 flock 时 doctor 应失败"
+  else
+    ok "26-k flock：没有 Reminder 的项目缺 flock，doctor 仍失败"
+  fi
+  assert_has "$TMP/p10-doctor-noflock.log" "状态锁 flock" "26-k flock：失败行点名状态锁"
+  assert_has "$TMP/p10-doctor-noflock.log" "PATH 里没有可执行 flock" "26-k flock：失败行区分 PATH 中缺失"
+  assert_has "$TMP/p10-doctor-noflock.log" "util-linux" "26-k flock：缺失行给出安装修复方式"
+  P10_BADFLOCK="$TMP/p10-badflock-bin"
+  cp -a "$P10_NOFLOCK" "$P10_BADFLOCK"
+  printf 'not executable\n' >"$P10_BADFLOCK/flock"
+  chmod 0644 "$P10_BADFLOCK/flock"
+  if [ "$(env PATH="$P10_BADFLOCK" bash -c 'command -v flock')" = "$P10_BADFLOCK/flock" ] \
+     && [ ! -x "$P10_BADFLOCK/flock" ]; then
+    ok "26-k flock 夹具：PATH 里有 flock 文件但不可执行（不是空 PATH 假象）"
+  else
+    bad "26-k flock 夹具：没有造出「找得到文件、但没有执行权限」的形状"
+  fi
+  if p10nojs env PATH="$P10_BADFLOCK" TEAM_JS_BIN="$P10_JS_FIXTURE" $TEAM doctor >"$TMP/p10-doctor-badflock.log" 2>&1; then
+    bad "26-k flock：不可执行 flock 时 doctor 应失败"
+  else
+    ok "26-k flock：不可执行 flock → doctor 失败"
+  fi
+  assert_has "$TMP/p10-doctor-badflock.log" "$P10_BADFLOCK/flock" "26-k flock：不可执行行点名实际路径"
+  assert_has "$TMP/p10-doctor-badflock.log" "chmod +x" "26-k flock：不可执行行给出权限修复方式"
+else
+  cond_skip "26-k flock paths/doctor" "本机缺 flock 或 JS 运行时；权威夹具另有缺锁负例"
+fi
 
 # ---------------------------------------------------------------- 26-l. 文档契约 + 隔离（真项目零污染）
 # R11-S2 的另一半：活动列的新默认值是**写在文档里**的契约变更，不是悄悄改的
@@ -25040,7 +25076,7 @@ else
   if [ "$P406_RC" -eq 0 ]; then
     P406_SUM="$(smoke_inner_summary "$TMP/p406-state-authority.log" state-authority)" || P406_SUM=""
     if [ -n "$P406_SUM" ]; then
-      ok "P406 权威层夹具全绿（$P406_SUM：状态根 / 快照 / flock / 原子写 / 四条翻转臂）"
+      ok "P406 权威层夹具全绿（$P406_SUM：状态根 / 快照 / flock / 原子写 / 八条翻转臂）"
     else
       bad "P406 权威层夹具绿了但读不到它自己的结果行（夹具契约破了）"
     fi

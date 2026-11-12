@@ -722,6 +722,35 @@ team_cmd_doctor() {
       warn "找到了但版本判不出：${js_path:-?} ${js_ver:-}${js_detail:+（$js_detail）}——确认它能跑 --version" ;;
   esac
 
+  # Standby 与 Reminder 共用这一个 OS 锁；没有 Reminder 的项目也不能缺少它。
+  # 已初始化时再对真实 authority.lock 取一次锁：PATH 里有可执行文件不等于这个文件系统支持锁。
+  check "状态锁 flock"
+  local flock_st flock_path flock_detail flock_probe="" flock_probe_rc=0
+  IFS=$'\t' read -r flock_st flock_path flock_detail <<< "$(team_flock_check)"
+  case "$flock_st" in
+    missing)
+      fail "PATH 里没有可执行 flock：安装 util-linux（提供 flock），或把可执行文件放进 PATH；Standby/Reminder 不会无锁写入" ;;
+    unusable)
+      fail "$flock_path 存在但不可执行或不是普通文件：修复执行权限（chmod +x $(printf '%q' "$flock_path")），或安装 util-linux 并修正 PATH" ;;
+    unavailable)
+      if [ "${TEAM_REQUIRE_JS:-1}" = "1" ]; then fail "$flock_detail：先修上面的 JS 运行时，再重跑 doctor"
+      else warn "$flock_detail（TEAM_REQUIRE_JS=0 已降级）；Standby/Reminder 仍需 JS 与 flock" ; fi ;;
+    ok)
+      if ! "$flock_path" --version >/dev/null 2>&1; then
+        fail "$flock_path 无法执行（--version 失败）：重新安装 util-linux，或修正 PATH 指向可用的 flock；不会无锁降级"
+      elif [ -f "$TEAM_MAIN_ROOT/.pi/team/reminder-locator.json" ] && [ -f "$TEAM_STATE_DIR/reminders/authority.lock" ]; then
+        flock_probe="$(team_authority_flock_probe 2>&1)" || flock_probe_rc=$?
+        if [ "$flock_probe_rc" -eq 0 ]; then
+          pass "$flock_path（真实 authority.lock 排他锁可用）"
+        else
+          fail "真实 authority.lock 加锁失败：$flock_probe；检查 $TEAM_STATE_DIR/reminders 所在文件系统是否支持 flock，修复或迁到支持排他锁的文件系统；不会无锁降级"
+        fi
+      else
+        pass "$flock_path（状态权威尚未初始化；首次 Standby/Reminder 写入会验证文件系统锁）"
+      fi ;;
+    *) fail "flock 诊断返回未知状态：$flock_st $flock_detail" ;;
+  esac
+
   # M53 · wake 通道的 inotify 余量：额度 + **可证明**的占用 + 一次性注册探针。降级 ≠ 故障 ——
   # 这是环境事实，只警告（fails 不动）并给修法；探针不是 ok 或已知余量低于底线才开口。
   check "inotify 额度"

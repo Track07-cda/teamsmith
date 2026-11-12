@@ -458,13 +458,101 @@ bug in the guide (or in the tool): report it with the command and the output rat
 
 ## 9. Reminder state and prompt-free recovery
 
-The Reminder/Standby authority adds one shared snapshot and an OS `flock` dependency. Upgrading or
-rolling back requires quiescing the writers, not just replacing the skill files. Back up state before
-upgrading; before rollback, export the snapshot, inspect outstanding intents and restore the legacy
-Standby marker from the authoritative generation. Do not let old marker writers run beside the new
-authority, and do not replay outstanding Reminders with old code.
+The Reminder/Standby authority adds one shared snapshot and an OS `flock` dependency. This is a
+required dependency **even for Standby in a project with no Reminders**. `team paths` reports the
+executable used by the real transaction as `flock_runner` (an empty string means unresolved), and
+`team doctor` fails with a concrete repair when it is absent or unusable:
+
+```text
+flock unavailable: no executable flock on PATH; install util-linux ...
+flock unavailable: <path> is not an executable regular file ...
+exclusive flock failed at <state>/reminders/authority.lock: flock: <OS error> ...
+```
+
+Install `util-linux` (which provides `flock`), fix the named file's execute permission, or correct
+`PATH`. For the third form, repair the filesystem containing `<state>/reminders` or move the project
+state to a filesystem that supports exclusive locks. There is no unlocked fallback and no
+`TEAM_REQUIRE_*` switch that makes a mutation safe without the lock. Once the authority exists,
+`doctor` probes its real `authority.lock` without changing the snapshot.
+
+### 9a. Quiesced upgrade and migration failure
+
+1. Stop the old PM, Pulse and every other old writer. `team pulse down` stops Pulse; use the existing
+   PM stop/restart procedure for the PM. Do not let an old Standby-marker writer run beside the new
+   authority.
+2. Resolve and test the dependencies before writing:
+
+   ```bash
+   team paths                         # inspect flock_runner and js_runner
+   team doctor                        # a missing/unusable flock is a failure
+   ```
+
+3. Preserve the old runtime state. The destination is outside the old code's state directory:
+
+   ```bash
+   backup=".pi/team/reminder-rollback-$(date -u +%Y%m%dT%H%M%SZ)"
+   mkdir -p "$backup"
+   if [ -f .pi/team/state/reminders/state.json ]; then
+     cp .pi/team/state/reminders/state.json "$backup/state.json"
+   fi
+   if [ -f .pi/team/state/standby ]; then
+     cp .pi/team/state/standby "$backup/standby.before-upgrade"
+   fi
+   ```
+
+4. Migrate with the real command:
+
+   ```bash
+   team standby migrate
+   ```
+
+   A lock or legacy-import failure happens before snapshot commit: the previous snapshot and legacy
+   marker remain in place, so repair the named cause and rerun the same command. A write/fsync error
+   can instead be indeterminate after the atomic rename; inspect `standby.migrated` in the snapshot
+   rather than assuming the old state. Migration is idempotent. If the snapshot was committed but only
+   the marker rename failed, the command warns instead: the snapshot already says
+   `standby.migrated=true`, the leftover marker is inert, and this is **not** a rollback to the old
+   writer.
+
+### 9b. Export and roll back
+
+Stop the new PM, Pulse and writers first. Inspect outstanding Reminders and intents with
+`team remind list --all`; resolve them from their observed outcomes rather than assuming delivery.
+Then export the snapshot outside the old code's state path:
+
+```bash
+backup=".pi/team/reminder-rollback-$(date -u +%Y%m%dT%H%M%SZ)"
+mkdir -p "$backup"
+cp .pi/team/state/reminders/state.json "$backup/state.json"
+node -e '
+const fs = require("fs");
+const [snapshotFile, markerFile, backupDir] = process.argv.slice(1);
+const s = JSON.parse(fs.readFileSync(snapshotFile, "utf8"));
+if (!s.standby.migrated) throw new Error("Standby migration has not completed");
+if (s.standby.on) {
+  fs.writeFileSync(markerFile, `${s.standby.since} ${s.standby.reason}\n`);
+} else if (fs.existsSync(markerFile)) {
+  fs.renameSync(markerFile, `${backupDir}/standby.pre-rollback`);
+}
+' "$backup/state.json" ".pi/team/state/standby" "$backup"
+```
+
+This recreates the only Standby file the old code reads, preserving the current generation's `since`
+and `reason`; an authoritative off state has no marker. To prove the export can restore an on marker,
+save the generated marker, move it away, rerun the same `node -e` command and compare the regenerated
+file with the saved one. To verify the exported snapshot itself:
+
+```bash
+cp "$backup/state.json" "$backup/state.restore-check.json"
+cmp "$backup/state.json" "$backup/state.restore-check.json"
+node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' "$backup/state.json"
+```
+
+Pin the older tool using §7 only after the export, marker and stopped processes have been checked.
+There is no `team remind export`, automatic rollback helper or old-code Reminder reader. Old binaries
+cannot interpret or deliver outstanding Reminders: rollback suspends them and never auto-replays them.
+Do not copy the exported snapshot back while old writers are running.
 
 A stopped built-in Pi PM may be resumed for an eligible Reminder without `@pm-prompt`; custom PM
-adapters report `unsupported-adapter` instead of receiving the ordinary startup prompt. The complete
-upgrade/rollback sequence, state paths, unknown handling and recovery outcomes are in
-`skills/teamsmith/references/reminders.md`.
+adapters report `unsupported-adapter` instead of receiving the ordinary startup prompt. State paths,
+unknown handling and recovery outcomes are in `skills/teamsmith/references/reminders.md`.

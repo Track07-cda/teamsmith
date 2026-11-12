@@ -18,30 +18,31 @@
 #   --flip=standby-ignore  迁移不读旧标记            → “迁移保留原因/时间”必须红
 #   --flip=standby-file    读路径退回旧标记文件      → “迁移后旧标记不再是真相”必须红
 #   --flip=standby-write   写待命退回 state/standby  → “写入后统一状态记下 on”必须红
-# 不带 --flip 时七条臂全跑；带一条时只跑那一条，其余臂跳过（跳过即不计入，不是通过）。
-# 用法：bash tests/state-authority.sh [--flip=unlocked|version|foreign|manifest|standby-ignore|standby-file|standby-write]
+#   --flip=flock-resolution 解析不再检查执行权限      → “不可执行 flock 必须被拒”必须红
+# 不带 --flip 时八条臂全跑；带一条时只跑那一条，其余臂跳过（跳过即不计入，不是通过）。
+# 用法：bash tests/state-authority.sh [--flip=unlocked|version|foreign|manifest|standby-ignore|standby-file|standby-write|flock-resolution]
 # 退出码：0 全绿 / 1 有失败 / 2 参数不认识 / 3 前提缺失（JS 运行时或 flock；可见跳过，不算通过）
 set -uo pipefail
 
 HERE="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL="$(cd -P "$HERE/.." && pwd)"
 
-# 参数面：只有这四个 --flip 值；认不出来就拒绝（静默照跑等于把一条臂当成了四条）。
+# 参数面：只接受下列 --flip 值；认不出来就拒绝（静默照跑会把单臂证据当成全套证据）。
 FLIP=""
 flip_err() { printf 'state-authority: %s\n' "$1" >&2; }
 for arg in "$@"; do
   case "$arg" in
-    --flip=unlocked|--flip=version|--flip=foreign|--flip=manifest|--flip=standby-ignore|--flip=standby-file|--flip=standby-write)
+    --flip=unlocked|--flip=version|--flip=foreign|--flip=manifest|--flip=standby-ignore|--flip=standby-file|--flip=standby-write|--flip=flock-resolution)
       if [ -n "$FLIP" ] && [ "$FLIP" != "${arg#--flip=}" ]; then
         flip_err "互相冲突的 --flip（$FLIP / ${arg#--flip=}）：一次只跑一条臂"; exit 2
       fi
       FLIP="${arg#--flip=}" ;;
     --flip=*)
-      flip_err "不认识的 --flip 值 [${arg#--flip=}]；只接受 unlocked|version|foreign|manifest|standby-ignore|standby-file|standby-write"; exit 2 ;;
+      flip_err "不认识的 --flip 值 [${arg#--flip=}]；只接受 unlocked|version|foreign|manifest|standby-ignore|standby-file|standby-write|flock-resolution"; exit 2 ;;
     -h|--help)
-      printf 'usage: bash tests/state-authority.sh [--flip=unlocked|version|foreign|manifest|standby-ignore|standby-file|standby-write]\n'; exit 0 ;;
+      printf 'usage: bash tests/state-authority.sh [--flip=unlocked|version|foreign|manifest|standby-ignore|standby-file|standby-write|flock-resolution]\n'; exit 0 ;;
     *)
-      flip_err "不认识的参数 [$arg]（只接受 --flip=<unlocked|version|foreign|manifest>）"; exit 2 ;;
+      flip_err "不认识的参数 [$arg]（只接受 --flip=<unlocked|version|foreign|manifest|standby-ignore|standby-file|standby-write|flock-resolution>）"; exit 2 ;;
   esac
 done
 arm_selected() { [ -z "$FLIP" ] || [ "$FLIP" = "$1" ]; }
@@ -315,6 +316,7 @@ rm -f "$orphan"
 
 # ---------------------------------------------------------------- 6. 有界锁失败 + 持锁者被杀
 LOCK="$A_STATE/reminders/authority.lock"
+LOCK_FAIL_BEFORE="$(sha256sum "$A_STATE/reminders/state.json" | cut -d' ' -f1)"
 bash -c 'exec 9>"$1"; flock -x 9; sleep 30' _ "$LOCK" &
 HOLDER=$!
 sleep 0.4
@@ -331,6 +333,7 @@ if [ "$elapsed_ms" -ge 4500 ] && [ "$elapsed_ms" -le 12000 ]; then
 else
   bad "锁等待不是有界的 5s（实测 ${elapsed_ms}ms）"
 fi
+assert_eq_local "真实锁竞争失败后快照一字未改" "$(sha256sum "$A_STATE/reminders/state.json" | cut -d' ' -f1)" "$LOCK_FAIL_BEFORE"
 kill -9 "$HOLDER" 2>/dev/null
 wait "$HOLDER" 2>/dev/null
 start_ns="$(date +%s%N)"
@@ -517,7 +520,7 @@ assert_eq_local "⑤f 清残留不加代次" "$(jget "$(cat "$I_SNAP")" standby.
 
 # ⑥ 代次语义：每次 on 都是新的一代，off 不动代次、重复 off 不写盘
 J="$(make_repo J)" || { bad "夹具建不出仓库 J"; result; exit 1; }
-J_SNAP="$J/.pi/team/state/reminders/state.json"
+J_STATE="$J/.pi/team/state"; J_SNAP="$J_STATE/reminders/state.json"
 sb "$J" 'team_standby_on "first"' >/dev/null
 assert_eq_local "⑥a 第一次 on：代次 1" "$(jget "$(cat "$J_SNAP")" standby.generation)" "1"
 sb "$J" 'team_standby_on "second"' >/dev/null
@@ -572,6 +575,128 @@ else
   note "跳过 ⑦（这台机器上造不出没有 flock 的 PATH）"
 fi
 
+# ---------------------------------------------------------------- 7b. 不可执行 / 实际 flock 失败（P451 · 1.3.2）
+BADFLOCK="$ROOT/flip/badflock-bin"
+cp -a "$NOFLOCK" "$BADFLOCK"
+printf 'not executable\n' >"$BADFLOCK/flock"
+chmod 0644 "$BADFLOCK/flock"
+M="$(make_repo M)" || { bad "夹具建不出仓库 M"; result; exit 1; }
+M_STATE="$M/.pi/team/state"; mkdir -p "$M_STATE"
+printf '2026-11-12T00:00:00Z bad flock\n' >"$M_STATE/standby"
+out="$(runchild "$M" TEAM_JS_BIN="$RUNNER" BADFLOCK="$BADFLOCK" -- "$PREP; PATH=\"\$BADFLOCK\" team_standby_on x 2>&1; printf ' rc=%s' \"\$?\"" 2>&1)"
+if case "$out" in *"is not an executable regular file"*"rc=1"*) true ;; *) false ;; esac; then
+  ok "⑦g 不可执行 flock：点名实际路径与权限问题，写入非零退出"
+else
+  bad "⑦g 不可执行 flock 没有明确失败（输出：$(printf '%s' "$out" | tr '\n' '|')）"
+fi
+[ ! -e "$M/.pi/team/reminder-locator.json" ] && [ ! -e "$M_STATE/reminders" ] \
+  && ok "⑦h 不可执行 flock 没有留下定位器或快照" || bad "⑦h 不可执行 flock 留下了半个权威"
+resolution="$(env PATH="$BADFLOCK" "$RUNNER" "$NODE_HELPER" --flock-check)"
+assert_eq_local "⑦i 共享解析器区分不可执行（不是 missing）" "$(printf '%s' "$resolution" | cut -f1-2)" "unusable	$BADFLOCK/flock"
+
+ENOLCK="$ROOT/flip/enolck-bin"
+cp -a "$NOFLOCK" "$ENOLCK"
+cat >"$ENOLCK/flock" <<'EOF'
+#!/usr/bin/env bash
+if [ "${1:-}" = "--version" ]; then printf 'flock from util-linux fixture\n'; exit 0; fi
+printf '%s\n' "$*" >>"$FLOCK_TEST_LOG"
+printf 'flock: %s: No locks available\n' "${6:-unknown}" >&2
+exit 1
+EOF
+chmod +x "$ENOLCK/flock"
+: >"$ROOT/enolck.calls"
+shown="$(runchild "$J" TEAM_JS_BIN="$RUNNER" ENOLCK="$ENOLCK" -- "$PREP; PATH=\"\$ENOLCK\" team_flock_runner")"
+assert_eq_local "⑦j paths 使用与事务相同的 flock 解析结果" "$shown" "$ENOLCK/flock"
+J_H1="$(sha256sum "$J_SNAP" | cut -d' ' -f1)"
+out="$(runchild "$J" TEAM_JS_BIN="$RUNNER" ENOLCK="$ENOLCK" FLOCK_TEST_LOG="$ROOT/enolck.calls" -- "$PREP; PATH=\"\$ENOLCK\" FLOCK_TEST_LOG=\"\$FLOCK_TEST_LOG\" team_standby_on must-not-write 2>&1; printf ' rc=%s' \"\$?\"" 2>&1)"
+if case "$out" in *"exclusive flock failed at $J_STATE/reminders/authority.lock"*"No locks available"*"no state was written"*"rc=1"*) true ;; *) false ;; esac; then
+  ok "⑦k flock 返回 ENOLCK：错误点名真实 authority.lock、文件系统与未写状态"
+else
+  bad "⑦k ENOLCK 没有按锁/文件系统失败报告（输出：$(printf '%s' "$out" | tr '\n' '|')）"
+fi
+assert_eq_local "⑦l ENOLCK 后快照一字未改" "$(sha256sum "$J_SNAP" | cut -d' ' -f1)" "$J_H1"
+if grep -q -- "-x -w 5 -E 75 $J_STATE/reminders/authority.lock" "$ROOT/enolck.calls"; then
+  ok "⑦m 失败来自实际执行的 flock（参数与真实锁路径已记录），不是伪造成交"
+else
+  bad "⑦m 没有执行到真实 flock 调用（日志：$(cat "$ROOT/enolck.calls")）"
+fi
+out="$(runchild "$J" TEAM_JS_BIN="$RUNNER" ENOLCK="$ENOLCK" FLOCK_TEST_LOG="$ROOT/enolck.calls" -- "PATH=\"\$ENOLCK\" FLOCK_TEST_LOG=\"\$FLOCK_TEST_LOG\" bash \"$SKILL/scripts/team\" --root \"$J\" doctor" 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"真实 authority.lock 加锁失败"*"No locks available"*"不会无锁降级"*) true ;; *) false ;; esac; then
+  ok "⑦m2 doctor 对真实 authority.lock 的锁失败给出文件系统修复方式"
+else
+  bad "⑦m2 doctor 没诊断真实锁失败（rc=$rc，输出：$(printf '%s' "$out" | grep -A2 -B1 '状态锁 flock' | tr '\n' '|')）"
+fi
+assert_eq_local "⑦m3 doctor 锁探针不改快照" "$(sha256sum "$J_SNAP" | cut -d' ' -f1)" "$J_H1"
+out="$(runchild "$J" -- "bash \"$SKILL/scripts/team\" --root \"$J\" doctor" 2>&1)"
+if case "$out" in *"真实 authority.lock 排他锁可用"*) true ;; *) false ;; esac; then
+  ok "⑦m4 恢复真实 flock 后 doctor 探针转绿（同一项目、同一锁文件）"
+else
+  bad "⑦m4 恢复后 doctor 锁探针仍不绿（输出：$(printf '%s' "$out" | grep -A2 -B1 '状态锁 flock' | tr '\n' '|')）"
+fi
+
+# ---------------------------------------------------------------- 7c. 静止迁移失败与回滚导出（P451 · 1.3.2）
+R="$(make_repo R)" || { bad "夹具建不出仓库 R"; result; exit 1; }
+R_STATE="$R/.pi/team/state"; R_SNAP="$R_STATE/reminders/state.json"
+sb "$R" 'team_authority_init' >/dev/null
+# 合法的旧快照没有 migrated 键；这里只回到那个升级前形状，随后让旧标记无法导入。
+sed -i 's/"migrated":true/"migrated":false/' "$R_SNAP"
+mkdir "$R_STATE/standby"
+R_H1="$(sha256sum "$R_SNAP" | cut -d' ' -f1)"
+out="$(sb "$R" 'team_standby_migrate' 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"legacy Standby marker is not a regular file"*) true ;; *) false ;; esac; then
+  ok "⑦n 静止迁移遇到坏旧标记：显式失败并点名原因"
+else
+  bad "⑦n 坏旧标记没有让迁移失败（rc=$rc，输出：$(printf '%s' "$out" | tr '\n' '|')）"
+fi
+assert_eq_local "⑦o 迁移失败后快照保持原状态" "$(sha256sum "$R_SNAP" | cut -d' ' -f1)" "$R_H1"
+[ -d "$R_STATE/standby" ] && [ ! -e "$R_STATE/standby.migrated" ] \
+  && ok "⑦p 迁移失败后旧标记未退役、未伪造迁移完成" || bad "⑦p 迁移失败后旧标记状态变了"
+
+U="$(make_repo U)" || { bad "夹具建不出仓库 U"; result; exit 1; }
+U_STATE="$U/.pi/team/state"; U_SNAP="$U_STATE/reminders/state.json"
+sb "$U" 'team_standby_on "rollback export reason"' >/dev/null
+EXPORT="$ROOT/rollback-export"; OLD_CODE="$ROOT/old-code-state"
+mkdir -p "$EXPORT" "$OLD_CODE"
+cp "$U_SNAP" "$EXPORT/state.json"
+# 与 references/migration.md 相同的实际操作：从导出快照重建旧版唯一读取的待命标记。
+"$RUNNER" -e '
+const fs = require("fs");
+const [snapshotFile, markerFile] = process.argv.slice(1);
+const s = JSON.parse(fs.readFileSync(snapshotFile, "utf8"));
+if (!s.standby.migrated) throw new Error("snapshot has not completed Standby migration");
+if (s.standby.on) fs.writeFileSync(markerFile, `${s.standby.since} ${s.standby.reason}\n`);
+' "$EXPORT/state.json" "$OLD_CODE/standby"
+expected_marker="$(jget "$(cat "$EXPORT/state.json")" standby.since) $(jget "$(cat "$EXPORT/state.json")" standby.reason)"
+assert_eq_local "⑦q 回滚导出可重建旧版待命标记" "$(cat "$OLD_CODE/standby")" "$expected_marker"
+mv "$OLD_CODE/standby" "$EXPORT/standby.before-restore-check"
+"$RUNNER" -e '
+const fs = require("fs");
+const [snapshotFile, markerFile] = process.argv.slice(1);
+const s = JSON.parse(fs.readFileSync(snapshotFile, "utf8"));
+if (!s.standby.migrated) throw new Error("snapshot has not completed Standby migration");
+if (s.standby.on) fs.writeFileSync(markerFile, `${s.standby.since} ${s.standby.reason}\n`);
+' "$EXPORT/state.json" "$OLD_CODE/standby"
+if cmp -s "$EXPORT/standby.before-restore-check" "$OLD_CODE/standby"; then
+  ok "⑦q2 移走旧标记后可从导出快照逐字节恢复它"
+else
+  bad "⑦q2 导出快照不能恢复旧标记"
+fi
+cp "$EXPORT/state.json" "$EXPORT/state.restore-check.json"
+printf 'corrupt restore\n' >>"$EXPORT/state.restore-check.json"
+if cmp -s "$EXPORT/state.json" "$EXPORT/state.restore-check.json"; then
+  bad "⑦r 反向改坏：损坏的恢复副本竟与导出原件相同"
+else
+  ok "⑦r 反向改坏：恢复副本损坏会被逐字节比较发现"
+fi
+cp "$EXPORT/state.json" "$EXPORT/state.restore-check.json"
+if cmp -s "$EXPORT/state.json" "$EXPORT/state.restore-check.json" \
+   && [ "$(jget "$(cat "$EXPORT/state.restore-check.json")" standby.reason)" = "rollback export reason" ]; then
+  ok "⑦s 从导出原件恢复后字节与待命原因都复原"
+else
+  bad "⑦s 导出原件无法恢复"
+fi
+[ ! -e "$OLD_CODE/reminders/state.json" ] && ok "⑦t 回滚快照留在旧代码状态路径之外" || bad "⑦t 回滚快照落进了旧代码路径"
+
 # ---------------------------------------------------------------- 10. 红侧：同一个判据，改坏实现必须红
 flip_copy() { # <名字> <sed 表达式> —— 变异必须真的改到（否则红侧就是橡皮章）
   authority_helper_copy "$ROOT/flip/$1.mjs"
@@ -584,6 +709,25 @@ flip_helper() { # <helper> <repo> <state> <op> [args…] → 打印输出
   ( cd "$repo" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION HOME="$ROOT/home" \
       "$RUNNER" "$helper" --cli "$repo" "$state" "$@" 2>&1 )
 }
+# 10a0. flock 解析退化成「文件存在就算可用」：不可执行诊断必须翻错（P451）
+if arm_selected flock-resolution; then
+FLIPS_RUN="${FLIPS_RUN:+$FLIPS_RUN,}flock-resolution"
+if flip_copy flock-resolution '/fs\.accessSync(file, fs\.constants\.X_OK);/d'; then
+  ok "flip 变异已落地：flock 解析不再检查执行权限"
+else
+  bad "flip 变异没落地（共享 flock 解析器形状变了）"
+fi
+orig_res="$(env PATH="$BADFLOCK" "$RUNNER" "$NODE_HELPER" --flock-check)"
+mut_res="$(env PATH="$BADFLOCK" "$RUNNER" "$ROOT/flip/flock-resolution.mjs" --flock-check)"
+if [ "$(printf '%s' "$orig_res" | cut -f1)" = "unusable" ] && [ "$(printf '%s' "$mut_res" | cut -f1)" = "ok" ]; then
+  ok "flip（不查执行权限）：原实现报 unusable，变异体报 ok —— ⑦i 与 paths/doctor 判据会红"
+else
+  bad "flip（不查执行权限）没被咬住（原 [$orig_res]，变异 [$mut_res]）"
+fi
+else
+  note "跳过红侧臂 flock-resolution（本次 --flip=${FLIP}）"
+fi
+
 # 10a. 不持锁的直写：只把生产代码里那条 flock 调用换成直接事务（一行之差，不放大任何窗口）
 if arm_selected unlocked; then
 FLIPS_RUN="${FLIPS_RUN:+$FLIPS_RUN,}unlocked"

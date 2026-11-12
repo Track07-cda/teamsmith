@@ -8,9 +8,9 @@ The user's latest decision removes Reminder quotas; this revision edits planning
   - [x] 1.1.1 Pin the canonical physical project state-root locator; reject conflicting overrides/foreign projects and exercise worktrees and inherited mismatched environment. Evidence: `docs/team/reviews/P406.md` + `V128.md`; CLI and Node use the same authority helper.
   - [ ] 1.1.2 Finish factoring verified PM/launch/session identity for every tool call and the remaining guarded recovery path; do not treat a valid state-root locator as PM authorization. Covers the PM tool isolation and PM-lifecycle recovery scenarios.
 - [x] 1.2 Implement the versioned snapshot, common `flock` transaction, file + directory durability, project/sequence identities and explicit lock failure. Evidence: `docs/team/reviews/P406.md` + `V128.md` cover Bash/Node contention, differing `TMPDIR`, owner death and snapshot faults against the production helper.
-- [ ] 1.3 Finish Standby migration, dependency diagnostics and rollback support.
+- [x] 1.3 Finish Standby migration, dependency diagnostics and rollback support.
   - [x] 1.3.1 Move Standby reads/writes onto the authority; migrate the legacy marker and reason atomically and idempotently, preserve on/off generations, and reject corrupt state or missing lock without an unlocked write. Evidence: `docs/team/reviews/P422.md` and `docs/team/reports/P422-dev.md`.
-  - [ ] 1.3.2 Expose `flock_runner` in `team paths`, finish concrete `team doctor` dependency diagnostics and document the changed error on hosts without it; verify unsupported locking, quiesced migration failure and rollback export. These parts are not established by the P422 delivery evidence. Covers the dependency delta and state-order migration scenarios.
+  - [x] 1.3.2 Expose `flock_runner` in `team paths`, finish concrete `team doctor` dependency diagnostics and document the changed error on hosts without it; verify unsupported locking, quiesced migration failure and rollback export. These parts are not established by the P422 delivery evidence. Covers the dependency delta and state-order migration scenarios. Evidence: `docs/team/reports/P451-dev.md`; shared resolver, real authority-lock probe, missing/unusable/ENOLCK and migration/rollback flip evidence.
 
 ## 2. Reminder API and durable lifecycle
 

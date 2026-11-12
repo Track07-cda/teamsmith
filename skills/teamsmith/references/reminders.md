@@ -148,11 +148,18 @@ ignored: it cannot synthesize a Reminder, recreate a batch, spend another right 
    run beside the new authority.
 2. Back up the runtime state, verify `flock` and the JS runtime, and confirm the intended canonical
    state root before starting the new writers. The legacy Standby marker migrates once under the lock
-   with its reason and generation preserved.
-3. Before rollback, quiesce the new writers, inspect and resolve outstanding intents and export
+   with its reason and generation preserved. `flock` is required for Standby even when the project has
+   no Reminders; `team paths` exposes the exact `flock_runner` used by transactions.
+3. A missing executable reports `flock unavailable: no executable flock on PATH`; an unusable one names
+   its path. An OS locking failure reports `exclusive flock failed at <lock>` and the filesystem repair.
+   `team doctor` fails in all three cases and gives the corresponding repair. There is no unlocked
+   mutation or requirement switch that bypasses the dependency.
+4. Before rollback, quiesce the new writers, inspect and resolve outstanding intents and export
    `reminders/state.json`. Restore the legacy Standby marker from the authoritative generation/reason
-   and keep the Reminder snapshot outside the old code's path.
-4. Old binaries cannot interpret or deliver outstanding Reminders. Rollback suspends them; it does not
+   and keep the Reminder snapshot outside the old code's path. The exact `cp` / `node -e` export,
+   recovery check, migration-failure states and restart order are in [migration.md §9](migration.md#9-reminder-state-and-prompt-free-recovery);
+   there is no separate export or automatic rollback command.
+5. Old binaries cannot interpret or deliver outstanding Reminders. Rollback suspends them; it does not
    auto-replay them. Verify the backup, marker and stopped processes before resuming old code.
 
 `team doctor` checks the lock dependency and PM-tool evidence. There is no scheduler daemon, separate

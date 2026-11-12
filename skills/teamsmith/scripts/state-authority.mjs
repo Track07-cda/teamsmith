@@ -47,6 +47,32 @@ const STANDBY_READ_OPS = new Set(['read', 'standby-read']);
 
 const fail = message => { throw new Error(message); };
 
+// One resolver feeds `team paths`, `team doctor` and every real transaction. Returning an absolute
+// executable also makes the spawn below use exactly the binary that the diagnostics displayed.
+export function flockResolution(env = process.env) {
+  const pathValue = env.PATH ?? '/usr/bin:/bin';
+  let candidate = null;
+  for (const entry of pathValue.split(':')) {
+    const file = path.resolve(entry || '.', 'flock');
+    try {
+      const stat = fs.statSync(file);
+      candidate ??= file;
+      fs.accessSync(file, fs.constants.X_OK);
+      if (stat.isFile()) return { status: 'ok', runner: file, candidate: file, detail: '' };
+    } catch { /* remember the first unusable match and keep looking for a usable one */ }
+  }
+  return candidate
+    ? { status: 'unusable', runner: '', candidate, detail: 'not an executable regular file' }
+    : { status: 'missing', runner: '', candidate: '', detail: 'no executable flock on PATH' };
+}
+
+function flockUnavailable(resolution) {
+  const repair = 'install util-linux (which provides flock), or put an executable flock on PATH; no unlocked fallback';
+  return resolution.status === 'unusable'
+    ? `flock unavailable: ${resolution.candidate} is not an executable regular file; fix its permissions or ${repair}`
+    : `flock unavailable: no executable flock on PATH; ${repair}`;
+}
+
 // The project a working directory belongs to -- the same git rule as common.sh's team_dir_roots, so a
 // Node caller (Pulse, Pi) cannot be talked out of its own project by an inherited variable.
 function projectOf(cwd) {
@@ -438,9 +464,11 @@ function transaction(main, state, request) {
 function flock(lock, args, input) {
   return new Promise((resolve, reject) => {
     const startedAt = Date.now();
-    const child = spawn('flock', ['-x', '-w', String(LOCK_WAIT_SECONDS), '-E', String(LOCK_CONFLICT_EXIT), lock,
+    const resolution = flockResolution();
+    if (!resolution.runner) { reject(new Error(flockUnavailable(resolution))); return; }
+    const child = spawn(resolution.runner, ['-x', '-w', String(LOCK_WAIT_SECONDS), '-E', String(LOCK_CONFLICT_EXIT), lock,
       process.execPath, SELF, ...args],
-      { stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] });
+      { stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'], env: { ...process.env, LC_ALL: 'C' } });
     const out = [];
     const err = [];
     child.stdout.on('data', chunk => out.push(chunk));
@@ -450,6 +478,10 @@ function flock(lock, args, input) {
     child.on('close', (code, signal) => {
       const stderr = Buffer.concat(err).toString().trim();
       if (code !== 0) {
+        if (/^flock:/m.test(stderr)) {
+          return reject(new Error(`exclusive flock failed at ${lock}: ${stderr}; ` +
+            'check that this filesystem supports exclusive locks; no state was written and there is no unlocked fallback'));
+        }
         if (stderr) return reject(new Error(stderr));
         // Only a conflict exit that actually used up the window is a timeout. Anything else (a helper
         // killed or crashed mid-transaction) is reported as what it is, with its status.
@@ -695,6 +727,30 @@ function renderStandby(op, result) {
 
 async function main(argv) {
   const [mode, ...rest] = argv;
+  if (mode === '--flock-check') {
+    const result = flockResolution();
+    const fields = [result.status, result.runner || result.candidate, result.detail]
+      .map(value => String(value).replace(/[\t\r\n]/g, ' '));
+    process.stdout.write(fields.join('\t') + '\n');
+    return;
+  }
+  if (mode === '--flock-lock-check') {
+    const [mainRoot, stateRoot] = rest;
+    if (!mainRoot || !stateRoot) fail('usage: state-authority.mjs --flock-lock-check <project-root> <state-root>');
+    const main = authorityIdentity({ cwd: mainRoot, mainRoot, stateRoot });
+    const pinned = readLocator(main);
+    if (!pinned) fail(`state authority is not initialized for ${main}; there is no authority lock to probe`);
+    const located = agree(pinned, main, canonical(stateRoot));
+    const lock = authorityLock(located.stateRoot);
+    if (!regular_exists(lock)) fail(`authority lock does not exist yet: ${lock}`);
+    const result = await flock(lock, ['--lock-probe']);
+    process.stdout.write(JSON.stringify(result) + '\n');
+    return;
+  }
+  if (mode === '--lock-probe') {
+    process.stdout.write(JSON.stringify({ ok: true }) + '\n');
+    return;
+  }
   if (mode === '--locator') {
     const [main, requested] = rest;
     verifyLockFile(locatorLock(main));
