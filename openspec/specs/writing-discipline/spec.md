@@ -1,7 +1,9 @@
 # writing-discipline Specification
 
 ## Purpose
-TBD - created by archiving change writing-discipline. Update Purpose after archive.
+This capability defines evidence-supported writing: claims, cautions and boundaries are kept only when they name
+checkable support and state their effect on the implementation, the next step or the conclusion. It judges support
+and consequence rather than prescribing tone.
 ## Requirements
 ### Requirement: A caution is kept only with the fact or gap it cites
 

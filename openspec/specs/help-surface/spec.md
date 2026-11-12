@@ -1,7 +1,9 @@
 # help-surface Specification
 
 ## Purpose
-TBD - created by archiving change cli-help. Update Purpose after archive.
+This capability defines a command help surface driven by one command manifest for the menu, group pages and command
+pages. It keeps documented commands, flags and examples aligned with actual behavior, including language, formatting,
+compatibility and evidence that every printed route works.
 ## Requirements
 ### Requirement: The help surface is a level-0 menu, a page per group and a page per command
 
