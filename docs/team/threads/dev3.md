@@ -293,3 +293,6 @@ P398实际启动回执（2026-11-02）：code类别按policy选择clinepass/clin
 
 ### 2026-11-02 · from: pm · re: P398 invalid after run stopped
 用户报告席位卡住后，PM查到漏传第四参数：flip_run定义以$#>=4开启ARM_NARROW，但臂循环仅传mutation/scratch/groups；实际template-unbound子进程初始ARM_NARROW为空。不是quota或模型卡住，不换模型。已保全/var/tmp/p398-pm-stop.whI3ne（15份局部日志+driver/源码+SHA256SUMS），按记录identity停止p398-before2-and-after进程组2692408，不能把中断after报PASS。before2已rc0并导出33份日志，必须复用、不再跑before。先harvest中断，再补参数并用可证伪的小probe验证真实驱动→子进程→两循环；保留baseline/restored全量，避免只验证helper而漏掉调用处。先短报修正与probe结果，通过后才补一遍正确after；外层run-both会用最后grep盖掉子退出码，必须实读after rc/内层RESULT。不要sleep240长轮询，不改在飞树或加整套守卫。PM已用say把这份实证交回原会话。
+
+### 2026-11-11T02:21:09Z · from: pm · re: -
+V152 最终全量续跑在 2026-11-11T02:20Z 因 opencode-go 429 overloaded 中断；未启动新一轮全量，既有 c6b3453e 全量 FAIL 记录不当作本轮结果。保留 merged SHA 与 /var/tmp/p444-review-final，服务恢复后同任务续跑，不换模型。
