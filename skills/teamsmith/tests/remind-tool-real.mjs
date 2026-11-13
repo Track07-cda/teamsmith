@@ -387,6 +387,8 @@ try {
       writeFileSync(wrapper, `#!/usr/bin/env bash\nprintf '%s\\0' "$@" >${sh(argvBytes)}\nexec ${sh(pi)} "$@"\n`)
       command('chmod', ['+x', wrapper])
       writeFileSync(info.config, readFileSync(info.config, 'utf8').replace(/^TEAM_PI_BIN=.*$/m, `TEAM_PI_BIN=${sh(wrapper)}`))
+      // team_load_config gives environment overrides precedence; recover() also publishes info.env to tmux.
+      info.env.TEAM_PI_BIN = wrapper
       let result = team(info, ['notify', 'pm', 'P443_ORDINARY_BACKLOG'], 'ordinary-backlog')
       assert.equal(result.status, 0, 'ordinary backlog is pending before recovery')
       result = team(info, ['standby', 'on', '--reason', 'P443 stopped recovery'], 'standby-on')
