@@ -2,13 +2,13 @@
 ## Team protocol (teamsmith)
 
 A **PM (orchestrator)** in tmux `teamsmith:pm` owns tasks and merge authority; **worker agents**
-implement in parallel inside their own git worktrees. Tooling: `bash /home/yikdata/Documents/syncthing/Work/Projects/pm-skills/skills/teamsmith/scripts/team help`.
+implement in parallel inside their own git worktrees. Tooling: `bash skills/teamsmith/scripts/team help`.
 Roster: dev verify dev2 dev3 dev-bob (editable in `.pi/team/config.sh`).
 
 **Project rules belong outside this block.** Everything between `<!-- teamsmith:begin -->` and
 `<!-- teamsmith:end -->` is generated and `team init` replaces it on refresh, so a rule written inside is lost at
 the next upgrade: the managed block is not a customization surface. Rules already inside the pair must be
-inventoried and preserved outside first -- the PM's job, recipe in `/home/yikdata/Documents/syncthing/Work/Projects/pm-skills/skills/teamsmith/references/migration.md`.
+inventoried and preserved outside first -- the PM's job, recipe in `skills/teamsmith/references/migration.md`.
 
 ### Roles and reading order
 
@@ -37,7 +37,7 @@ a dev runs `opsx-apply`; a **different** agent runs `opsx-verify`; a non-impleme
 accepts archive only after the same verifier's merged-revision evidence passes and the user confirms, or the PM records
 a narrowly qualified proxy confirmation (small, reversible and already covered by the approved approach).
 Phase names go in the brief's `phase:` line; flags, phase-command source and pinned-toolchain caveat are in
-`/home/yikdata/Documents/syncthing/Work/Projects/pm-skills/skills/teamsmith/references/openspec.md`.
+`skills/teamsmith/references/openspec.md`.
 
 **The change is the assignment unit** (`1 change : N tasks`, `1 task : 0..1 change`): the brief's header is the
 foreign key — `change:` (exactly one id, or `-`), `specs:`/`anchor:` (a change-less brief must resolve
@@ -58,7 +58,7 @@ last three take `--force` + one audited line). `team change status <id>` shows t
   done; the turn's last line names every awaited job id). The lane rule is the suspend default: `team_bg_run`
   starts a long job and the turn ends; the completion wake-up is the normal harvest point. Do not wait inside the
   turn (`sleep`, `team wait`, a blocking harvest): the user cannot type while the PM waits. A previous session's wake-ups died with its process: find its jobs on disk
-  (`state/bg.log`, `team bg list`) before awaiting or re-running them (`/home/yikdata/Documents/syncthing/Work/Projects/pm-skills/skills/teamsmith/references/workflows.md` §E2).
+  (`state/bg.log`, `team bg list`) before awaiting or re-running them (`skills/teamsmith/references/workflows.md` §E2).
 - **Never claim tests passed without having run them.** The assigned non-implementer verifier runs the gates on the
   PM-prepared independent checkout; the PM accepts that evidence rather than executing the gates. A false report fails the task.
 - Never write tokens/secrets into code, config, logs or commit messages; never read credential files
@@ -76,7 +76,7 @@ last three take `--force` + one audited line). `team change status <id>` shows t
   place by what it cites -- a measurement, a counterexample, a gap in the reasoning, or a boundary you did not
   observe -- and a sentence that names none is deleted; one that carries its evidence stays. Every finding states
   what it changed: the implementation, the next step, the conclusion, or nothing; an observation that changed
-  nothing stays out of the body. See `/home/yikdata/Documents/syncthing/Work/Projects/pm-skills/skills/teamsmith/references/protocol.md` §11b.
+  nothing stays out of the body. See `skills/teamsmith/references/protocol.md` §11b.
 - Never push `main`, never `git push --force`, never merge PR/MRs or rebase/delete other branches.
 - Commit in small steps: every verifiable step gets a commit (Conventional Commits + task ID + `Agent: <name>` trailer).
 
@@ -93,22 +93,22 @@ fix) and settle the branch: a local branch stays local, and a remote push/PR fol
 route. A non-implementer verifier runs `team review` on the PM-prepared independent checkout and, after the PM merges,
 resumes on the merged SHA. The PM accepts that evidence, merges, and only then sets the board and closes the task.
 Messages are not deliverables -- evidence lives in `docs/team/reports/`, `docs/team/reviews/` and the commits (recipes:
-`/home/yikdata/Documents/syncthing/Work/Projects/pm-skills/skills/teamsmith/references/workflows.md` §B dispatch, §E verification, §F merge). `docs/team/inbox/<agent>.md`
+`skills/teamsmith/references/workflows.md` §B dispatch, §E verification, §F merge). `docs/team/inbox/<agent>.md`
 and the knock on `teamsmith:pm` happen at turn end automatically. Blocked, or someone else's bug:
-`bash /home/yikdata/Documents/syncthing/Work/Projects/pm-skills/skills/teamsmith/scripts/team notify <agent> "<one line>"` and a report that says `BLOCKED:`.
+`bash skills/teamsmith/scripts/team notify <agent> "<one line>"` and a report that says `BLOCKED:`.
 
 ### The rest of the machine (read on demand)
 
-- New project, first step: `bash /home/yikdata/Documents/syncthing/Work/Projects/pm-skills/skills/teamsmith/scripts/team bootstrap` (idempotent); recipe in
-  `/home/yikdata/Documents/syncthing/Work/Projects/pm-skills/skills/teamsmith/references/workflows.md` §A.
+- New project, first step: `bash skills/teamsmith/scripts/team bootstrap` (idempotent); recipe in
+  `skills/teamsmith/references/workflows.md` §A.
 - The pulse is the PM's metronome, not a daemon: `team pulse up|status|logs|down` every `TEAM_PULSE_INTERVAL`
   seconds (default 900), waking the PM only when work is pending. It never manages tmux layout, agents or quota,
   and a stopped worker is pending work for the PM to `resume`, not an automatic dispatch; `team standby on|off` is
-  a human's call. Mechanism: `/home/yikdata/Documents/syncthing/Work/Projects/pm-skills/skills/teamsmith/references/protocol.md` §8; patrol: `references/workflows.md` §D/§I.
+  a human's call. Mechanism: `skills/teamsmith/references/protocol.md` §8; patrol: `references/workflows.md` §D/§I.
 - Capacity floor (`team ps`): neither RAM nor disk swap may bottom out; model quotas are a separate limit
-  (`/home/yikdata/Documents/syncthing/Work/Projects/pm-skills/skills/teamsmith/references/protocol.md` §9).
+  (`skills/teamsmith/references/protocol.md` §9).
 - Cross-project meetings are PM-to-PM only: workers do not attend, and no agent touches another project's
-  repository or session (`/home/yikdata/Documents/syncthing/Work/Projects/pm-skills/skills/teamsmith/references/meeting.md`).
+  repository or session (`skills/teamsmith/references/meeting.md`).
 - The ledger is `docs/team/` (`tasks/ reports/ reviews/ threads/ inbox/` and `BOARD·ROADMAP·OWNERSHIP·DECISIONS.md`);
   seats are `.worktrees/<agent>/` and sessions are keyed by cwd, so keep that directory stable.
 <!-- teamsmith:end -->

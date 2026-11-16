@@ -11195,36 +11195,51 @@ rm -f "$M71R/AGENTS.md"
 cmp -s "$TMP/m71-block.md" "$M71R/AGENTS.md" \
   && ok "文件缺失：建出来的就是那一块渲染段" || bad "文件缺失：建出来的不是渲染段"
 
-# ②f P440：PROTOCOL 是公开账本，三种安装形状分别使用可移植且不虚构的命令路径。
+# ②f P440/P456：PROTOCOL 与 AGENTS 的三种安装形状都使用可移植且不虚构的命令路径。
 p440_new_repo() { rm -rf "$1"; mkdir -p "$1"; ( cd "$1" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke && git commit -q --allow-empty -m init ); }
 p440_protocol_paths_ok() { # <repo> <skills/teamsmith|.pi/skills/teamsmith|<skill-dir>>
-  local repo="$1" expected="$2" f="$1/docs/team/PROTOCOL.md"
-  [ -f "$f" ] || { printf 'PROTOCOL missing\n'; return 1; }
-  ! grep -qF "$repo" "$f" || { printf 'absolute main root remains\n'; return 1; }
-  if [ "${HOME:-}" != "/" ]; then
-    ! grep -qF "$HOME" "$f" || { printf 'absolute home remains\n'; return 1; }
-  fi
-  grep -qF "bash $expected/scripts/team help" "$f" || { printf 'expected team command missing\n'; return 1; }
-  if [ "$expected" = '<skill-dir>' ]; then
-    ! grep -qF '.pi/skills/teamsmith' "$f" || { printf 'no-skills invented an install path\n'; return 1; }
-  else
-    [ -f "$repo/$expected/scripts/team" ] || { printf 'rendered team command does not exist\n'; return 1; }
-    [ -f "$repo/$expected/tests/smoke.sh" ] || { printf 'rendered smoke command does not exist\n'; return 1; }
+  local repo="$1" expected="$2" f ref command_line wt="$1/.worktrees/path-check"
+  for f in "$repo/docs/team/PROTOCOL.md" "$repo/AGENTS.md"; do
+    ref="$expected"
+    if [ "$f" = "$repo/AGENTS.md" ] && [ "$expected" = '.pi/skills/teamsmith' ]; then
+      ref='"$(git rev-parse --path-format=absolute --git-common-dir)/../.pi/skills/teamsmith"'
+    fi
+    [ -f "$f" ] || { printf 'document missing\n'; return 1; }
+    ! grep -qF "$repo" "$f" || { printf 'absolute main root remains\n'; return 1; }
+    if [ "${HOME:-}" != "/" ]; then
+      ! grep -qF "$HOME" "$f" || { printf 'absolute home remains\n'; return 1; }
+    fi
+    grep -qF "bash $ref/scripts/team help" "$f" || { printf 'expected team command missing\n'; return 1; }
+    if [ "$expected" = '<skill-dir>' ]; then
+      ! grep -qF '.pi/skills/teamsmith' "$f" || { printf 'no-skills invented an install path\n'; return 1; }
+    else
+      [ -f "$repo/$expected/scripts/team" ] || { printf 'rendered team command does not exist\n'; return 1; }
+      [ -f "$repo/$expected/tests/smoke.sh" ] || { printf 'rendered smoke command does not exist\n'; return 1; }
+    fi
+  done
+  if [ "$expected" != '<skill-dir>' ]; then
+    command_line="$(sed -n 's/.*Tooling: `\(bash .*\/scripts\/team help\)`.*/\1/p' "$repo/AGENTS.md")"
+    ( cd "$repo" && bash -c "$command_line" ) || return 1
+    git -C "$repo" worktree add -q --detach "$wt" HEAD || return 1
+    ( cd "$wt" && bash -c "$command_line" ); local rc=$?
+    git -C "$repo" worktree remove "$wt" || return 1
+    [ "$rc" -eq 0 ] || { printf 'worker team command failed\n'; return 1; }
   fi
 }
 P440_NORMAL="$TMP/p440-normal-project"; p440_new_repo "$P440_NORMAL"
 ( cd "$P440_NORMAL" && $TEAM init --session p440-normal --agents dev --vcs local --gates true "${P235_MODELS[@]}" ) >"$TMP/p440-normal-init.log" 2>&1 \
   || { bad "P440 普通项目 init 失败"; tail -8 "$TMP/p440-normal-init.log"; }
 p440_protocol_paths_ok "$P440_NORMAL" '.pi/skills/teamsmith' >"$TMP/p440-normal-protocol.log" 2>&1 \
-  && ok "P440 init 普通项目：PROTOCOL 用真实存在的 .pi/skills 相对路径，不含 main/home 绝对路径" \
+  && ok "P440/P456 init 普通项目：PROTOCOL/AGENTS 不含 main/home 绝对路径，AGENTS 命令在主检出与 worker 均可用" \
   || { bad "P440 init 普通项目路径断言失败"; cat "$TMP/p440-normal-protocol.log"; }
 
 P440_SOURCE="$TMP/p440-source-project"; p440_new_repo "$P440_SOURCE"; mkdir -p "$P440_SOURCE/skills"
 cp -a "$SKILL_DIR" "$P440_SOURCE/skills/teamsmith"; cp -a "$SKILL_INIT_DIR" "$P440_SOURCE/skills/teamsmith-init"
+( cd "$P440_SOURCE" && git add skills && git commit -qm fixture-skills ) || bad "P456 源仓技能入夹具提交失败"
 ( cd "$P440_SOURCE" && bash skills/teamsmith/scripts/team init --session p440-source --agents dev --vcs local --gates true "${P235_MODELS[@]}" ) >"$TMP/p440-source-init.log" 2>&1 \
   || { bad "P440 源仓 init 失败"; tail -8 "$TMP/p440-source-init.log"; }
 p440_protocol_paths_ok "$P440_SOURCE" 'skills/teamsmith' >"$TMP/p440-source-protocol.log" 2>&1 \
-  && ok "P440 init 源仓：PROTOCOL 用真实存在的 skills/teamsmith 相对路径，不含 main/home 绝对路径" \
+  && ok "P440/P456 init 源仓：PROTOCOL/AGENTS 用 skills/teamsmith 相对路径，AGENTS 命令在主检出与 worker 均可用" \
   || { bad "P440 init 源仓路径断言失败"; cat "$TMP/p440-source-protocol.log"; }
 
 P440_NOSKILLS="$TMP/p440-no-skills-project"; p440_new_repo "$P440_NOSKILLS"
@@ -11234,20 +11249,20 @@ p440_protocol_paths_ok "$P440_NOSKILLS" '<skill-dir>' >"$TMP/p440-no-skills-prot
   && ok "P440 init --no-skills：只写明确占位，不伪造 .pi/skills 安装路径" \
   || { bad "P440 init --no-skills 路径断言失败"; cat "$TMP/p440-no-skills-protocol.log"; }
 
-# P440 init 红/绿/恢复：源仓私有副本恢复绝对 SKILL_DIR 后同一行为断言必须红，还原后再绿。
+# P456 沿用 P440 的红/绿/恢复：只把 AGENTS 的生成参数改回绝对 SKILL_DIR，同一行为断言必须红。
 cp "$P440_SOURCE/skills/teamsmith/scripts/lib/cmd-project.sh" "$TMP/p440-cmd-project.backup"
 python3 - "$P440_SOURCE/skills/teamsmith/scripts/lib/cmd-project.sh" <<'PY'
 import sys
 p = sys.argv[1]
 s = open(p, encoding='utf-8').read()
-old = '"SKILL_DIR=$docs_skill_dir" "GATES=${gates:-<未配置>}" "SESSION=$session"'
-assert s.count(old) == 1, 'P440 PROTOCOL render binding not found exactly once'
-new = '"SKILL_DIR=$TEAM_SKILL_DIR" "GATES=${gates:-<未配置>}" "SESSION=$session"'
+old = '"SKILL_DIR=$agents_skill_dir" "AGENTS=$agents" "GATES=${gates:-<未配置>}"'
+assert s.count(old) == 1, 'P456 AGENTS render binding not found exactly once'
+new = '"SKILL_DIR=$TEAM_SKILL_DIR" "AGENTS=$agents" "GATES=${gates:-<未配置>}"'
 open(p, 'w', encoding='utf-8').write(s.replace(old, new, 1))
 PY
 ( cd "$P440_SOURCE" && bash skills/teamsmith/scripts/team init --force --session p440-source --agents dev --vcs local --gates true "${P235_MODELS[@]}" ) >"$TMP/p440-source-mutant.log" 2>&1
 if p440_protocol_paths_ok "$P440_SOURCE" 'skills/teamsmith' >"$TMP/p440-source-red.log" 2>&1; then
-  bad "P440 init 红侧失效：恢复绝对 SKILL_DIR 仍通过 PROTOCOL 路径断言"
+  bad "P456 init 红侧失效：恢复绝对 SKILL_DIR 仍通过 AGENTS 路径断言"
 else
   ok "P440 init 红：恢复绝对 SKILL_DIR → 断言红（$(tr '\n' ' ' < "$TMP/p440-source-red.log")）"
 fi
@@ -15054,10 +15069,10 @@ PYRC
 assert_eq "28-i2 项目根软链：还原后 change/decision 照常服务" "$P28I2_RL_CTL" "ok"
 
 # ---- 28-i3 项目内的软链（P424）
-# 现场形状：ai_interview 的 `docs/team → ai-interview-algo/docs/team`（同一项目内）。旧判据按「路径上任
-# 一段是软链」拒绝，详情面整页不可用；新判据只看**解析后的落点**。翻转证据在报告里（判据改回「任一段是
-# 软链就拒」→ 「项目内软链的详情可读」那条必须变红），这里钉正向与反面。
-P28I3="$P27R/ai-interview-algo"
+# 现场形状：`docs/team → module/docs/team`（同一项目内）。旧判据按「路径上任一段是软链」拒绝，
+# 详情面整页不可用；新判据只看**解析后的落点**。翻转证据在报告里（判据改回「任一段是软链就拒」→
+# 「项目内软链的详情可读」那条必须变红），这里钉正向与反面。
+P28I3="$P27R/module"
 mkdir -p "$P28I3/docs"
 mv "$P27R/docs/team" "$P28I3/docs/team"
 ln -sfn "$P28I3/docs/team" "$P27R/docs/team"

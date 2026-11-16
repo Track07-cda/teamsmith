@@ -431,10 +431,16 @@ team_cmd_init() {
   printf '# 复验日志：本地证据，不入库\n*.log\n' > "$TEAM_DOCS_ABS/reviews/.gitignore"
 
   # 3) AGENTS.md 协议段落
+  # 普通项目的技能只装在主检出：worker 从 worktree 调命令时也通过 git common-dir 找同一份安装。
+  # 源仓的 skills/ 随分支检出，直接复用 PROTOCOL 的仓库相对路径；--no-skills 保留明确占位。
+  local agents_skill_dir="$docs_skill_dir"
+  if [ "$agents_skill_dir" = '.pi/skills/teamsmith' ]; then
+    agents_skill_dir='"$(git rev-parse --path-format=absolute --git-common-dir)/../.pi/skills/teamsmith"'
+  fi
   local section; section="$(mktemp)"
   team_render "$tdir/AGENTS.section.md.tmpl" \
     "PROJECT=$project" "DOCS_DIR=$docs" "SESSION=$session" "PM_WINDOW=$pmwin" \
-    "SKILL_DIR=$TEAM_SKILL_DIR" "AGENTS=$agents" "GATES=${gates:-<未配置>}" \
+    "SKILL_DIR=$agents_skill_dir" "AGENTS=$agents" "GATES=${gates:-<未配置>}" \
     "WORKTREES_DIR=${TEAM_WORKTREES_DIR:-.worktrees}" "PROTECTED_BRANCH=main" > "$section"
   # 旧名标记迁移（<=1.12 的项目 AGENTS.md 里是 pi-team:begin/end）：交给同一个写入器，按同一处
   # 范围编辑把标记行的文字换掉（围栏外那对才动，示例里的旧标记逐字节保留）。
