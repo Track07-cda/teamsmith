@@ -253,3 +253,6 @@ V165恢复：07:55:54–07:56:08会话记录四次stopReason=error，均为TLS�
 
 ### 2026-11-16T08:19:08Z · from: pm · re: V165
 V165阶段A已接受。P459合并7245bfefa4216b50a89e508bedbec14a7d710933，干净独立检出/var/tmp/p459-review-merged已准备；按原任务阶段B用同一SID核5文件与bf483405同一性，只做适用短显示/分类边界与结构检查，不重复Pi/安装或全部反例。新runner必须从merged检出取实际函数，中央review记录绑定merged SHA；保留阶段A原件与警告。
+
+### 2026-11-16T11:28:30Z · from: pm · re: -
+V168仅R1复看：P462真实修订78fef9689dfe，通知里的ba_PLACEHOLDER不作证据，PM已核实际tip及干净树。原独立检出git diff ea6e9534..78fef968即可，只有design一段+作者报告两行；其余工件/源/输入不变。主检出V168 brief已追加，只复核你已查明的hash/源/help局部/rc1/V167边界，关闭R1后补报告，保留首次REWORK。复用此前静态回执，不重跑任何套件/结构/名单或行为。原模型/SID/分支续做。

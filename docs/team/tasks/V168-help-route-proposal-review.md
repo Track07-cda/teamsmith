@@ -31,3 +31,9 @@ P462交付冻结 `ea6e9534`，PM准备只读 `/var/tmp/p462-review-ea6e9534`。�
 不跑正常route、短变异、完整help/locale/routes/51、smoke真实段、全量/FAST/meta/61b/夜间/安装/性能/真实模型；不为方案审阅重建测试样本。若确实需要一个小验证才能定论，说明具体缺口交PM，不自行扩范围或写未来已执行。
 
 报告先给ACCEPTED/REWORK和改变结论的证据、最小返修、CRITICAL/WARNING/SUGGESTION及未验边界；未来任务0/4/行为未执行如实保留但不是本次规划缺陷。小步提交Conventional Commits含V168/Agent: verify，分支保持本地，不merge/push/archive。仅清自己本次具体临时根。PM收到后再正式proposal review，当前不接受apply。
+
+## R1差异复看（2026-11-16）
+
+候选实际提交是 `78fef9689dfe`，不是通知正文里的占位符；工作树干净。保留原独立检出，不切换它：在该共享git库只读对比 `ea6e9534..78fef968` 即可。写集只有design复用段和作者报告两行，proposal/delta/tasks/元数据及全部源/输入不变。
+
+只确认新段将你已经实核的原件hash/572856a3/help132局部与全轮rc1、1322字节消费者、V167§7的四文件差异绑定正确，关闭R1或指明仍缺的具体字句。以原静态回执及这次差异复看收口，不重跑strict/ledger/选择器或任何行为，不重开整案。只补自己的报告R1最终结论及必要diff-check，原模型/SID/分支续做；报告保留第一次REWORK历史和原未验边界。
