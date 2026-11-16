@@ -33,3 +33,12 @@ PM已核当前 `help-surface.sh:check_route`：每个MG_ORDER命令用两次相�
 不运行完整help/route/locale/routes/51、smoke真实段、全量/meta/61b/夜间/安装/性能。静态能回答就不做样本；若确需，只补一条私有目录的三入口短样本，不据它声称全manifest已验。实际使用OpenSpec1.16本change严格结构、spec-refs/section-select静态登记、报告暂存后的ledger-ban与两种diff-check；较慢批次后台跑并结束回合。不安装/升级。
 
 小步提交Conventional Commits含P462和Agent: dev2。报告先给推荐最小范围、4N→3N实际计数/原代码证据、实施/验收成本及哪些旧执行退休，再给真实回执/未验证；不能宣称已实现或整套已提速。不merge/push/archive/tag/npm，只清自己的本次精确临时根。主根.cortexkit是旧目录；正常后台记录不是未知源码污染，不扩修工具。
+
+## 2026-11-16 · 只补独立审阅R1的引用
+
+V168已提交61ade73d的静态发现（最终例行检查仍由原验证者收齐），唯一修订是design复用段，不重开方案。保持原模型/SID/分支，读该提交 `docs/team/reports/V168-verify.md` R1：
+
+- 原件 `/var/tmp/rel47-first-order.log`，sha256 `9ca9986e014307573cf7577ad6572d6a2d5c59f4f6fccd81158ea7b2375d2545`，源572856a3ae57503396019020f58e8e6abcc08db4；全轮5139成功/2失败、rc1，仅help子脚本132局部成功（不是全轮绿，681秒不是本批收益）。
+- help-surface/manifest/routes/routes-pages及51的1322字节帮助消费者实际与候选一致；不声称整个依赖树未变。cmd-project/cmd-review/cmd-watch/common的差异，引用V167报告§7的消费适用性审阅；未来仅相关输入变化才定点补验。
+
+只补design的这一复用段及自己报告的一条修订回执，其余proposal/delta/tasks/元数据不改。保留已经实际执行的结构/静态回执，本次只核写集和普通/暂存diff-check，不重复strict/spec-refs/选择器自检/ledger或任何行为。正文只用上述项目内原件，不引入真实用户名/其它项目内容。提交后通知PM；原V168只复看这一引用差异，不再次完整审阅或跑测试。当前仍不授权apply。
