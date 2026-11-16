@@ -1,6 +1,12 @@
 # clipboard-test-session-reuse · PM proposal review
 
-判定: **REWORK**
+判定: **ACCEPTED**
+
+接受固定候选add115a2f6ed1192a5ca626a58a5c8cc2ae98a56及V169最终bfd264ec。原验证者仅复看W1/W2，现有回调/同帧理由取文、图像父rc与种子同shell flag分工、正常默认长路径一次验收和七主动+零按键均闭合；change strict通过，CRITICAL/WARNING/SUGGESTION均0。只接受规划，实际局部适配、完整8→4及五项任务仍未实现/未验，不把原样本两次等待失败或84.018s改记成功/收益。
+
+允许另派apply：先同scenario三处局部图像观察，再四次准备复用；只实现/静态，未来非作者统一一次完整clipboard加既定短坏/恢复/结果消费。同字节合并只必要短检，不跑完整b2/38/全量，不动共享库、产品、路径宽度或超时。API使用应分别以原team_tmp_root_source读取来源、team_tmp_root读取路径，不误称后者输出自带source。PM接受独立审阅，不执行门禁；D252记录实施决定。
+
+## 首轮REWORK记录（74925f0d；已由上述修订闭合）
 
 接受V169（74925f0d）的两项发现，当前不派apply。两个条件同进程、真键重置及分别C-v/图片/草稿的原件已被独立核对，复用本身可继续；84.018s包含两次约35s的无效等待，不报样本全绿或提速。
 

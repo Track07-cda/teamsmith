@@ -1,10 +1,14 @@
-# V169 · REWORK：复用准备可行，先处理已查明的无效等待
+# V169 · ACCEPTED：W1/W2 规划修订已闭合
 
-agent: verify · status: DELIVERED / REWORK（独立方案审阅，不是实现验收）
-time: 2026-11-16T11:51:04Z
+agent: verify · status: DELIVERED / ACCEPTED（仅规划，不是实现验收）
+time: 2026-11-16T12:16:09Z
 branch: `task/V169-clipboard-reuse-proposal-review` · PR/MR: -（本地）
 
-## 结论
+## 当前结论
+
+**ACCEPTED，仅限修订方案。** 候选 `add115a2f6ed1192a5ca626a58a5c8cc2ae98a56` 已把三处图像等待的局部替代放在四次准备复用之前，并统一为七次主动 C-v 加一次零按键观察；W1/W2 关闭。本轮只审这两项差异、相关现有接口和新 change 严格结构，未重跑样本、真实场景或旧静态平台。第二轮证据见文末；以下首轮 REWORK 及失败原件说明原样保留，不代表当前仍有两项待修。
+
+## 首轮结论（2c5ba223；2026-11-16T11:51:04Z；REWORK）
 
 **REWORK，不按当前“保持原等待不动、下次完整运行再看”的方案直接进入 apply。** 四次准备重启换成普通工具输入文件和真实草稿编辑仍是小改动，两个条件共享进程的证据成立；但原样本已有两次约 36s/35s 的无效等待，且源码表明本项目的正常默认临时路径也能把同一 token 拆开，不限于样本额外嵌套。最小下一步是先由 PM 收敛这三处图像等待的局部处理与先后顺序，再修提案文字；不重跑样本、不改等待库、不造通用屏幕重组或新增永久检查。
 
@@ -195,7 +199,7 @@ CACHED_DIFF_CHECK_RC=0
 
 N/A——本轮是规划审阅，未修改实现。未来 no-op 红/恢复及失败结果消费仅审计划，没有报告成已运行。
 
-## Final assessment / 未验边界
+## 首轮 Final assessment / 未验边界（历史）
 
 - Counts: CRITICAL 0 · WARNING 2 · SUGGESTION 0。
 - 方案结论：REWORK；普通输入/真键复用机制值得保留，W1 改变实施优先级，W2 需修规格矛盾。两项均只需先改规划，不需新场景或完整重跑来决定。
@@ -207,3 +211,59 @@ N/A——本轮是规划审阅，未修改实现。未来 no-op 红/恢复及失
 - 无执行范围偏离；所有证据原件留本地，没有 `git add -f`、merge/push/archive 或真实团队修改。
 - PM 将 W1/W2 一次交回作者：先记录正常默认路径反例并收敛局部等待的先后关系，再修七次 C-v/未按键文字；本席位后续只静态复看这些差异，不重开整体方案或追加长套件。
 - 当前不派 apply；正式 proposal review 仍由 PM 接受证据后记录。
+
+## 第二轮 · 只复看 W1/W2（add115a2）
+
+### 范围与实际差异
+
+主检出 V169 brief/thread 的 2026-11-16T12:14 补充只授权两项差异、新 change strict 与报告 diff-check。仍在原分支/原模型/SID；新固定独立检出 `/var/tmp/p464-review-add115a2` 干净，HEAD 为 `add115a2f6ed1192a5ca626a58a5c8cc2ae98a56`。旧候选及两条件原件未修改或重读重跑。
+
+实际 `git diff --stat 2c5ba223..add115a2` 只有 proposal/design/tasks/delta 和作者报告五文件，73 additions / 34 deletions；`git diff --quiet 2c5ba223..add115a2 -- skills openspec/specs .pi ci .github` rc=0。未重开已接受的同进程样本、普通工具输入或真键种子准备判断。
+
+### W1 关闭：只用现有接口，局部替代可执行
+
+- **三处逐一替代，不扩写集。** 新 design:53–64 / tasks:7 明确先替换原 693/715/779 的图像观察，再同一次 apply 退休四次准备。仍只授 `scenario_clipboard`，不修改共享等待/隔离库、产品、其它 scenario、宽度、路径、输入间隔、轮数/扩展及五秒观察，不增加等待次数或成功断言。
+- **回调和两帧稳定有源码支持。** 原 `pty_wait_frame:179,192,194` 查找调用方 `pty_cap` 并取得其输出，`pty_frame_settled:139–150` 再取一次同回调作稳定比较。新设计在局部函数子 shell 内提供原可见帧加真实状态 ready 行，沿原引擎返回，不依赖回调向父 shell 写内存；子 shell 退出即结束覆盖。因此无需增加引擎或长期测试入口。
+- **理由取文用同一次帧。** 原 `reason_text:786–792` 接收一份 capture 文件，只拼待命原因框紧随标题的自身行。新 design:61 只移前复用，并明确对同次可见帧取文，理由必须恰为 `why<本例路径>`、消息草稿仍为 half a thought；不能拿第二次 capture、消息草稿、框外或滚屏内容替代。前两处还要求实际 PNG/预期内容和 `a<本例路径>d`，不会把空路径下的 ad 当成功。现有文件/插入点/理由/工具顺序具名断言继续保留。
+- **父调用方计失败，返回接法不混用。** 新 design:62 的图像适配直接返回本次引擎 rc，父调用方非零记 bad 后仍执行原断言；原 bad 增加 FAIL，runner 最终非零，所以后续成功不能抹掉该失败。图像路径不假定 PTY_WAIT_FAILED 能跨子 shell 返回。种子路径则按 design:36 / tasks:8 保持同 shell 普通 wait_draft 后立即读取该次标志，bad 后显式 return，不能先运行别的等待。失败注入在替代等待完成后、实际消费者之前进行，明确不在真实引擎开头重置前注入；只称结果消费。
+- **一次完整运行直接覆盖正常默认长路径。** 新 design:73–75 / tasks:12 只对子命令取消 TMPDIR/TEAM_TMP_ROOT，使用公共 git 根相同的独立工作树；不改 TEAM_PROJECT、不另起短命 clone 凑路径。源码 `common.sh:83–101` 支持公共 git 身份得到相同命名空间，`:4206–4252` 支持只读查询，不创建目录。这里 API 的准确分工为 `team_tmp_root_source`（或 `team_tmp_root_source_text`）读来源、`team_tmp_root` 读路径；不能把后者 stdout 当成自带 source 的记录。新方案要确认的两项可直接由这两个既有纯函数取得，不需新 API。`/var/tmp` 不可用时原 default 可能给 `/tmp`，所以新计划在实际不是要求的 `/var/tmp` 默认根时先停止，不暗中切换短路径。当前只核源码和说明，**未执行该确认或完整场景**。
+
+上述变化同时进入原 delta 的 All original clipboard outcomes 场景及任务 1.1/2.1，没有新增 requirement/scenario/task。只将先前已识别问题纳入同一次局部实现及原一次完整验证，故 W1 的下一步缺口已闭合，不要求第二轮完整运行或新框架。
+
+### W2 关闭：七个主动子例、一个零 C-v 子例
+
+新 proposal:10、design:51、delta requirement 正文及 tasks:12 均明确七个主动粘贴子例各一次真实 C-v，第八子例保持零 C-v，关/开两段五秒与零工具调用证据保留。原先泛指八例都按键的句子已删除，与未按键观察不再矛盾；未改原测试。
+
+作者报告保留初次业务准备 0 / rc=2、续做两次等待失败、16.812s/84.018s、仅 2→1 已实跑及完整 8→4 未验的边界。未来仍 0/5 未勾，验证仍为非作者一次完整 clipboard，加必要 no-op 首例/短恢复/实际父结果及准备结果消费；同字节合并不重复完整 clipboard/b2/38。没有把本轮规划静态审查当行为 PASS。
+
+### 实际新检查
+
+按完成唤醒收取后台 `v169-w1-w2-strict`，exit=0；本轮没有重跑 context/status/spec-refs/selector/名单或任何真实场景。
+
+```text
+$ # 目标 /var/tmp/p464-review-add115a2；实际程序为 $HOME/.bun/bin/openspec
+$ openspec validate clipboard-test-session-reuse --type change --strict --no-interactive
+CHECKOUT add115a2f6ed1192a5ca626a58a5c8cc2ae98a56
+Change 'clipboard-test-session-reuse' is valid
+REWORK_STRICT_RC=0
+END 2026-11-16T12:16:09Z
+$ git diff --check 2c5ba223..add115a2
+CANDIDATE_DIFF_CHECK_RC=0
+$ git diff --quiet 2c5ba223..add115a2 -- skills openspec/specs .pi ci .github
+EXECUTABLE_BASELINE_DIFF_RC=0
+```
+
+本报告已在本席位暂存，实际普通/暂存 diff-check 均为 0；写入此回执后再暂存并重检。按本轮 brief 不重复首轮名单扫描；首轮扫描及其实际回执仍在上文，不将它重标成本轮新执行。
+
+```text
+$ git diff --check
+REPORT_DIFF_CHECK_RC=0
+$ git diff --cached --check
+REPORT_CACHED_DIFF_CHECK_RC=0
+```
+
+### 第二轮 Final assessment
+
+- **ACCEPTED，仅限规划。** W1/W2 均关闭；当前 CRITICAL 0 / WARNING 0 / SUGGESTION 0。
+- 首轮实施/行为未验边界保持，0/5 不改；新局部适配及失败传播尚未实现，不能声称已经动态通过。无 archive 就绪声明。
+- 交 PM 接受本次差异证据并记录正式 proposal review；这不是本席位的 apply、合并、推送或收尾定稿授权。没有新测试、模型调用或重跑要求。
