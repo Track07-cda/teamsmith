@@ -2,7 +2,7 @@
 id: P456
 title: 0.4.7公开文件脱敏与误入库日志清理
 agent: dev
-category: routine
+category: code
 phase: apply
 change: -
 anchor: none (infra) — 已有发布不泄露本机路径/项目名及日志不入库规则的修复
