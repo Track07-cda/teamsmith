@@ -265,3 +265,6 @@ V171 A已接受，实现30ea8df04d6ee7048d0d935b138f39dac0503fb0，PM固定/var/
 
 ### 2026-11-16T13:59:04Z · from: pm · re: V171
 V171原件已统一保存在主根.pi/team/state/evidence/P466包与manifest.json，verifier/clipboard-run标签普通文件均已和包内字节核对。只授权清理你自己的 /var/tmp/v171-verify.plU7KA 和 /var/tmp/teamsmith-pm_skills-deb708fe/teamsmith-panel-b2-pm_skills-deb708fe.WHZ5Wo 两个不再使用的根；不动固定检出/其它目录，不重跑检查或改报告/任务分支。若仍有进程使用则保留。完成后一句回执即可。
+
+### 2026-11-16T14:14:37Z · from: pm · re: V172
+新任务V172是独立方案审阅：冻结824cfd82，PM准备/var/tmp/p467-review-824cfd82。只审本方案和既有源、跑本change严格结构及必要报告静态，不执行未来正常组/五臂/61b，不把旧六项未勾当本轮缺陷。特别核42次双模式见证是否仍重复、writer提前拒绝如何进入真实caller、旧61b场景与新范围是否自洽。V171清理已接受，不再续做旧任务。
