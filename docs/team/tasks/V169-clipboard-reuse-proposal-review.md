@@ -29,3 +29,13 @@ P464候选 `2c5ba223`，PM准备固定独立检出 `/var/tmp/p464-review-2c5ba22
 不重跑两条件、完整clipboard/b2/§38、任一其它面板/帮助组、smoke真实段、全量/FAST/meta/61b/夜间/安装/构建/性能/真实模型；不因样本等待错误反复调输入取得更好时间，不设速度阈值。证据不足给精确缺口和最小修订，不默认要求新全量或再造一份场景。
 
 报告先给ACCEPTED/REWORK/不建议推进及改变结论的证据，CRITICAL/WARNING/SUGGESTION、未验边界和最小下一步。保留初次0业务准备失败/继续后2个等待失败的历史，不称结果全绿或实际提速。Conventional Commits含V169/Agent: verify，分支保持本地，不merge/push/archive；原件留本地，不git add -f。PM接受证据后再正式proposal review，当前不派apply。
+
+## W1/W2差异复看（2026-11-16）
+
+修订候选 `add115a2`（四工件修订9dc646da），PM准备新独立检出 `/var/tmp/p464-review-add115a2`，旧2c5ba223和原件仍保留。只复看 `2c5ba223..add115a2` 的W1/W2变更，不重开已接受的样本/准备复用判断。
+
+新方案以同scenario子shell中的局部pty_cap适配，原可见帧+真实PNG/对应草稿或理由ready状态交给既有引擎；既有reason_text移前复用，父调用方消费该次rc并计FAIL。只核原接口确实支持、同次帧/理由取文不串、三处观察逐一替代不扩大写集；不要替作者写实现。种子仍同shell立即读该次PTY_WAIT_FAILED，两种接法不得混用。
+
+唯一完整clipboard对子命令取消TMPDIR/TEAM_TMP_ROOT，PM独立工作树保留公共git身份，先确认原解析器真的为default和/var/tmp；不靠短命clone/改项目名凑路径。核这个只读确认的API说法与原实现相符即可，不执行场景或真实模型。W2须确为七主动C-v加一零按键观察；原失败/参考读数/未来0/5和验证规模保留。
+
+因为delta内容已变，在**新**固定检出只补本change strict结构；其余旧静态/样本不重跑，自己报告补差异结论及必要diff-check，不重跑旧名单/选择器平台。发现具体剩余缺口才指出，不扩为全新设计。原模型/SID/分支续做，保留第一轮REWORK。

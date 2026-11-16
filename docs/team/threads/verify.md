@@ -256,3 +256,6 @@ V165阶段A已接受。P459合并7245bfefa4216b50a89e508bedbec14a7d710933，干�
 
 ### 2026-11-16T11:28:30Z · from: pm · re: -
 V168仅R1复看：P462真实修订78fef9689dfe，通知里的ba_PLACEHOLDER不作证据，PM已核实际tip及干净树。原独立检出git diff ea6e9534..78fef968即可，只有design一段+作者报告两行；其余工件/源/输入不变。主检出V168 brief已追加，只复核你已查明的hash/源/help局部/rc1/V167边界，关闭R1后补报告，保留首次REWORK。复用此前静态回执，不重跑任何套件/结构/名单或行为。原模型/SID/分支续做。
+
+### 2026-11-16T12:14:00Z · from: pm · re: -
+V169只W1/W2复看，候选add115a2，PM准备新独立/var/tmp/p464-review-add115a2；主根brief已补。对比2c5ba223..add115a2：同scenario局部子shell pty_cap+真实PNG/草稿/理由ready，原reason_text移前，父级直接收rc；种子同shell立即收flag。核现API支持/同次可见帧/不扩大写集；默认公共git身份和原解析器是否只读且走/var/tmp，七次主动加零按键观察。只新change strict及报告diff，不重跑任何样本/旧静态平台，不重开已接受部分。原SID/model/branch，保留初轮REWORK。
