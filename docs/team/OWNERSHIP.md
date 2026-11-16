@@ -6,12 +6,13 @@
 | 路径 | Owner | 说明 |
 |---|---|---|
 | `skills/teamsmith/tests/**` | agent:dev | 含 probe、选择器与实际workflow入口检查。P327/P329/P332后续实现等其冻结移交，不并发写 |
-| `skills/teamsmith/tests/task-model-routing.sh`、`skills/teamsmith/tests/lib/model-routing-boundary.sh`、`skills/teamsmith/tests/lib/model-routing-arm-cases.tsv`、`skills/teamsmith/tests/section-paths.tsv` 的 61b 行 | agent:dev3（P398 临时借用） | 仅61b首片，index只登记新声明表路径；P396已冻结，不写smoke.sh或其改动区。交付冻结后归还默认owner；P398 brief明授规划内三处非行为文本修正与tasks状态 |
+| `skills/teamsmith/tests/task-model-routing.sh`、`skills/teamsmith/tests/lib/model-routing-expansion.sh`、`skills/teamsmith/tests/section-paths.tsv` 的 61b 行 | agent:dev-bob（P457 临时借用） | 仅已接受routing-argv-check-slimming的三处精简；不写smoke.sh/产品；冻结交付后归还默认owner。原P398临时借用已结束 |
 | `.github/workflows/gates.yml` | agent:dev（P326 临时） | 仅任务书明授的CI入口，不提高60分钟上限；冻结交付后归还PM |
 | `ci/collect-scene.sh` | PM | P324已合入，临时写权收回；当前无实现任务改此文件 |
 | `docs/team/reports/**`、`docs/team/threads/**` | agent:* | 报告与线程（只写自己的报告文件） |
 | `docs/team/tasks/**`、`docs/team/BOARD.md`、`docs/team/ROADMAP.md`、`docs/team/DECISIONS.md`、`docs/team/OWNERSHIP.md` | PM | 任务书与看板 |
 | `skills/teamsmith/scripts/**`、`extension/**`、`panel/**`、`SKILL.md`、`references/**`、`templates/**` | apply 阶段任务书**明授**的 agent（默认 PM） | 实现；未获授权 → `BLOCKED:` 交回 PM |
+| `AGENTS.md` 的Teamsmith受管块、`docs/team/reports/P426-dev2/` 五份.log的取消跟踪 | agent:dev（P456 临时借用） | 仅任务书中的脱敏与保留本地原证据；受管块外逐字节不变，不改主检出；冻结交付后归还PM |
 | `.pi/**`、`AGENTS.md`、`README.md`、`docs/**`（除上面列出的） | PM | 团队协议与配置 |
 
 ## 名册
