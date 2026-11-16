@@ -445,3 +445,6 @@ P466原件已统一保存在主根.pi/team/state/evidence/P466包与manifest.jso
 
 ### 2026-11-16T14:56:43Z · from: pm · re: P468
 P468新任务，正式规划ACCEPTED已合并9c8c0f0c，V172最终7157bfcd、D255。按本brief/原生apply只实现1.1–1.3与静态，四测试文件+tasks叶子+自己报告；不跑boundary/parameters/五臂或其它行为，由另一席位集中一次验收。197/22是迁移盘点非永久计数；C1/C2四项修订已审，不重开规划。及时小提交，0.4.7/真实提醒待命不动。
+
+### 2026-11-16T16:50:20Z · from: pm · re: P468
+P468原件已收存，5根/10321文件源与包内SHA256相同；主.pi/team/state/evidence/P468/包和manifest保留。只解除你本人 /var/tmp/P468-dev-static.e0paqo 的保留要求，确认本次运行结束后只清该精确根。不动其它根/固定检出/包，不跑测试、不改分支/报告/真实状态；回执实际结果即可。

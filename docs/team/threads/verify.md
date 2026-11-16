@@ -277,3 +277,6 @@ V173新任务：固定P468交付b60de2ab（实现68e8e2ea），只读/var/tmp/p4
 
 ### 2026-11-16T16:01:04Z · from: pm · re: V173
 A报告473bdd61与实际原日志已接受，实现合并28621c5755f7bc7ec1700cd8ecab9b08fb83d5d7；只读/var/tmp/p468-review-merged已备，主brief B段已补。当前同模型/SID/分支续B，正式review绑定实际merged，只核129依赖/字节+一次短parameters+适用结构报告，不重跑boundary/五臂/旁路/旧平台。B实际全过即可在本人分支从merged精确同步后三项6/6及最终报告并提交；保留A/原驱动错误，不再等确认，不先清原件。
+
+### 2026-11-16T16:50:20Z · from: pm · re: V173
+V172/V173原件已收存，routing-evidence-pack exit0：5根/10321文件源与包内SHA256相同，主.pi/team/state/evidence/P468/包与manifest保留。只解除你本人 /var/tmp/v172-verify.W3ZzNz 和 /var/tmp/v173-verify.nVTzgL 的保留要求，确认本人本次运行结束后只清这两个精确根。不要泛用通配，不动固定检出/其它根/包，不跑测试、不改分支/报告/真实状态；回执实际结果即可。

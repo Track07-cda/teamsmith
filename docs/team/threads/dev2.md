@@ -1113,3 +1113,6 @@ A12新任务：D256依D241确认归档，P467/V172/P468/V173已关闭。最终15
 
 ### 2026-11-16T16:30:50Z · from: pm · re: A12
 已核e26c47a7和原始trial diff，仅两处普通段落空行，不改变需求/场景。主A12 brief/review及D256已裁定接受native段落格式；原模型/SID/分支继续，既有正式spec授权有效。复用已核trial，不再试archive或跑根/版本/旧平台；本人分支一次实际原生archive，正式spec比现成trial、五工件原样，其余正文不变，再补归档后短检查。保留原BLOCKED/rc1及active21/21历史，不改delta、不新增过滤器、不跑行为。
+
+### 2026-11-16T16:50:20Z · from: pm · re: A12
+A12原件已收存，routing-evidence-pack exit0：5根/10321文件源与包内SHA256相同，包与manifest在主检出.pi/team/state/evidence/P468/，A12 review已记。只解除你本人两根 /var/tmp/p467-rework-static.A0E50N 与 /var/tmp/a12-routing-archive.JTCWfi 的保留要求；确认本人本次运行已结束后只清这两个精确路径。不要泛用通配、不动包/固定检出/其它根；不跑测试、不改分支/报告/真实状态。回执列实际已清或仍在用的具体根即可。
