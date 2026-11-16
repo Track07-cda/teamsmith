@@ -2305,3 +2305,7 @@ V169的74925f0d已独立核实两条件共享进程，同时给出正常默认�
 ## D255 · 接受模型参数检查精简规划，另派实施（2026-11-16）
 
 V172由非作者verify对2c4f86d1仅复看四项返修后，报告7157bfcd接受规划，当前0 CRITICAL / 0 WARNING / 0 SUGGESTION；PM核对新strict真实输出和rc并接受。原REWORK与42次旧盘点保留，22次为最新安排而非运行结果。方案进入独立实施任务，执行界限以`routing-parameter-check-dedup`原生工件为准，PM接受记录在`docs/team/reviews/routing-parameter-check-dedup-proposal.md`。沿用作者静态、非作者统一一次受影响行为验收，不重跑旧批完整61b、未改组或全量；未证明新耗时，不新增产品防护或测试平台。
+
+## D256 · 确认参数检查精简可收尾归档（2026-11-16）
+
+V173同一非作者verify已完成候选与merged28621c57两阶段，最终1525c11e、原生6/6、CRITICAL/WARNING/SUGGESTION均0；PM已读取实际日志并接受。按D241用户授予的归档决策权，本批仅减少测试重复、可单独撤销且与D255已批准方案一致，确认由非实现者同步已验delta并原生归档。PM不执行verify/archive或行为门禁，不为归档重复正常/五臂或全量；产品、真实状态和已发布0.4.7不变。

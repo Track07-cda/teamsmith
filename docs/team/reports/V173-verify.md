@@ -1,9 +1,101 @@
 # V173 · 模型参数检查独立验证
 
-agent: verify · status: **阶段 A PASS；阶段 B 未执行** · time: 2026-11-16T15:49:17Z
+agent: verify · status: **PASS（A/B均完成）** · time: 2026-11-16T16:04:20Z
 branch: `task/V173-routing-parameter-check-verify` · PR/MR: -（local）
 
-## 结论
+## 最终结论
+
+**阶段A/B均通过，原生清单6/6，CRITICAL/WARNING/SUGGESTION均为0。** 已验A的一次正常boundary为863/0，五原故障与自身副本恢复由一次bounded parent接受51/0，原父异常结果消费与指定调用边反例均成立。合并版本 `28621c5755f7bc7ec1700cd8ecab9b08fb83d5d7` 的129项执行/规划/输入依赖与A逐字节相同，合并后唯一短parameters为279/0、rc0；正式P468 review已绑定该merged SHA，实际执行者仍verify。
+
+本轮B未重跑boundary、五臂parent、结果回放或调用边反例，未扩其它组或旧平台。三个A流程CRITICAL已由B实证与精确同步清单关闭；A当时的3/6、驱动错误及全部正常/坏/恢复原件保留。尚未执行或擅自授权archive，PM负责证据接受与既有确认流程。
+
+## 最终OpenSpec assessment
+
+| Dimension | Score | Evidence |
+|---|---|---|
+| Completeness | **6/6 tasks；1/1 MODIFIED requirement本批映射完整** | `merged/final-own-apply.json`：total6/complete6/remaining0、六项done；作者1.1–1.3从merged保持，仅相对merged勾2.1–2.3 |
+| Correctness | **本批六场景全部闭合** | A正常/五故障/同副本恢复/原父异常消费/真实调用边实证；B129/129同一及短parameters279/0，补齐A最后场景的post-merge部分；原17场景未另重跑 |
+| Coherence | **Design Adherence / Code Pattern Consistency通过** | B从实际merged cwd重新读取四执行文件及全部contextFiles；临时runner未硬编码旧候选执行；保留原规则、调用shell结果、输入隔离及A的有限退休范围 |
+
+### CRITICAL
+
+None。A的C1/C2为行为已验但按授权暂不勾的2.1/2.2，C3为尚未执行的B/2.3；B实际通过且清单精确同步后均已关闭，依据 `merged/task-sync-proof.json` 与 `merged/final-own-apply.json`。
+
+### WARNING
+
+None。
+
+### SUGGESTION
+
+None。
+
+### Final assessment
+
+- Counts：**CRITICAL 0 · WARNING 0 · SUGGESTION 0**。
+- Readiness：本brief所有适用验证均已完成，在已验范围具备按流程收尾条件；不代替PM证据接受或归档确认，不执行archive。
+- Applicable checks not verified：None within the brief。未改组/原17场景及A实证依同一性和既有接受记录复用；未冒称在merged重新执行完整A。
+- Excluded：完整CORE/61b/flip、smoke/FAST/meta/夜间、其它26臂、其它路由/功能矩阵、安装/构建/性能/真实模型未运行，不称通过，不宣称整套净提速。
+
+## 阶段B · 合并后实际证据
+
+PM接受A提交 `473bdd61` 后提供固定只读 `/var/tmp/p468-review-merged`。先建本人 `merged-parent-tmp`，保持原模型/SID/稳定任务分支，从本人worktree执行：
+
+```text
+$ TEAM_GATES='bash /var/tmp/v173-verify.nVTzgL/stage-b.sh' TEAM_REVIEW_TIMEOUT=7200 TMPDIR=<已建私有parent> \
+    bash skills/teamsmith/scripts/team review P468 --dir /var/tmp/p468-review-merged --branch 28621c5755f7bc7ec1700cd8ecab9b08fb83d5d7
+# rc=0，中央PASS，实际执行者verify，ran=1s；时间仅参考。
+MERGED HEAD 28621c5755f7bc7ec1700cd8ecab9b08fb83d5d7 clean and ignored=0; 129 execution/planning/input dependencies byte-identical to accepted A
+MERGED native schema spec-driven progress {'total': 6, 'complete': 3, 'remaining': 3}
+$ bash skills/teamsmith/tests/task-model-routing.sh --select parameters
+RESULT pass=279 fail=0 selected=parameters
+rc=0
+$ openspec validate routing-parameter-check-dedup --type change --strict --no-interactive
+Change 'routing-parameter-check-dedup' is valid
+rc=0
+# 四执行文件bash -n全部rc0；起止HEAD、普通/ignored状态、129项hash均不变。
+STAGE B actual_rc=0; actual merged source used; one parameters run only; A normal/fault/restoration/replay/caller evidence reused, not rerun
+```
+
+`stage-b.sh`以正式review的真实cwd为源码根，独立核完整SHA，逐项读取执行/输入/规划依赖；不是用旧候选路径跑出一个绿结果。四执行文件hash与A表完全相同。原生apply的四个具体contextFiles均实际读取：proposal2687、spec31509、design20462、tasks4074 bytes，来源全部是merged，记录在 `merged/context.log`；merged清单仍3/6，未写该只读检出。
+
+B全过后才从merged精确同步本分支tasks：正文必须全部相同，作者1.1–1.3保留x，仅相对merged将2.1–2.3改x。本人分支旧表为0/6，因此git diff显示六行checkbox变化，前三行是复制merged既有作者状态，不是新增作者勾选或改任务正文。同步后真实执行：
+
+```text
+$ openspec instructions apply --change routing-parameter-check-dedup --json
+# nearest root=本verify worktree（记录树，不作为产品受测版本）
+progress: {total:6, complete:6, remaining:0}
+all six done: True
+rc=0
+$ openspec validate routing-parameter-check-dedup --type change --strict --no-interactive
+Change 'routing-parameter-check-dedup' is valid
+rc=0
+```
+
+行为结论始终绑定只读merged，自己记录分支只同步表和报告，不把该分支未同步的四测试源码称作已验实现。
+
+B原件在同一证据根 `merged/`：`review-original.md/.log`、起止manifest、每步命令/rc/log、context、parameters原件、`task-sync-proof.json`、`final-own-apply.json`及strict；A原件均保留，当前不清理。候选与merged均未被写入；唯一主根工具写入仍是获授的P468正式review两文件。
+
+### 最终报告暂存后的Ledger/diff
+
+最终报告及tasks暂存后，在本席位分支实际执行；`merged/ledger-draft.log`保存本次回执，最终暂存版本再由`final-b-checks.sh`复核至`merged/ledger-final.log`，不使用主根扫描替代本分支：
+
+```text
+$ bash skills/teamsmith/tests/ledger-ban.sh --names-file "$(git rev-parse --path-format=absolute --git-common-dir)/../.pi/team/forbidden-names.txt"
+ledger-ban: root=/home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/verify scope=published files=2828 hits=0 names=ok user=resolved
+rc=0
+$ git diff --check
+diff rc=0
+$ git diff --cached --check
+cached diff rc=0
+```
+
+## 阶段A历史原报告（当时3/6；非当前结论）
+
+以下保留A时点的评估、三个流程CRITICAL、B未验范围及原驱动错误。A原报告完整字节在提交 `473bdd61`；当前结论以上方最终评估为准，B没有重复A行为。
+
+agent: verify · status: 阶段A PASS / 当时阶段B未执行 · time: 2026-11-16T15:49:17Z
+
+### A原结论
 
 **冻结候选的阶段 A 行为通过，未发现实现缺陷。** 正常 boundary 只执行一次，863/0、rc=0；五条原故障只经一次 bounded parent 取得，每条自身副本 healthy→原故障→字节恢复→restored 均符合预期，父级51/0、rc=0。原父消费短回放能拒绝六种明确标记的异常输入；三个实际写前边界及四个最终renderer旁路均使原观察失败，未用无关setup错误顶替。候选始终只读，起止HEAD、普通/ignored状态及129项执行/规划依赖字节相同。
 
@@ -52,7 +144,7 @@ branch: `task/V173-routing-parameter-check-verify` · PR/MR: -（local）
 | 2.2 | 未勾 | A唯一五臂parent、原消费异常回放、指定调用边旁路已取得；按brief等B后同步勾选 |
 | 2.3 | 未勾 | A四文件/清单/未改覆盖及参考用时已核；PM尚未提供merged，B同一性与短接入未执行 |
 
-## CRITICAL（流程未收口，不是实现缺陷）
+## A历史CRITICAL（当时流程未收口，现已关闭）
 
 - C1：原生2.1未勾；A行为已满足，按授权在B真实通过后精确同步，不先改表。
 - C2：原生2.2未勾；A行为已满足，按授权在B真实通过后精确同步，不先改表。
@@ -70,7 +162,7 @@ None。
 
 ### 1. 独立源码核对与退休账
 
-`prepare.py`、`retained-controls.py`只读冻结基点/候选，最终均rc0，日志在同名`.log`。四文件diff683增/246删为整个六文件交付统计，不拿行数当行为证明；产品源码、mutator、已接受规划/delta、正式spec、smoke/CI/选择表未改。
+`prepare.py`、`retained-controls.py`只读冻结基点/候选，最终均rc0，日志在同名`.log`。整个六文件交付的diff统计为683增/246删，不拿行数当行为证明；产品源码、mutator、已接受规划/delta、正式spec、smoke/CI/选择表未改。
 
 - `source-audit.log`：PM完整尾部/中间未改组、boundary前preview/dispatch/resume/publication准备、原变异器、P457两个argv样本、metadata、publication、argv oracle、observable snapshot逐字节相同；worker/PM模板数组和role输入生成相同；31臂分组映射只有指定五项变化。
 - `retained-controls.log`：六类worker合法模板、PM fresh合法preview/launch/argv、lost-history/selector/continued、quoted literal template/extra、PM显式continuation、合法role启动/argv逐字节相同。直接输入数组、独立固定bound/literal期望及每项输入隔离由四文件diff和实际279条结果共同验证。
@@ -194,7 +286,7 @@ cached diff rc=0
 
 无产品/规划范围变更。正常与五臂一次取得，随后短消费/调用边补充分别由正式review绑定同候选；两份中央记录的原件都保留。静态提取驱动错误已逐个保留并限定为验证侧错误，没有删断言、缩超时或吞错换绿。
 
-## Final assessment与PM接手
+## A历史评估与PM接手（以下后续工作现已完成）
 
 - Counts：**CRITICAL 3（仅清单/阶段收口）· WARNING 0 · SUGGESTION 0；实现缺陷0。**
 - A Readiness：本批A通过，可交PM接受并准备合并；B未执行，不具备归档就绪或最终合并验证结论。
