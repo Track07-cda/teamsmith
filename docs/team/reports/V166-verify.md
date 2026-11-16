@@ -1,11 +1,18 @@
 # V166 · 配置检查去重提案独立审阅
 
-agent: verify   status: DELIVERED — proposal review: REWORK   time: 2026-11-16T09:14:25Z
+agent: verify   status: DELIVERED — proposal review: ACCEPTED   time: 2026-11-16T09:34:55Z
 branch: `task/V166-config-dedup-proposal-review`   PR/MR: -
-candidate: `5ab4f040ada9b4b3052e7736c29735863f0fb740`（规划 `b00853dc`）
-review root: `/var/tmp/p460-review-5ab4f040`
+current candidate: `1589612c4ff9b97e340224ad8958fc25f3e38935`
+current review root: `/var/tmp/p460-review-1589612c`
+first-round candidate: `5ab4f040ada9b4b3052e7736c29735863f0fb740`（规划 `b00853dc`），检出 `/var/tmp/p460-review-5ab4f040`
 
-## 判定：REWORK
+## 当前判定：ACCEPTED，仅限提案
+
+R1–R3 均已在四文件返修中闭合，未发现附带范围变化；第二轮证据与逐项结论见末节。接受的是后续实施方案，不是删除已经生效、行为已验或归档就绪。本轮没有重跑首轮源码调查、十一份选择计划或未来实施测试。
+
+下面保留首轮 REWORK 及当时三项 WARNING 的完整事实；旧的建议返修文字是历史记录，不代表当前仍有三项未关闭。
+
+## 首轮判定：REWORK（2026-11-16T09:14:25Z）
 
 **两项精简的源码依据成立，但应先修订验收安排、完整运行的表述和缺准备负例，再接受规划。** 保留 §33 完整无参数入口、删 §51 第二次三组调用，比另维护“默认组减三组”清单更小；完整移动准备块也可以退休七条仅为定义的依赖边。三项 WARNING 只改变后续规划，不要求修改产品或扩大实施写集。
 
@@ -239,7 +246,7 @@ $ git -C /var/tmp/p460-review-5ab4f040 status --short
 
 启动/收割工具明确将日志写到主检出的 `.pi/team/state/bg/v166-planning-checks.log`，启动 cwd 仍为 verify。该共享运行时记录不是本席位手工改主检出源码或 ledger；本席位不修后台工具、不清理共享记录。后台完整输出在该日志，关键回执已抄入本报告。
 
-## Final assessment
+## 首轮 Final assessment（历史）
 
 - Verdict：**REWORK**。Counts：CRITICAL **0** · WARNING **3** · SUGGESTION **0**。
 - Readiness：源码支持两项最小精简；规划格式检查通过。R1–R3 修订前不建议 PM 接受并派 apply；这不是实现或归档就绪判定。
@@ -260,4 +267,70 @@ N/A — 本轮没有修复实现，也没有执行未来变异；R3 为源码可
 
 ## Suggested next steps
 
-PM 将 R1–R3 一次性交给 dev2，只修 design/tasks 和 delta 的歧义；保留原规划提交用于对比。修订后做限定差异复看，不重开全案探索，不执行未来实施测试。本轮 proposal review 已交付；正式 ACCEPTED 由 PM 在修订与限定复看后记录，不自动进入 apply/merge/archive。
+首轮建议为：PM 将 R1–R3 一次性交给 dev2，只修 design/tasks 和 delta 的歧义；保留原规划提交用于对比。修订后做限定差异复看，不重开全案探索，不执行未来实施测试。以下是依该安排完成的第二轮。
+
+## 第二轮定点复看 · 2026-11-16T09:33:34Z
+
+**判定：ACCEPTED，R1–R3 全部关闭，仅限提案可接受。** 依据 PM 更新后的 V166 任务书，仅对 `5ab4f040ada9..1589612c4ff9` 的四文件差异做定点审阅；原模型、SID、任务分支和首轮记录保留。没有重开全案，也没有把作者的修订回执当作本席位执行。
+
+### 四文件差异与三项闭合
+
+实际 `git diff --stat` 为 **4 files changed, 83 insertions(+), 16 deletions(-)**：
+
+```text
+docs/team/reports/P460-dev2.md
+openspec/changes/config-check-execution-dedup/design.md
+openspec/changes/config-check-execution-dedup/specs/verification/spec.md
+openspec/changes/config-check-execution-dedup/tasks.md
+```
+
+新独立检出的 HEAD 是 `1589612c4ff9b97e340224ad8958fc25f3e38935`，`git status --short` 无输出。产品/tests、正式 spec、CI、AGENTS、proposal 与原生元数据相对首轮候选均无差异，`git diff ... --exit-code` 实际返回 0。作者报告只增加返修说明/短检查/未执行边界，没有把初稿旧回执冒充新行为证据。
+
+| 原项 | 实际修订及闭合证据 | 对当前结论的改变 |
+|---|---|---|
+| R1：未来验收重复成本 | design Migration Plan 改为最小验证表；tasks 1.3/3.1 同步。只要求一次正常 33、七键分别独立执行；51 沿用绑定 `572856a3` 的真实局部日志，并继续核父调用/汇总/顺序/输入/三脚本字节和期间产品消费差异；有相关差异才补原入口。validate/writer 复用同轮 33 具名嵌套原件；roster 只补缺的假成功坏腿；父级改真实短 setup 失败，并明确不是重跑 assertion rc=1 | **关闭**。完整 51、额外 validate/writer 和完整坏树默认集合不再是本批默认成本；真实默认组、七键和 routes roster 承诺未删除。静态同一性与原局部证据的组合前提及不成立时补验均写明，不是无条件沿用 |
+| R2：完整/独立选段语义 | delta requirement 首句明确 `normal complete smoke run`；独立场景改为 `Independent entries keep their own execution scope`，明确选中 33 才执行其完整入口，单选 51/12e–12k 不因本约定加入 33。design §1/§4 与 tasks 1.1 使用相同区分 | **关闭**。原先正常单选 12e/51 与“每次 normal 都执行 33”的反例不再违反新正文；没有通过新增 needs 修饰行为 |
+| R3：缺准备负例的空项目根 | design 与 tasks 2.2 只删 `p24_brief`，显式保留 `p24_project/p24_change`、路径和 shim；要求负例非零、点名缺定义且有具名行为失败，恢复按字节证明并复用正常独立 12e | **关闭**。项目根创建路径不再被该负例删除，避免首轮指出的空根拼成 `/docs/team/...`；没有新增产品保护代码或测试平台 |
+
+三项只修规划和证据安排，没有扩成帮助面重构、守卫增量或默认组清单变更。原两项精简的源码结论继续有效；本轮没有重新声称执行次数已变成 2→1、七边已退休或已测到节省。
+
+### 第二轮实际短检查
+
+从自己的工作树发起命令，OpenSpec 子进程明确以新候选为 cwd；未安装/升级工具、未改变当前分支。
+
+```text
+$ export PATH="$HOME/.bun/bin:$PATH" TMPDIR=/var/tmp CI=1 OPENSPEC_TELEMETRY=0
+$ openspec --version
+1.16.0
+$ python3 -c 'import subprocess,sys; root=sys.argv[1]; print("VALIDATE_CWD="+root,flush=True); sys.exit(subprocess.run(["openspec","validate","config-check-execution-dedup","--type","change","--strict"],cwd=root).returncode)' /var/tmp/p460-review-1589612c
+VALIDATE_CWD=/var/tmp/p460-review-1589612c
+# SPEC_ROOT=/var/tmp/p460-review-1589612c/openspec
+Change 'config-check-execution-dedup' is valid
+ROUND2_STRICT_RC=0
+$ git diff 5ab4f040ada9 1589612c4ff9 --exit-code -- skills openspec/specs .github AGENTS.md openspec/changes/config-check-execution-dedup/proposal.md openspec/changes/config-check-execution-dedup/.openspec.yaml
+# 无输出；ROUND2_UNTOUCHED_SCOPE_RC=0
+$ git -C /var/tmp/p460-review-1589612c status --short
+# 无输出
+```
+
+本报告新增正文暂存后的固定命令与实际回执（`root` 家目录前缀仅显示省略；实际在本席位分支扫描）为：
+
+```text
+$ bash skills/teamsmith/tests/ledger-ban.sh --names-file "$(git rev-parse --path-format=absolute --git-common-dir)/../.pi/team/forbidden-names.txt"
+ledger-ban: root=<worktree>/.worktrees/verify scope=published files=2751 hits=0 names=ok user=resolved
+ROUND2_LEDGER_RC=0
+$ git diff --cached --check
+# 无输出，rc=0
+$ git diff --check
+# 无输出，rc=0；ROUND2_DIFF_CHECK_RC=0
+# 本次命令收尾 UTC=2026-11-16T09:34:55Z
+```
+
+本轮命令均为短检查，没有启动新后台作业；首轮共享后台原日志保留未动。
+
+### 第二轮 Final assessment
+
+- Verdict：**ACCEPTED（proposal-only）**。当前未解决项：CRITICAL **0** · WARNING **0** · SUGGESTION **0**；首轮三项 WARNING 均按上表关闭，原 REWORK 和回执保留。
+- 未重复：首轮源码调查、十一份现状计划、spec-refs、全项目 validate 或其它原检查，依更新后任务书不再执行；首轮结果仍只代表首轮范围。
+- 未执行：未来的 33/51/七键 smoke、配置坏腿、setup/缺定义负例、完整套件、meta/61b/夜间、安装、真实模型、合并/归档/发布。未执行不记为通过；尚无改后耗时。
+- 下一步由 PM 正式接受规划并另行决定 apply；本席位只交付原报告的定点复看增量，不动看板、提案或主检出。

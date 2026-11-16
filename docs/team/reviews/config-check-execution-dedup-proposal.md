@@ -1,6 +1,12 @@
 # config-check-execution-dedup · PM proposal review
 
-判定: **REWORK**
+判定: **ACCEPTED**
+
+接受修订候选 `1589612c4ff9b97e340224ad8958fc25f3e38935`，独立定点复看 `8ef5dc6c571a`：R1/R2/R3全部关闭，CRITICAL 0 / WARNING 0 / SUGGESTION 0。PM已读四文件返修和原/新两轮实际证据，接受的是规划，不是实施或归档通过；未执行门禁。实现范围仍只改smoke编排、section-paths表和实施清单，不改变真实检查/前提、不新增框架或防护代码。
+
+后续按既有阶段分工：apply作者只实现并做静态接线检查；一次正常33、七个独立键和已批准坏/恢复证据统一留给非作者固定检出执行，避免作者与验证者各重跑一遍。没有减少获准的实际验收范围。独立执行、merged-SHA复验和归档条件仍适用。
+
+## 首轮REWORK记录（历史）
 
 候选：`5ab4f040ada9b4b3052e7736c29735863f0fb740`。独立审阅：verify，`docs/team/reports/V166-verify.md`，提交 `3d6e8fdd951d`。本记录为PM接受审阅意见，不是PM执行验证。
 
