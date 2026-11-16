@@ -1820,6 +1820,98 @@ mkfile_meminfo lowswap 8000  300
 mkfile_meminfo lowram   600 8000
 mkfile_meminfo doomed   100  100
 
+P24_ROOT="$TMP/p24"
+P24_SHIM="$P24_ROOT/shim"
+P24_SHIM_LOG="$P24_ROOT/shim-calls.log"
+mkdir -p "$P24_SHIM"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\nexit 0\n' "$P24_SHIM_LOG" > "$P24_SHIM/tmux"
+chmod +x "$P24_SHIM/tmux"
+
+p24_project() { # <名字> [<agents>] → 打印项目路径（git + team init + openspec/specs + change alpha 目录）
+  local name="$1" agents="${2:-dev verify dev2}" p
+  p="$P24_ROOT/$name"
+  rm -rf "$p"; mkdir -p "$p"
+  ( cd "$p" && git init -q -b main && git config user.email p24@smoke && git config user.name p24 \
+      && git commit -q --allow-empty -m "chore: init" ) >/dev/null 2>&1
+  ( cd "$p" && $TEAM init --session "p24-$name" --agents "$agents" --vcs local --gates "true" --docs docs/team "${P235_MODELS[@]}" ) >"$p/.init.log" 2>&1
+  printf 'TEAM_PI_BIN="/bin/true"\n' >> "$p/.pi/team/config.sh"
+  mkdir -p "$p/openspec/specs/panel" "$p/openspec/specs/dispatch"
+  printf '### Requirement: The board page is a kanban over the board\x27s states\n' > "$p/openspec/specs/panel/spec.md"
+  printf '### Requirement: A brief is self-contained and names its evidence\n' > "$p/openspec/specs/dispatch/spec.md"
+  p24_change "$p" alpha
+  printf '%s\n' "$p"
+}
+p24_change() { # <项目> <change id> → 建一个带 panel delta 的 change 目录
+  local p="$1" c="$2"
+  mkdir -p "$p/openspec/changes/$c/specs/panel"
+  printf '## MODIFIED Requirements\n\n### Requirement: %s delta fixture\n' "$c" > "$p/openspec/changes/$c/specs/panel/spec.md"
+}
+p24_brief() { # <项目> <ID> <agent> <phase> <change> <deltas|@absent> [<anchor>] [<specs>]
+  local p="$1" id="$2" agent="$3" phase="$4" change="$5" deltas="$6" anchor="${7:-}" specs="${8:--}"
+  mkdir -p "$p/docs/team/tasks"
+  {
+    printf '# %s · fixture\n\n```\n' "$id"
+    # P242/A2：唯一 category: 头是新合同的合法输入（本节测锚/delta/独立性，类别不是被测对象）。
+    printf 'task:   %s\nagent:  %s\nissue:  -\ncategory: routine\n' "$id" "$agent"
+    printf 'change: %s\nspecs:  %s\nphase:  %s\ndeps:   -\nstatus: todo\nbudget: -\n' "$change" "$specs" "$phase"
+    [ -n "$anchor" ] && printf 'anchor: %s\n' "$anchor"
+    [ "$deltas" = "@absent" ] || printf 'deltas: %s\n' "$deltas"
+    printf '```\n\nbody\n'
+  } > "$p/docs/team/tasks/$id-fixture.md"
+  return 0
+}
+p24_add() { # <项目> <ID> [<agent>]
+  local p="$1" id="$2" agent="${3:-dev}"
+  ( cd "$p" && $TEAM board add "$id" "$id fixture" "$agent" - - ) >/dev/null 2>&1
+  return 0
+}
+p24_team() { # <项目> <args...> → team CLI（stdout+stderr 合并）
+  local p="$1"; shift
+  ( cd "$p" && $TEAM "$@" ) 2>&1
+}
+p24_dispatch() { # <项目> <agent> <ID> <brief> [args...] → 记录式 shim 下的 dispatch（stdout+stderr）
+  local p="$1" agent="$2" id="$3" brief="$4"; shift 4
+  : > "$P24_SHIM_LOG"
+  ( cd "$p" && env PATH="$P24_SHIM:$PATH" TEAM_DISPATCH_VERIFY_SEC=1 TEAM_DISPATCH_ALIVE_SEC=0 \
+      $TEAM dispatch "$agent" "$id" "$brief" "$@" ) 2>&1
+}
+p24_shim_windows() { grep -cE 'new-window|new-session|respawn-pane' "$P24_SHIM_LOG" 2>/dev/null || true; }
+p24_branch() { # <项目> <agent> <ID> → 规范任务分支（canon_branch 绑死在 $REPO，这里自己算）
+  ( cd "$1" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR \
+      bash -c '. "'"$SKILL_DIR"'/scripts/lib/common.sh"; for _f in "'"$SKILL_DIR"'"/scripts/lib/cmd-*.sh; do . "$_f" 2>/dev/null || true; done; team_load_config >/dev/null 2>&1; team_branch_for_agent "'"$2"'" "'"$3"'"' )
+}
+p24_wt() { # <项目> <agent> <ID> → 把该 agent 的 worktree 停在 <ID> 的规范分支上（可重复调用）
+  local p="$1" a="$2" id="$3" br
+  git -C "$p" worktree remove --force "$p/.worktrees/$a" >/dev/null 2>&1 || true
+  git -C "$p" worktree prune >/dev/null 2>&1 || true
+  br="$(p24_branch "$p" "$a" "$id")"
+  [ -n "$br" ] || return 1
+  git -C "$p" branch -D "$br" >/dev/null 2>&1 || true
+  git -C "$p" worktree add -b "$br" "$p/.worktrees/$a" main >/dev/null 2>&1 || return 1
+  rm -f "$p/.pi/team/state/$a.env"
+  return 0
+}
+p24_pass() { # <项目> <id> → review 记录 PASS
+  local p="$1" id="$2"
+  mkdir -p "$p/docs/team/reviews"
+  printf -- '- 2026-09-20T00:00:00Z · `team review %s` · 判定: **PASS**\n' "$id" > "$p/docs/team/reviews/$id.md"
+}
+p24_board_row() { p24_team "$1" board row "$2" 2>/dev/null | tail -1; }
+p24_unchanged() { # <项目> <ID> <原行> <说明>
+  assert_eq "$4：看的板行没被改动" "$(p24_board_row "$1" "$2")" "$3"
+}
+p24_json_ok() { # <文本> → 0=是合法 JSON（没有解析器时退化成形状检查）
+  local t="$1"
+  if command -v python3 >/dev/null 2>&1; then printf '%s' "$t" | python3 -c 'import json,sys; json.load(sys.stdin)' >/dev/null 2>&1; return $?; fi
+  if [ -n "$JS_RUNNER" ]; then printf '%s' "$t" | "$JS_RUNNER" -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>JSON.parse(s))' >/dev/null 2>&1; return $?; fi
+  case "$t" in '{"id":'*'}') return 0 ;; esac
+  return 1
+}
+p24_read() { # <项目> <函数名> <brief> → 在项目上下文里直接驱动读取器（stdout+stderr 原样）
+  ( cd "$1" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR \
+      bash -c '. "'"$SKILL_DIR"'/scripts/lib/common.sh"; for _f in "'"$SKILL_DIR"'"/scripts/lib/cmd-*.sh; do . "$_f" 2>/dev/null || true; done; team_load_config >/dev/null 2>&1; "$@"' _ "$2" "$3" ) 2>&1
+}
+
 # ---------------------------------------------------------------- 0. 仓库
 # P70：从第 0 段起每段自述 + 硬预算（看门狗双重 fork，不在作业表里；trip 现场在 $TMP 之外）。
 SG_LOCK_NOTE="${SMOKE_LOCK:-}"
@@ -17402,97 +17494,6 @@ fi
 # 不碰 $REPO、不起真进程（[real] 子段除外，那里 live_mark 并真起 tmux 场地）。
 # 判据编号对应 openspec/changes/change-centric-discipline/tasks.md；B2（digest/面板归组）本任务不做。
 # ═════════════════════════════════════════════════════════════════════════════
-P24_ROOT="$TMP/p24"
-P24_SHIM="$P24_ROOT/shim"
-P24_SHIM_LOG="$P24_ROOT/shim-calls.log"
-mkdir -p "$P24_SHIM"
-printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\nexit 0\n' "$P24_SHIM_LOG" > "$P24_SHIM/tmux"
-chmod +x "$P24_SHIM/tmux"
-
-p24_project() { # <名字> [<agents>] → 打印项目路径（git + team init + openspec/specs + change alpha 目录）
-  local name="$1" agents="${2:-dev verify dev2}" p
-  p="$P24_ROOT/$name"
-  rm -rf "$p"; mkdir -p "$p"
-  ( cd "$p" && git init -q -b main && git config user.email p24@smoke && git config user.name p24 \
-      && git commit -q --allow-empty -m "chore: init" ) >/dev/null 2>&1
-  ( cd "$p" && $TEAM init --session "p24-$name" --agents "$agents" --vcs local --gates "true" --docs docs/team "${P235_MODELS[@]}" ) >"$p/.init.log" 2>&1
-  printf 'TEAM_PI_BIN="/bin/true"\n' >> "$p/.pi/team/config.sh"
-  mkdir -p "$p/openspec/specs/panel" "$p/openspec/specs/dispatch"
-  printf '### Requirement: The board page is a kanban over the board\x27s states\n' > "$p/openspec/specs/panel/spec.md"
-  printf '### Requirement: A brief is self-contained and names its evidence\n' > "$p/openspec/specs/dispatch/spec.md"
-  p24_change "$p" alpha
-  printf '%s\n' "$p"
-}
-p24_change() { # <项目> <change id> → 建一个带 panel delta 的 change 目录
-  local p="$1" c="$2"
-  mkdir -p "$p/openspec/changes/$c/specs/panel"
-  printf '## MODIFIED Requirements\n\n### Requirement: %s delta fixture\n' "$c" > "$p/openspec/changes/$c/specs/panel/spec.md"
-}
-p24_brief() { # <项目> <ID> <agent> <phase> <change> <deltas|@absent> [<anchor>] [<specs>]
-  local p="$1" id="$2" agent="$3" phase="$4" change="$5" deltas="$6" anchor="${7:-}" specs="${8:--}"
-  mkdir -p "$p/docs/team/tasks"
-  {
-    printf '# %s · fixture\n\n```\n' "$id"
-    # P242/A2：唯一 category: 头是新合同的合法输入（本节测锚/delta/独立性，类别不是被测对象）。
-    printf 'task:   %s\nagent:  %s\nissue:  -\ncategory: routine\n' "$id" "$agent"
-    printf 'change: %s\nspecs:  %s\nphase:  %s\ndeps:   -\nstatus: todo\nbudget: -\n' "$change" "$specs" "$phase"
-    [ -n "$anchor" ] && printf 'anchor: %s\n' "$anchor"
-    [ "$deltas" = "@absent" ] || printf 'deltas: %s\n' "$deltas"
-    printf '```\n\nbody\n'
-  } > "$p/docs/team/tasks/$id-fixture.md"
-  return 0
-}
-p24_add() { # <项目> <ID> [<agent>]
-  local p="$1" id="$2" agent="${3:-dev}"
-  ( cd "$p" && $TEAM board add "$id" "$id fixture" "$agent" - - ) >/dev/null 2>&1
-  return 0
-}
-p24_team() { # <项目> <args...> → team CLI（stdout+stderr 合并）
-  local p="$1"; shift
-  ( cd "$p" && $TEAM "$@" ) 2>&1
-}
-p24_dispatch() { # <项目> <agent> <ID> <brief> [args...] → 记录式 shim 下的 dispatch（stdout+stderr）
-  local p="$1" agent="$2" id="$3" brief="$4"; shift 4
-  : > "$P24_SHIM_LOG"
-  ( cd "$p" && env PATH="$P24_SHIM:$PATH" TEAM_DISPATCH_VERIFY_SEC=1 TEAM_DISPATCH_ALIVE_SEC=0 \
-      $TEAM dispatch "$agent" "$id" "$brief" "$@" ) 2>&1
-}
-p24_shim_windows() { grep -cE 'new-window|new-session|respawn-pane' "$P24_SHIM_LOG" 2>/dev/null || true; }
-p24_branch() { # <项目> <agent> <ID> → 规范任务分支（canon_branch 绑死在 $REPO，这里自己算）
-  ( cd "$1" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR \
-      bash -c '. "'"$SKILL_DIR"'/scripts/lib/common.sh"; for _f in "'"$SKILL_DIR"'"/scripts/lib/cmd-*.sh; do . "$_f" 2>/dev/null || true; done; team_load_config >/dev/null 2>&1; team_branch_for_agent "'"$2"'" "'"$3"'"' )
-}
-p24_wt() { # <项目> <agent> <ID> → 把该 agent 的 worktree 停在 <ID> 的规范分支上（可重复调用）
-  local p="$1" a="$2" id="$3" br
-  git -C "$p" worktree remove --force "$p/.worktrees/$a" >/dev/null 2>&1 || true
-  git -C "$p" worktree prune >/dev/null 2>&1 || true
-  br="$(p24_branch "$p" "$a" "$id")"
-  [ -n "$br" ] || return 1
-  git -C "$p" branch -D "$br" >/dev/null 2>&1 || true
-  git -C "$p" worktree add -b "$br" "$p/.worktrees/$a" main >/dev/null 2>&1 || return 1
-  rm -f "$p/.pi/team/state/$a.env"
-  return 0
-}
-p24_pass() { # <项目> <id> → review 记录 PASS
-  local p="$1" id="$2"
-  mkdir -p "$p/docs/team/reviews"
-  printf -- '- 2026-09-20T00:00:00Z · `team review %s` · 判定: **PASS**\n' "$id" > "$p/docs/team/reviews/$id.md"
-}
-p24_board_row() { p24_team "$1" board row "$2" 2>/dev/null | tail -1; }
-p24_unchanged() { # <项目> <ID> <原行> <说明>
-  assert_eq "$4：看的板行没被改动" "$(p24_board_row "$1" "$2")" "$3"
-}
-p24_json_ok() { # <文本> → 0=是合法 JSON（没有解析器时退化成形状检查）
-  local t="$1"
-  if command -v python3 >/dev/null 2>&1; then printf '%s' "$t" | python3 -c 'import json,sys; json.load(sys.stdin)' >/dev/null 2>&1; return $?; fi
-  if [ -n "$JS_RUNNER" ]; then printf '%s' "$t" | "$JS_RUNNER" -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>JSON.parse(s))' >/dev/null 2>&1; return $?; fi
-  case "$t" in '{"id":'*'}') return 0 ;; esac
-  return 1
-}
-p24_read() { # <项目> <函数名> <brief> → 在项目上下文里直接驱动读取器（stdout+stderr 原样）
-  ( cd "$1" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR \
-      bash -c '. "'"$SKILL_DIR"'/scripts/lib/common.sh"; for _f in "'"$SKILL_DIR"'"/scripts/lib/cmd-*.sh; do . "$_f" 2>/dev/null || true; done; team_load_config >/dev/null 2>&1; "$@"' _ "$2" "$3" ) 2>&1
-}
 
 # ---------------------------------------------------------------- 12e · change 视图（B1）
 section "12e · change 视图（P24/B1：严格头部读取 + 就绪判据）"
@@ -23394,8 +23395,8 @@ assert_eq "P95 ⑥ 红侧：记录下来在暂存区里（checkout 只动了索�
 #   ① `tests/routes.sh`——Walk A（team help 的每条用法行 ↔ 解析器）、非空洞控制臂（打印旗标的
 #      每条路径必须拒未知参数）、Walk B（schema 注释点名的命令 ↔ 承诺探针）与翻转（把树改坏必须
 #      红并点名）。FAST 由 TEAM_SMOKE_FAST 透传：它只跳翻转（一行可见 SKIP），前三段照跑。
-#   ② 名册夹具的便宜一半（`config-cli.sh list validate roster`）：七个形状的退出码/字节不变性/
-#      审计/一条值规则。两件都自带私有临时根，不碰 $REPO。
+#   ② `tests/help-surface.sh`：覆盖/语言机制/声明与探针/不变量/路由。
+#      两件都自带私有临时根，不碰 $REPO。
 section "51 · 用法诚实性：help 的每条承诺与名册的每条路线都有夹具兑现（P99）"
 # P410 拆段：routes.sh 的**产品面**留在这里（walk A：help 印出来的每条命令/每个 flag 都要被真解析器接住；
 # 控制臂：吞掉未知参数的解析器要被点名；promises：schema 注释点名的承诺必须在真夹具里兑现；refusals），
@@ -23433,18 +23434,6 @@ if [ -f "$SKILL_DIR/tests/help-surface.sh" ]; then
   fi
 else
   bad "51 缺 tests/help-surface.sh（cli-help 的帮助面夹具）"
-fi
-if [ -f "$SKILL_DIR/tests/config-cli.sh" ]; then
-  P99_ROSTER_RC=0
-  bash "$SKILL_DIR/tests/config-cli.sh" list validate roster >"$TMP/p99-roster.log" 2>&1 || P99_ROSTER_RC=$?
-  if [ "$P99_ROSTER_RC" -eq 0 ]; then
-    ok "51 名册/契约夹具（list+validate+roster）全绿（$(grep -ac '✓' "$TMP/p99-roster.log" || true) 条断言）"
-  else
-    bad "51 名册/契约夹具有失败（rc=$P99_ROSTER_RC）"
-    grep -a '✗' "$TMP/p99-roster.log" | head -8 | sed 's/^/      /'
-  fi
-else
-  bad "51 缺 tests/config-cli.sh"
 fi
 
 # ---------------------------------------------------------------- 51m. 用法诚实性的二阶腿

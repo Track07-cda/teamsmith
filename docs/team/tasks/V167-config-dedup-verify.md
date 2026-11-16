@@ -49,7 +49,7 @@ branch: task/V167-config-dedup-verify
 
 阶段A报告提交并通知PM，不自行合并。PM接受/合并后提供干净merged检出和SHA，同一会话核两编排文件、三子脚本/消费者与候选同一性，跑必要短结构/选择或原函数样本，并让正式review记录绑定merged。受测字节不变时不重跑33、七键、坏腿、51或完整矩阵。先保留原候选和原件，只有新差异影响证据才补对应入口。
 
-阶段B实际通过并获PM接受后，同步自己的清单副本与报告，确保原生7/7和实际证据一致；不得在收到merged输入前提前勾3.2。最终OpenSpec评估逐项回答Completeness/Correctness/Coherence、两个requirement/五场景及全部未验证项，不把尚未执行的阶段B写成PASS或零CRITICAL归档就绪。
+阶段A由PM接受并给出merged输入时，即授权你在阶段B全部真实通过、正式review绑定merged后，同步自己的清单副本与报告；不用再等一条额外确认才提交。确保原生7/7和实际证据一致，不得在收到merged输入和实际执行前提前勾3.2。这项同步许可不是PM预判未来结果：PM仍在最终读取证据后接受阶段B并关单。最终OpenSpec评估逐项回答Completeness/Correctness/Coherence、两个requirement/五场景及全部未验证项，不把尚未执行的阶段B写成PASS或零CRITICAL归档就绪。
 
 ## 不运行
 
