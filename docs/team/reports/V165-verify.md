@@ -1,18 +1,18 @@
-# V165 · 候选短复验通过，合并提交尚未复验
+# V165 · 候选与合并提交的独立短复验均通过
 
-**阶段 A：PASS。** 独立检出 `bf483405aa067d69fce4e03e5b74ed86b11886b5` 的三项修复及单文件分类边界成立：显示矩阵与旧实现反例/恢复、初始化整文件比较与原⑮反例、一次真实 Pi 受控场景及显式退出 42、四组原件重放和旁文件污染反例均已实际验证。正式 `team review P459` 最终记录为 verify 执行的 PASS；这不是原 18 段重跑全绿，也不是发布或合并后的通过结论。
+**阶段 A / B：PASS。** 候选 `bf483405aa067d69fce4e03e5b74ed86b11886b5` 的三项修复及单文件分类边界成立；合并提交 `7245bfefa4216b50a89e508bedbec14a7d710933` 的五个源文件与候选逐字节相同，从新检出执行的短显示、分类边界和结构检查也通过。中央 `team review P459` 已绑定合并 SHA，实际执行者 verify、判定 PASS。阶段 A 的显示旧红/恢复、初始化整文件比较与⑮、一次真实 Pi 及退出42、四组重放与污染反例保留，不重复 Pi、安装和完整反例组；不声称原18段重跑全绿或发布通过。
 
-**组合证据可以接受，保留两组原件缺失的警告。** 四组现存 before/after 用原共享函数重放后，只消除了 `current.json` 这一项；另外两组仅有完整输出及未变调用，不能重放。原 `82ea7496` 的 **458/6、SKIP3、rc=1** 保留。阶段 B 尚无 PM 提供的 merged SHA/检出，未执行。
+**组合证据可以接受，保留两组原件缺失的警告。** 四组现存 before/after 用原共享函数重放后，只消除了 `current.json` 这一项；另外两组仅有完整输出及未变调用，不能重放。原 `82ea7496` 的 **458/6、SKIP3、rc=1** 保留。下文同时保留阶段 A 与合并后阶段 B 的命令和范围。
 
-agent: verify   status: DELIVERED（stage A PASS；stage B pending input）   time: 2026-11-16T08:11:43Z
+agent: verify   status: DELIVERED（stage A PASS；stage B PASS，bounded combined evidence）   time: 2026-11-16T08:21:43Z
 branch: `task/V165-release-ci-fixes-verify`   PR/MR: -
 
 ## Deliverables 与受验对象
 
 | Path | 内容 |
 |---|---|
-| `docs/team/reports/V165-verify.md` | 本席位唯一仓内写入，阶段 A 结论、实测与缺口 |
-| `/var/tmp/v165-verify.OFMrOZ/` | 独立短 runner、失败/成功记录、受控 Pi 原件、重放结果；待阶段 B 完成后清理 |
+| `docs/team/reports/V165-verify.md` | 本席位唯一仓内写入，两阶段结论、实测与缺口 |
+| `/var/tmp/v165-verify.OFMrOZ/` | 独立短 runner、失败/成功记录、受控 Pi 原件、重放结果；待 PM 接受并收存所需证据后清理 |
 | `docs/team/reviews/P459.md`、`P459-verify.log` | 由授权的 `team review` 写入中央记录；未手改 |
 
 候选 `/var/tmp/p459-review-bf483405` 在运行前后 `git status --porcelain --ignored` 均无输出。相对授权基线 `ab52f1ee`，只有作者报告和以下 **5 个源文件，40 insertions / 22 deletions**；与任务书最终续跑授权一致：
@@ -46,7 +46,7 @@ TEAM_GATES="bash $E/verify-remaining.sh" TMPDIR=/var/tmp \
 # 修正仓外目录名后 v165-candidate-final：rc=0；只补剩余检查，不重跑正常场景。
 ```
 
-正式最终收据：
+阶段 A 正式最终收据：
 
 ```text
 时间: 2026-11-16T08:10:46Z · HEAD: bf483405a · 判定: PASS
@@ -138,15 +138,57 @@ same-shape rc=0：整块等于显式渲染，契约字节不变
 
 接受范围是“原固定字节业务证据 + 本轮独立短验证 + 精确分类变化”；不声称最终 tip 上一次原样 18 段全绿，也不把缺失两组快照的风险消掉。前导三个 skill-load SKIP 和本轮 section-select SKIP 保留。
 
+## 阶段 B · 合并提交短复验
+
+PM 提供固定 `7245bfefa4216b50a89e508bedbec14a7d710933` 和 `/var/tmp/p459-review-merged`。运行前后该检出含 ignored 检查均干净；相对候选仅9个账本文件变化，五个源文件没有变化。`merged.py` 先将新检出的5份文件与 `git show bf483405:<path>` 原字节比较，再从新检出的 smoke 提取原显示矩阵、source 新检出的显示/分类函数；未执行旧 candidate 的硬编码入口。
+
+| 同一文件 | 两阶段共同 SHA-256 前16位 |
+|---|---|
+| `scripts/lib/cmd-review.sh` | `47512668e9ed2bf8` |
+| `tests/smoke.sh` | `3cde9c67851045ef` |
+| `tests/install-shape.sh` | `b624e98cd1d0ede8` |
+| `tests/remind-tool-real.mjs` | `965c9aa178853aa9` |
+| `tests/lib/main-team-fingerprint.sh` | `616f00b84d11260e` |
+
+正式命令从自己的 verify 工作树发起，后台作业 `v165-merged-short` 已收割 rc=0：
+
+```bash
+C=/var/tmp/p459-review-merged
+E=/var/tmp/v165-verify.OFMrOZ
+TEAM_GATES="bash $E/verify-merged.sh" TMPDIR=/var/tmp \
+  bash "$C/skills/teamsmith/scripts/team" review P459 --dir "$C" \
+  --branch 7245bfefa4216b50a89e508bedbec14a7d710933
+```
+
+```text
+时间: 2026-11-16T08:21:21Z · HEAD: 7245bfefa · 判定: PASS
+实际执行者：verify
+门禁命令：bash /var/tmp/v165-verify.OFMrOZ/verify-merged.sh
+limit=1800s queued=1s ran=22s；checkout clean；ignored artifacts: 0
+IDENTICAL：5个源文件
+MERGED display rc=0：原两HOME × C/C.UTF-8矩阵4/4
+MERGED current.json-only change ALLOW
+MERGED sibling / reminders / Standby / locator / unregistered additions REJECT
+MERGED same five modifications REJECT
+OpenSpec 1.16.0 validate --all：20 passed / 0 failed，既有warnings保留
+spec-refs：122 references / 49 distinct / undeclared 0
+section-select：ok13 / bad0 / SKIP1（.pi/skills未生成）
+bash -n四个shell文件与node --check原driver：rc=0
+```
+
+分类五个短输入为 `state/remind-tool/side.json`、`state/reminders/state.json`、`state/standby.log`、`reminder-locator.log`、`state/v165-merged-stray.json`：新增和修改均逐条拒绝，仍证明权威状态优先、不排除整个目录。所有样本仅在自己的临时根。阶段 A 的真实 Pi、初始化、旧实现红/恢复、四组原件重放均按同一源字节复用，没有再执行。
+
+中央记录与完整日志已复制到 `$E/review-merged-pass.md/.log`；log SHA-256 为 `45b32366e5fc41f0972e9b7436bf9dee0572465b6a671c0049589188e1037121`。阶段 A 的成功与两次验证脚本失败记录仍在原路径。合并后的 diffstat 为无变化，是与当前受保护分支相同，不是缺少五文件同一性验证。
+
 ## OpenSpec assessment
 
 `change: -`，不新增/修改规范；按 `verification#The record states what was verified` 审查。检出没有生成的 openspec-verify-change skill，采用等价人工审查：逐项对照授权、冻结字节、原始收据、命令/执行者/版本绑定和未跑范围，不把 shell 通过替代本节。
 
 | Dimension | Assessment | Evidence |
 |---|---|---|
-| Completeness | 阶段 A 完成，阶段 B 未给输入 | 五文件范围、三修复及分类均有实际短验证；无 merged 输入 |
+| Completeness | 两阶段限定范围完成 | 候选三修复/分类实测；固定merged五文件同一性、短显示/分类及结构检查通过 |
 | Correctness | 在所列组合证据范围 PASS | 路径旧红/新绿/恢复、init旧参考红及⑮真参数红、真实Pi与42、四组重放和8文件反例 |
-| Coherence | 符合原功能和证据边界 | 中央记录 verify/bf483405a/实际命令/PASS，原458/6及两组原件缺口未改写，无新产品或守卫框架 |
+| Coherence | 符合原功能和证据边界 | 中央记录先后绑定verify/bf483405a与verify/7245bfefa/实际命令/PASS；原458/6及两组原件缺口未改写，无新产品或守卫框架 |
 
 ## CRITICAL
 
@@ -164,8 +206,8 @@ None。本轮不追加收集器、长期选择器或其它机制。
 ## Final assessment
 
 - Counts：CRITICAL 0 · WARNING 2 · SUGGESTION 0。
-- 阶段 A 在任务书限定范围可交付，组合证据足以接受此冻结候选；不代表合并后或发布通过。
-- 阶段 B 尚未提供固定 SHA/干净检出；下一步由 PM 接受并合并后给出输入，同一 verify 会话核五文件同一性、适用短入口/分类边界和结构检查。字节不变时不重复 Pi 集成或全部反例。
+- 两阶段在任务书限定范围可交付：候选组合证据及合并后的短复验均通过；不是一次最终提交全量全绿，也不是发布结论。
+- 阶段 B 已由同一 verify 会话执行，固定SHA/干净检出、五文件同一性及短检查证据齐；PM可接受并办理P459收尾，本席位不合并或关单。
 - 本轮未跑全量/FAST全量、61b/meta/夜间/性能/三路线安装；未重跑§10/10b/39/67–69整段、20/7场景整组。原未执行的123个键列表仍在 `selected.log`，本报告只引用其实际执行范围。
 - 未做远端CI、push、PR/MR、merge、tag、npm、依赖安装、模型/SID切换或共享状态调整。主检出写入仅为授权工具的 P459 两个中央文件及既有运行账目。
 
@@ -187,4 +229,12 @@ $ git diff --check && git diff --cached --check
 diff-check-rc=0
 ```
 
-本报告只提交在本地任务分支，无远端操作；等待 PM 提供阶段 B 输入，不自行合并或关闭 P459。
+阶段 A 的上述收据保留。阶段 B 报告暂存后在同一分支再次实际运行：
+
+```text
+ledger-ban: root=/home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/verify scope=published files=2743 hits=0 names=ok user=resolved
+ledger-ban-rc=0
+diff-check-rc=0
+```
+
+本报告只提交在本地任务分支，无远端操作；供 PM 接受两阶段证据并办理收尾，不自行合并或关闭 P459。
