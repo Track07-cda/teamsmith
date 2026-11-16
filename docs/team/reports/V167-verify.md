@@ -1,19 +1,20 @@
 # V167 · 配置检查去重的独立行为验收
 
-**阶段A：候选范围 PASS；尚不能收尾定稿。** 冻结候选上的一次完整配置入口和七次独立选段均成功，保留的拒绝、写盘、名册字节与真实进程检查仍有效；三项额外破坏样本都按目标失败。正式 `team review P461` 已由 verify 写出候选 PASS。合并版本尚未提供，3.2 未执行，原生清单仍为 3/7；本报告不声称全量通过或已获得归档条件。
+**最终判定：两阶段验收范围 PASS，原生清单 7/7。** 一次完整配置入口和七次独立选段均成功，保留的拒绝、写盘、名册字节与真实进程检查有效；额外故障样本按目标失败。合并版本的编排、子脚本及消费者与已验候选一致，必要短检查已直接从合并检出执行，正式 `team review P461` 由同一 verify 写出 merged PASS。阶段B没有重跑上述行为；原有跳过、首轮观察脚本错误及FAIL原件全部保留。交PM接受最终证据，不声称全量、零跳过、提速实测或已经获得归档授权。
 
-agent: verify   status: STAGE-A DELIVERED / STAGE-B NOT RUN   time: 2026-11-16T10:17:17Z
+agent: verify   status: DELIVERED（阶段A/B范围PASS，待PM最终接受）   time: 2026-11-16T10:28:19Z
 branch: `task/V167-config-dedup-verify`   PR/MR: -（仅本地提交）
 
 ## Deliverables
 
 | Path | What |
 |---|---|
-| `docs/team/reports/V167-verify.md` | 本报告；本阶段自己分支唯一写入文件 |
-| `docs/team/reviews/P461.md`、`P461-verify.log` | 从自己的工作树调用正式 review 生成；实际执行者 verify，绑定候选 SHA |
+| `docs/team/reports/V167-verify.md` | 两阶段独立验收及原始失败/限制 |
+| `openspec/changes/config-check-execution-dedup/tasks.md` | B正式通过后从merged读入，保留作者三项，仅完成本单四项；原生7/7 |
+| `docs/team/reviews/P461.md`、`P461-verify.log` | 从自己的工作树调用正式review生成；最新绑定merged SHA，执行者verify；候选记录另保留原件 |
 | `/var/tmp/v167-verify.CjCL5K/` | 一次性 runner、逐命令完整日志/rc、原字节比较、原51日志副本、坏树/恢复记录、首次失败及更正读取记录；不加入仓库 |
 
-候选：`b26bd4196a201c8c8f6de4d176f06acb788f0165`，PM 独立检出 `/var/tmp/p461-review-b26bd419`。开始、批次结束及更正读取后 HEAD 均相同，普通/ignored 状态均空，见 `start-checkout.txt`、`end-checkout.txt`、`settled-checkout.txt`。merged SHA：**未提供、未验证**。
+候选：`b26bd4196a201c8c8f6de4d176f06acb788f0165`，独立检出 `/var/tmp/p461-review-b26bd419`；merged：`c442b57acb44433c7a761cb9f3f6dd43a75a3279`，独立检出 `/var/tmp/p461-review-merged`，两者均由PM准备。各次开始/结束HEAD不变，普通及ignored状态均空，见E的 `start/end/settled-checkout.txt` 与 `merged/start/end-checkout.txt`。PM的阶段A接受记录为 `docs/team/reviews/V167.md`；原阶段A报告按原字节保存在 `E/V167-stageA-report.md`，提交 `6a188dca` 保留。
 
 ## OpenSpec assessment
 
@@ -21,9 +22,9 @@ branch: `task/V167-config-dedup-verify`   PR/MR: -（仅本地提交）
 
 | Dimension | Score | Evidence |
 |---|---|---|
-| Completeness | 原生 3/7；候选实证覆盖 6/7；2 requirement / 5 scenario | 1.1/1.2/2.1 原已勾；1.3/2.2/3.1 的本阶段实证见下表，按 brief 不提前改清单；3.2 缺 merged 输入 |
-| Correctness | 候选 2/2 requirement、5/5 scenario 有对应证据；合并版本未验证 | 正常33真实完整入口、七键各自运行、已有嵌套坏恢复、三个额外坏腿、四路径及51原局部证据/源码差异审查 |
-| Coherence | 已接受设计与代码一致；合并接线未验证 | 整文件精确变换、5296字节准备块、父级/消费者原字节与两token/七边核对；没有新增检查器或改前提 |
+| Completeness | 原生7/7；2 requirement / 5 scenario | A接受后B真实通过并正式review绑定merged，再按授权同步四项；`native-apply-synced.json`为all_done/7/7/0 |
+| Correctness | 两requirement及五scenario的候选行为证据齐；merged同一性及适用短检查通过 | 下表A实证、B五文件及消费者实际字节相同、直接从merged执行三份选择计划；静态生成目录存在性及原51的1条跳过仍未改记通过 |
+| Coherence | 接受设计、实际实现与合并接线一致 | 整文件精确变换、5296字节准备块、父级/消费者原字节、两token/七边和merged完整skills树同一性；没有新增检查器或改前提 |
 
 ### requirement / scenario 映射
 
@@ -37,14 +38,7 @@ branch: `task/V167-config-dedup-verify`   PR/MR: -（仅本地提交）
 
 ## CRITICAL
 
-按原生任务状态列出四个未勾项，不把有证据但待接受/同步和真正未执行混为一谈：
-
-1. **1.3 未勾，实证已齐。** PM接受阶段A后，阶段B按授权同步；不要重跑33或已有坏恢复。
-2. **2.2 未勾，实证已齐。** 七键及缺准备证据已齐；PM接受后阶段B同步，不再跑七键。
-3. **3.1 未勾，候选独立审阅已齐。** 命令、场景、暂存后检查由本报告记录；PM接受后阶段B同步。
-4. **3.2 真正未执行。** PM需提供合并SHA和干净独立检出；同一verify核受测字节与适用短检查，再让正式review绑定merged。完成前不能归档。
-
-本阶段没有发现需要修改产品或测试实现的缺陷；上述四项是原生未完成状态，不能写成零CRITICAL且归档就绪。
+None — 原阶段A报告的四项未完成状态已逐一收口：1.3/2.2/3.1的A实证已获PM接受，3.2已实际执行B并由正式review绑定merged；其后从merged清单保留作者三项、完成本单四项。原生进度现为7/7/0，见 `E/merged/native-apply-synced.json`。原A的3/7和CRITICAL 4仍保存在 `6a188dca` 与原字节报告中，不改写当时事实。
 
 ## WARNING
 
@@ -56,9 +50,9 @@ None。
 
 ## Final assessment
 
-- Counts: CRITICAL 4（3项待接受/同步、1项merged未执行）· WARNING 0 · SUGGESTION 0。
-- Readiness: 阶段A可交PM接受；不可声称整体完成或归档就绪。
-- Unverified applicable checks: 3.2合并版本的同一性/短补验/中央记录及清单同步，原因是尚无PM提供的merged输入。静态 `.pi/skills` 存在性未验，原因是该机器生成目录不在固定检出；原51的1条可见跳过仍保留原来源，未改记PASS。
+- Counts: CRITICAL 0 · WARNING 0 · SUGGESTION 0（本单已执行的候选及merged验收范围）。
+- Readiness: 本单已完成，可交PM接受最终证据；不能给出不带范围的“所有检查通过、归档就绪”，归档仍需既有接受与有效确认，另行派单。
+- Unverified applicable checks and limits: 静态 `.pi/skills` 存在性未验，原因是该机器生成目录不在固定检出；原51的1条可见跳过只保留原父级来源，未展开其身份，也未改记PASS。两requirement/五scenario及阶段B约定内没有其他待执行项。
 - 整套/FAST全量、完整51/help/routes重跑与变异矩阵、meta/61b/夜间、安装/性能均按本brief不执行，不构成本轮承诺；未测量正常完整运行的改后耗时，未把七个局部收益相加当成全量节省。
 
 ## Verification evidence
@@ -196,13 +190,47 @@ $ git diff --cached --check
 # 无输出，rc=0
 ```
 
+## 阶段B · 合并版本复核与清单同步
+
+PM已接受阶段A并提供准确merged输入；使用新 `E/merged.py`，实际命令cwd全部为 `/var/tmp/p461-review-merged`，没有拿硬编码旧候选的runner冒充merged。后台 `v167-merged-short`已收取rc=0，正式记录时间2026-11-16T10:26:49Z，执行者verify，绑定完整merged SHA，ran=5s。
+
+```sh
+# 从自己的verify工作树发起
+TEAM_GATES='python3 /var/tmp/v167-verify.CjCL5K/merged.py' \
+bash skills/teamsmith/scripts/team review P461 \
+  --dir /var/tmp/p461-review-merged \
+  --branch c442b57acb44433c7a761cb9f3f6dd43a75a3279
+# rc=0；P461.md/P461-verify.log：PASS / actual executor verify
+```
+
+原件在 `E/merged/`：`results.jsonl`、每条命令完整日志、`central-review.merged-pass.md/.log`、起止状态。完整 `skills/teamsmith` Git树两端同为 `43cb5d825dcc811503191a415d0882f7a60d5401`；候选到merged差异只有六份docs/team账本文件，不改变受测输入。
+
+- 直接比较实际文件：smoke 1907359字节、section-paths 75440字节及三子脚本全部相同；AGENTS和change四context文件也相同。
+- 再取实际smoke中的准备块5296字节、七消费者/live前提59603字节、33父级691字节、51保留父级2092字节，全部与A候选一致；hash原件可与上文核对。
+- 直接从merged运行OpenSpec 1.16的status/apply、change严格校验、`bash -n smoke.sh`，各rc=0；同步前原生清单仍3/7，未偷偷修改固定检出。
+- 直接从merged运行三个必要短计划，各rc=0：`section-select.sh --select 12e`仍只有四前导+12e；`--paths skills/teamsmith/tests/config-cli.sh`含33不含51；`--paths skills/teamsmith/scripts/lib/cmd-config.sh`同时含33和51。
+- 没有重跑正常33、七键行为、坏腿、51或完整矩阵；同一性支持继续采用A证据，不是又获得一份正常行为重复样本。
+
+正式merged PASS之后才同步自己的 `tasks.md`：读取merged原件，保留1.1/1.2/2.1三个作者勾选，只把1.3/2.2/3.1/3.2四项改为已完成，其余正文与merged逐字节相同。提交 `03a181d9`。自己的旧分支起点尚无作者三项，所以本分支diff显示七行复选框变化，其中三行是同步，不是本席位重新宣称实现。
+
+```text
+$ openspec instructions apply --change config-check-execution-dedup --json
+state=all_done progress={total:7, complete:7, remaining:0}，rc=0
+$ openspec validate config-check-execution-dedup --type change --strict
+Change 'config-check-execution-dedup' is valid，rc=0
+```
+
+原件为 `E/merged/native-apply-synced.json`、`strict-synced.log`；root/sourcePath明确是自己的工作树。固定merged检出的清单仍原3/7，没有向PM检出写文件。PM明确授权B实际通过后立即同步，不另等一句确认；PM尚未接受未来的最终关单结果。
+
+阶段B最终报告暂存后，再在自己的分支执行上文同一ledger-ban命令与普通/暂存diff检查：`files=2761 hits=0 names=ok user=resolved`，rc=0；两个diff-check均无输出、rc=0。原件 `E/merged/ledger-ban-final.log`，未改扫描名单。
+
 ## Flip evidence
 
 见上表的真实原件与精确诊断：TEAM_PROJECT拒绝与writer注释故障都来自同轮33生成的既有坏恢复；额外roster/父级setup/缺brief三腿各一次。原字节恢复与正常33/12e共同证明恢复，不把不存在的恢复重跑写成执行。
 
 ## Decisions and deviations
 
-- 没有实施写集变化；不修改候选、实现、正式spec、规划、其它测试/CI/超时/跳过；本阶段不改tasks复选框。
+- 没有实施写集变化；不修改候选/merged、实现、正式spec、规划、其它测试/CI/超时/跳过；A不改tasks，B正式通过后仅按授权同步自己的tasks。
 - 第一次正式review的FAIL是两个一次性观察脚本错误；保留原记录，按brief只更正读取，没有为了收据重跑正常业务。
 - `TMPDIR=/var/tmp`的原入口自行建立的运行根在E之外；其精确路径、原日志及E内副本均保留到PM接受，不改产品临时根机制，也不按项目通配清理。
 - 没有merge/push/archive/tag/npm，没有真实提醒/standby/真实团队重启或外部模型调用。
@@ -217,4 +245,4 @@ $ git diff --cached --check
 
 ## Suggested next steps
 
-PM接受阶段A及收存E/精确运行根原件后，提供干净merged检出与SHA。同一verify只核两编排文件、三脚本/消费者及有关接线同一性，补必要短检查、绑定正式merged review；字节不变不重复本轮33/七键/坏腿/51。收到该输入并实际通过、获得PM接受后，才从merged读取原tasks，保留作者三项并同步本单四项，最后提交阶段B报告；本阶段不合并、不等待人类逐项确认。
+PM读取本报告、merged正式记录与原件，接受阶段B后办理关单；归档仍由非实现者另行接单并核有效确认。本席位不merge/push/归档。E及各具名运行根继续保留到PM收存确认，再只清理本次精确目录，不为补已收存证据重复测试。
