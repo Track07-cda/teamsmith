@@ -12,6 +12,8 @@
 | `docs/team/reviews/P461.md`、`docs/team/reviews/P461-verify.log` | PM（V167已接受关闭） | verifier实际记录已收存；仅PM接受与结案，不再授权新执行 |
 | `docs/team/reviews/P465.md`、`docs/team/reviews/P465-verify.log` | PM（V170已接受关闭） | 两阶段实际记录由dev3执行，已接受merged证据；临时工具写权收回 |
 | `docs/team/reviews/P466.md`、`docs/team/reviews/P466-verify.log` | PM（V171已接受关闭） | 两阶段实际记录由verify执行，已接受merged证据；临时工具写权收回 |
+| `docs/team/reviews/P468.md`、`docs/team/reviews/P468-verify.log` | agent:verify（V173临时工具例外） | 仅由本人worktree的team review写入，按V173实际执行和SHA记录；PM接受merged证据后收回 |
+| `openspec/changes/routing-parameter-check-dedup/tasks.md` | agent:verify（V173阶段B通过后临时） | 仅在自己分支从merged同步并完成2.1–2.3；保留作者1.1–1.3及原文，候选/merged检出只读 |
 | `openspec/changes/archive/2026-11-16-config-check-execution-dedup/**` | PM（A9已接受） | 已验证7/7原样归档，不再授实现写入 |
 | `openspec/specs/verification/spec.md` | PM（A11已接受） | 已验一条需求/六场景原样同步；临时写权收回 |
 | `openspec/changes/archive/2026-11-16-clipboard-test-session-reuse/**` | PM（A11已接受） | 五工件原样归档，不再授实现写入 |

@@ -271,3 +271,6 @@ V171原件已统一保存在主根.pi/team/state/evidence/P466包与manifest.jso
 
 ### 2026-11-16T14:42:19Z · from: pm · re: V172
 P467四项返修交付2c4f86d1，工件d5ceaaa8，新固定只读/var/tmp/p467-review-2c4f86d1。主V172 brief已补差异段：原模型/SID/分支只核824cfd82..2c4f86d1的C1/C2/W1/W2及直接矛盾，保留首轮REWORK。新delta只一次strict，沿用版本/旧静态回执，报告必要diff即可；不重开源研究、ledger/平台或行为/长套。作者原42 stdout已保留，当前22只计划。
+
+### 2026-11-16T15:27:26Z · from: pm · re: V173
+V173新任务：固定P468交付b60de2ab（实现68e8e2ea），只读/var/tmp/p468-review-b60de2ab。作者仅实现/静态未跑行为，原生3/6。按新brief/design Migration统一一次正常boundary+一次仅五臂bounded parent及既定短结果消费/调用边；不先单跑五臂、不带完整正常前半或其余26臂。用临时TEAM_GATES从本人worktree正式review P468，例外写权已登记；A后交PM，B同模型/SID只同一性+短parameters，B真实通过再勾后三项。无默认全量/61b/其它矩阵；每步真实rc，保留原件。
