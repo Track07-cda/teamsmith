@@ -1,6 +1,12 @@
 # routing-parameter-check-dedup · 方案审阅
 
-Verdict: REWORK — 未授权apply。
+Verdict: **ACCEPTED（规划）** — 绑定返修候选`2c4f86d1b146a82b0fc99f0652386beb9629d239`。
+
+PM接受非作者verify的V172最新报告`7157bfcd`：只复看四项及直接矛盾，C1/C2/W1/W2全部关闭，当前CRITICAL0 / WARNING0 / SUGGESTION0。新delta strict实际stdout及rc=0已核对；未重开旧静态平台、行为或长套。首轮REWORK与实际42旧回执保持历史身份，当前22次只是修改后的计划，不是实测结果。
+
+规划前置条件已满足，可以另派apply；本记录不声称实现、行为验收、整体提速、归档或发布通过。执行仍按作者仅实现/静态、非作者一次受影响行为验收，不重跑无关组和前批完整61b。
+
+## 首轮审阅与返修经过（历史）
 
 作者dev2，候选824cfd82ae339214261c88b2f72d2397810bb363；非作者verify在PM准备的固定独立检出完成V172，报告6955816d，CRITICAL2 / WARNING2 / SUGGESTION0。PM接受其四项修订结论，不将结构通过当行为已证实，也不重开其余已审部分。
 

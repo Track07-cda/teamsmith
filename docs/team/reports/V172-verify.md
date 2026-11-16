@@ -1,13 +1,16 @@
 # V172 · 正常路由及五项参数检查去重方案独立审阅
 
 agent: verify · phase: opsx-verify · status: DELIVERED（仅方案审阅）
-time: 2026-11-16T14:21:49Z · verdict: **REWORK**
+latest assessment: 2026-11-16T14:43:23Z · verdict: **ACCEPTED（规划）**
+first assessment: 2026-11-16T14:21:49Z · verdict: **REWORK**（原件及四项保留如下）
 branch: `task/V172-routing-parameter-proposal-review` · PR/MR: -
 change: `routing-parameter-check-dedup`
-candidate: `824cfd82ae339214261c88b2f72d2397810bb363`
-independent checkout: `/var/tmp/p467-review-824cfd82`（只读，HEAD 固定、工作树干净）
+latest candidate: `2c4f86d1b146a82b0fc99f0652386beb9629d239` · checkout: `/var/tmp/p467-review-2c4f86d1`
+first candidate: `824cfd82ae339214261c88b2f72d2397810bb363` · checkout: `/var/tmp/p467-review-824cfd82`
 
-## 结论与最小返修
+**当前结论：四项均已关闭，无剩余必要返修。** 本次只复看 `824cfd82..2c4f86d1` 的 C1/C2/W1/W2 及直接矛盾，新 change strict 通过；详见文末差异复看。此 ACCEPTED 仅供 PM 接受规划，不是行为通过、apply 授权或归档就绪。
+
+## 首轮结论与最小返修（历史 REWORK）
 
 **REWORK：共用直接参数断言和五臂轻量入口的方向可行，但两条真实调用见证会在计划观察的位置之前被拒绝；42 次负向 CLI 仍有可直接删除的双模式重复；旧完整 61b 场景还没有明确限定到已完成的前批验收。** 本 change 严格结构校验通过，不等于这些行为已经证明。
 
@@ -159,7 +162,7 @@ rc=0
 
 N/A：本轮只审规划，未修缺陷或执行故障样本。C1/C2 是逐层源码定位，不是已经实跑的红/绿；五原变异、恢复及调用边旁路留待批准后的唯一独立实际验收。
 
-## Final assessment
+## Final assessment（首轮历史）
 
 - Counts：CRITICAL 2 · WARNING 2 · SUGGESTION 0。
 - Readiness：**REWORK**，应先由 dev2 最小修订规划，再由 PM 接受方案；不据此派 apply、归档、合并或发布。
@@ -169,3 +172,57 @@ N/A：本轮只审规划，未修缺陷或执行故障样本。C1/C2 是逐层�
 ## Decisions and deviations / Suggested next steps
 
 无范围偏离。本报告交付的是四项可定位的规划修订，不是索取用户重新确认方向，也不是跨目录代修。作者仅需改同一 change 的 design/tasks/delta 及对应数字/报告；不要求新探索或样本轮。修订后同一 V172 可只复核这四项及直接矛盾；旧三处已完成验收、正常合法启动、恢复/撤销及未改组不重开。PM 负责看板和方案接受记录，本席位不写这些路径；分支只留本地，不 push/merge。
+
+## 四项差异复看 · 2026-11-16 · ACCEPTED（规划）
+
+冻结候选 `2c4f86d1b146a82b0fc99f0652386beb9629d239`，工件修订 `d5ceaaa8`。本次按 PM 新增 brief/thread，仅审 `824cfd82..2c4f86d1` 和 C1/C2 必要相邻源，未重开已审方案。原 `6955816d` 报告中的 REWORK、四项证据和实际静态回执完整保留；下面更新的是返修后结论。
+
+### 四项关闭依据
+
+| Finding | 修订内容及本次核对 | 状态 |
+|---|---|---|
+| C1 | design §3 固定两个旧 `extra-unknown-before-model/resume` 输入、` --unknown harmless`、worker fresh/PM continued 模板、PM ` --continue` 与同 resume-key metadata，并给出 `unknown arity --unknown before protected --model` / `... {resume_args}` 的预期诊断。必要相邻 `common.sh:1912–1969` 确认 standalone extra 无后续受保护词时可通过、模板展开 list 后才出现受保护词；tasks 1.2 与 delta Normal parameter rules 同步。原孤立 `--skill` 不再承担真实 list 接线证据，197 个 direct 输入不扩表 | CLOSED；这里只确认规划和源码前提，未运行替换样本 |
+| C2 | design Context/Migration §4、tasks 2.2 和 Correct helpers 场景均只采用 real-up：同一私有副本一起旁路 `cmd-watch.sh:373` 与 `common.sh:3798`，保留真实 guard 和最终 renderer，使用已停止 PM/合法 policy/既有 fresh provider 坏 custom 模板，从真实 `up --fresh-pm` 观察 prompt/诊断变化。相邻源确认两处确实先于 `common.sh:3806` 写 prompt；不再追加直接 start 实验 | CLOSED；不再让未到达被改位置的单点删除充当证据 |
+| W1 | proposal/design §3–4/tasks 1.2、2.1 及 Normal parameter rules 场景一致为 21 个 tag 各一次 launch，加既有 PM fresh provider 的一次独立 preview；算式 `4+(3+1)+2+4+2+2+2+2=22`，明确非永久配额。原合法启动、fresh/continued、metadata/撤销及其它组安排未动 | CLOSED；22 是修改后的计划，不是实跑结果 |
+| W2 | delta 的 Internal checkout、Only the two routing boundary repeats、Routing evidence 三处旧完整61b表述均限定到 preceding routing-argv batch/accepted record；后续参数批次只交新增受影响证据并引用未改事实。design/tasks 同步引用 P457/V163 前批原件，不删旧场景标题、不要求新候选完整61b | CLOSED；不重验前批已完成三处或长原件 |
+
+`git diff --name-only 824cfd82..2c4f86d1` 只列本 change 的 proposal/design/tasks/delta 和作者报告五条路径，`.openspec.yaml`、产品/tests/CI/正式 spec 均无变化。作者报告把原 `planned_live_cli=42` stdout 明确标为首轮历史，当前 22 只表述为计划；没有将旧盘点改写为本轮实跑。差异未改六项未来任务的勾选状态、197 输入、原五变异或一次非作者行为验收安排；未发现四项关联的直接矛盾。
+
+### 本次实际检查
+
+沿用首轮 OpenSpec 1.16.0 和版本/源盘点回执，不重新执行版本、根、名单、引用、选择平台或旧静态检查。
+
+```text
+$ git -C /var/tmp/p467-review-2c4f86d1 rev-parse HEAD
+2c4f86d1b146a82b0fc99f0652386beb9629d239
+$ git -C /var/tmp/p467-review-2c4f86d1 status --porcelain=v1
+(empty)
+$ (cd /var/tmp/p467-review-2c4f86d1 && openspec validate routing-parameter-check-dedup --strict)
+Change 'routing-parameter-check-dedup' is valid
+stderr: empty
+rc=0
+```
+
+唯一新 strict 的环境同首轮；原件位于 `/var/tmp/v172-verify.W3ZzNz/revision-2c4f86d1/`：`structure.{command,stdout,stderr,rc}`、`candidate.sha`、`candidate.status`、`checked-at.txt` 及本次 `revision.diff`。strict 完成时点为 `2026-11-16T14:43:23Z`。报告暂存后的必要差异检查各一次，原件为同目录 `diff.*`、`cached-diff.*`；之后只补此真实回执，不重跑检查或首轮 ledger-ban。
+
+```text
+$ git diff --check
+stdout/stderr: empty
+rc=0
+$ git diff --cached --check
+stdout/stderr: empty
+rc=0
+```
+
+### 最终 OpenSpec assessment（规划差异）
+
+| Dimension | 最新状态 | Evidence |
+|---|---|---|
+| Completeness | 规划完整，六项未来任务未实施符合阶段 | 仅四项关联文字变更，原四工件/旧17+新6场景和六任务安排保留；未用未勾任务否定方案 |
+| Correctness | 四项修订前提及观察对象自洽 | C1/C2 对应源与固定输入，未来样本仍由实施后统一验收，未将本轮静态判断称实证 |
+| Coherence | ACCEPTED（规划） | W1 真实重复已从计划删除，W2 前批义务与本批证据边界一致；新 delta strict rc=0 |
+
+- 当前 CRITICAL 0 · WARNING 0 · SUGGESTION 0；首轮 2/2/0 保留为历史，不表示仍有未解决项。
+- **最终 ACCEPTED 绑定 `2c4f86d1`，仅是规划接受输入。** PM 尚未派 apply，本席位不授权实施、合并、归档或发布。
+- 未验边界仍为未来全部行为：正常 boundary、五原故障/恢复、调用边旁路、父结果回放及合并后同一性。本轮均未运行，不追加长测试或新样本；旧静态/已接受行为引用边界不变。
+- PM 可据本报告接受方案并决定后续派单。本任务只追加自己的报告，保留原分支/模型/SID，不改规划、看板、主检出或发布对象。
