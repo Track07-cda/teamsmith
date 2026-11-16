@@ -1267,7 +1267,7 @@ The correctness gate SHALL distinguish a product-only checkout, which deliberate
 
 Only a check whose named prerequisite is one of those deliberately absent internal surfaces SHALL skip on a product-only checkout. Each such attribution MUST print `SKIP（条件不满足）`, the affected check and missing prerequisite, be counted as a skip rather than a pass, and reach the gate's output and per-section/run accounting. Missing product files, unavailable required tools, a failed executed assertion, and corruption of a present internal surface MUST retain their existing failure/degradation rules; the checkout classification MUST NOT swallow them. An executed check's verdict MUST rest on evidence the subject itself carries: when the call's command word is the wrapped command itself (`tmux`), an isolation wrapper defined in one file MUST NOT certify a mutation call made by another file, while a dedicated wrapper name defined alongside the caller MAY keep its directory-level meaning; a check MUST NOT be reported as satisfied on evidence the subject does not have. A run with prerequisite skips and no failures SHALL exit 0, without claiming the skipped checks passed; a real failure alongside skips MUST still exit non-zero.
 
-The same correctness command SHALL run on both shapes, with no second public suite. The product's static checks, skill loading, published-spec validation, container-build checks and every ledger-independent fixture MUST remain eligible exactly as before (including the existing FAST/full and tool-premise rules). A fixture that provisions its own ledger MUST still run in the product-only checkout. For an internal checkout, except for the three route-page control replacements, the reply-observer duplicate-execution retirement and the routing-argv repeat replacements specified below, every pre-existing assertion MUST still execute with its original verdict and at least its pre-change per-section pass count under identical run settings; replacing an existing assertion with a new one MUST NOT satisfy that coverage comparison. CI's correctness step MUST retain its blocking failure semantics, and it SHALL run the product floor the way `verification#CI runs the two gates separately and performance does not block` states: a failing applicable product assertion in that step fails the job, and the selection it makes is disclosed in the output tail rather than presented as the full gate.
+The same correctness command SHALL run on both shapes, with no second public suite. The product's static checks, skill loading, published-spec validation, container-build checks and every ledger-independent fixture MUST remain eligible exactly as before (including the existing FAST/full and tool-premise rules). A fixture that provisions its own ledger MUST still run in the product-only checkout. For an internal checkout, except for the three route-page control replacements, the reply-observer duplicate-execution retirement, the routing-argv repeat replacements and the routing-parameter replacements specified below, every pre-existing assertion MUST still execute with its original verdict and at least its pre-change per-section pass count under identical run settings; replacing an existing assertion with a new one MUST NOT satisfy that coverage comparison. CI's correctness step MUST retain its blocking failure semantics, and it SHALL run the product floor the way `verification#CI runs the two gates separately and performance does not block` states: a failing applicable product assertion in that step fails the job, and the selection it makes is disclosed in the output tail rather than presented as the full gate.
 
 The route-page replacement exception is the three complete nested walks in the route-page controls for a column-zero
 command line, an undeclared command-page usage and an unread group level, as specified by
@@ -1321,6 +1321,36 @@ where executed, separately from child totals; a retired pass MUST NOT be reporte
 global total or net elapsed saving is promised. This exception changes neither the route-page/reply-observer
 exceptions nor normal first-order routing coverage.
 
+The routing-parameter exception SHALL replace repeated negative CLI permutations in normal boundary
+verification with shared direct parameter judgements and named real-call refusal witnesses. It SHALL also
+replace complete boundary execution in exactly five original mutation arms: `extra-shadow`,
+`template-shadow`, `template-unbound`, `template-roles` and `literal-shell-expansion`. Their direct
+judgements SHALL be the same assertions executed by normal boundary verification, with fixed expectations
+independent of the product algorithm. A separate test-only parameter selection SHALL perform no project
+initialization, configuration-writer calls, dispatch/up, tmux launch or PM transaction replay.
+
+This exception permits retirement of per-string preview/launch/fresh CLI permutations and their per-attempt
+captures, not of parameter rules or the named real-call witnesses. It deliberately abandons rejection-purity
+observations for every removed permutation and unrelated live-launch/metadata/rollback observations on those
+five mutated trees. Normal legal-selector, literal-argv, continuation, fresh identity and PM metadata/rollback
+checks SHALL remain real; other groups and original mutations, including the prior two argv replacements,
+SHALL remain unchanged. The retired calls SHALL not survive in a slow entry or become skips or passes.
+
+Each of the five arms SHALL obtain healthy, original-mutated and byte-restored parameter outcomes on the same
+disposable copy. The existing parent SHALL consume child status, required failure identities and both healthy
+and restored results; a setup error, missing intended name or timeout MUST NOT satisfy a mutation.
+A functioning pure judgement SHALL NOT substitute for evidence that worker and PM callers use it before
+effects, that the launch renderers still reject bad inputs, or that actual shell argv matches committed
+identity. No product predicate, launch authorization, timeout or observation window changes under this exception.
+
+For this batch, source-attributed old inventories and already accepted unchanged-group evidence SHALL be
+reused. One non-author verification on a frozen independent checkout SHALL supply the changed normal boundary,
+the five original faults/restorations, targeted caller-bypass evidence and existing-parent failure propagation.
+It SHALL NOT require another complete CORE, 61b or full suite merely to pay the prior routing-argv batch's
+already completed acceptance again. Post-merge verification SHALL check byte identity and necessary short
+integration only, unless an evidence premise changed. Old child, new direct, real-call and parent totals SHALL
+remain separate; no fixed pass total, elapsed saving or whole-suite success follows from this replacement.
+
 #### Scenario: The release export skips only unavailable internal checks
 
 - **GIVEN** a clean product-only tree exported from committed HEAD by `bash docs/team/tools/publish-public.sh`, with the gate's required tools available
@@ -1353,10 +1383,10 @@ exceptions nor normal first-order routing coverage.
 
 - **GIVEN** pre-change and post-change independent internal checkouts with identical tools and FAST settings
 - **WHEN** `TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh </dev/null` runs in each
-- **THEN** every pre-existing assertion outside the three named route-page replacements, the identified reply-observer retired executions and the named routing-argv retired executions is present in the post-change executed assertion inventory with its original verdict, each unaffected section's pass count is at least its baseline, and no new checkout-prerequisite skip appears
+- **THEN** every pre-existing assertion outside the three named route-page replacements, the identified reply-observer retired executions, the named routing-argv retired executions and the routing-parameter retired executions is present in the post-change executed assertion inventory with its original verdict, each unaffected section's pass count is at least its baseline, and no new checkout-prerequisite skip appears
 - **AND** this FAST run does not produce the route-page replacement evidence; that separate source-attributed baseline, retained non-FAST record/manual undeclared-usage receipt and explicit non-FAST `routes.sh pages` inventory are judged by the named scenario below, without relaxing any retained assertion or count obligation
 - **AND** reply-observer replacement evidence comes from its focused absence sample and normal §62 run, with only the named duplicate executions retired and with parent/child counts kept separate
-- **AND** routing-argv replacement evidence comes from short actual-shell samples and one final complete 61b integration run, with only its named repeats retired; the first CORE's normal real callers remain exercised and no first-order speedup is inferred
+- **AND** evidence for the preceding routing-argv replacement batch comes from its short actual-shell samples and its already accepted final complete 61b integration run, with only that batch's named repeats retired; its first CORE's normal real callers remain exercised and no first-order speedup is inferred. A later routing-parameter batch supplies its newly affected evidence under the scenarios below and cites that accepted record for unchanged coverage, not a new complete 61b run
 - **AND** a scratch mutation that replaces any retained internal assertion with a prerequisite skip still fails the inventory/count comparison, even if new assertions keep the aggregate pass total unchanged
 
 #### Scenario: Partial internal trees and broken installs remain red
@@ -1412,7 +1442,7 @@ exceptions nor normal first-order routing coverage.
   CLI claim, counts FAST/smoke output as the sample evidence, or labels a retired nested walk as an executed pass
 - **WHEN** that evidence is compared with the named replacement scope and executed assertion inventory
 - **THEN** it fails the coverage comparison even if the reported total equals or exceeds the baseline;
-  only the three specified route-page complete-walk replacements, the separately named reply-observer retirement and the routing-argv retirement below are allowed
+  only the three specified route-page complete-walk replacements, the separately named reply-observer retirement, the routing-argv retirement and the routing-parameter retirement below are allowed
 
 #### Scenario: Routing argv replacements detect the original resplitting errors
 
@@ -1451,24 +1481,100 @@ exceptions nor normal first-order routing coverage.
 
 #### Scenario: Only the two routing boundary repeats and original-tree second CORE retire
 
-- **WHEN** source-attributed old execution inventory and the candidate's complete 61b log are compared
+- **WHEN** the preceding routing-argv batch's source-attributed old execution inventory and its accepted candidate's complete 61b log are compared
 - **THEN** the old final unmutated-tree CORE and its success assertion are absent, the first normal CORE
   remains complete, the two resplit arms use their short samples, and the other 29 arms retain their
-  original groups, assertions and verdicts
+  original groups, assertions and verdicts except for the five routing-parameter replacements specified below
 - **AND** the two replacements no longer execute the seven unrelated boundary subfixtures or their PM
   transaction tail, while the original normal real-call coverage remains in the first CORE; no retired
   full execution is moved to a slow/optional entry, counted as passed or relabelled as a prerequisite skip
+- **AND** that completed batch's accepted log remains the evidence for these retirements; later routing-parameter
+  changes obtain their affected evidence below and reuse unchanged facts, without supplying another complete 61b log
 
 #### Scenario: Routing evidence reports actual scope instead of padding totals
 
-- **WHEN** delivery and independent verification evidence for this routing-only replacement are read
+- **WHEN** delivery and independent verification evidence for the preceding routing-argv replacement batch are read
 - **THEN** old normal-tree, old boundary-child, new short-child and flip-parent inventories/counters remain
   separately attributed; only the removed final parent success and actually executed new parent checks
   explain that parent's count difference
-- **AND** one final non-FAST complete 61b integration run supplies the first normal CORE and all retained
-  mutation evidence; short samples do not claim that complete run, full smoke, or faster normal §61
+- **AND** that routing-argv batch's final non-FAST complete 61b integration run supplies its first normal CORE
+  and all retained mutation evidence; its already accepted record satisfies that batch's completed obligation.
+  Later routing-parameter replacements supply only their affected evidence below and cite the accepted record
+  for unchanged facts, without repeating complete 61b; short samples do not claim that complete run, full smoke,
+  or faster normal §61
 - **AND** historical costs and new elapsed readings remain references, not correctness thresholds or a
   claim that old retired seconds equal net savings
+#### Scenario: Normal parameter rules do not replay every CLI permutation
+
+- **GIVEN** a private legal routing fixture with fixed expected parameter outcomes
+- **WHEN** normal boundary verification executes its shared parameter assertions and retained real callers
+- **THEN** separate/equals/short/attached selectors, placeholder binding, tool scalar and argv-list roles,
+  literal versus shell expansion, extra ownership and PM resume ownership are judged against independent expectations
+- **AND** hard-coded and unbound identity, selectors consumed by tool data, unquoted model globs in both
+  template/extra callers, and malformed PM continuation retain one named real-launch refusal per selected tag;
+  the existing PM fresh hard-coded-provider template additionally exercises PM's separate preview entry.
+  No rule multiplies all tags by preview/launch, and this arrangement is not a permanent invocation/pass quota
+- **AND** the worker/PM argv-list witnesses use the existing unknown-before-model/resume inputs: standalone
+  extra `--unknown harmless` is acceptable, but the surrounding template rejects unknown arity before a protected
+  model or resume group with the intended role diagnostic; an earlier standalone missing-tool-value refusal
+  cannot satisfy those witnesses
+- **AND** each retained refusal requires the intended diagnostic, no new argv and unchanged observable project state
+- **AND** removed per-string CLI attempts and their captures are absent, not counted as successful or skipped
+
+#### Scenario: Five original parameter faults still fail shared assertions
+
+- **GIVEN** five private copies with each original product mutation and unchanged test assertions
+- **WHEN** the same direct parameter selection used by normal boundary verification runs on each copy
+- **THEN** every child exits 1 with its required rule failures: extra model ownership; worker and PM hard-coded
+  identity; worker positional/data identity and PM fresh/continued unbound identity; worker/PM tool-role and
+  PM resume-role consumption; and worker/PM template plus shared-extra unquoted model-glob refusal, respectively
+- **AND** no complete boundary, metadata matrix or launch transaction supplies that red; healthy and
+  byte-restored executions on each same copy exit 0 with the original fixed expectations
+
+#### Scenario: Correct helpers cannot hide a disconnected real caller
+
+- **GIVEN** a private candidate whose direct parameter selection passes, and disposable copies bypassing
+  only the relevant worker early-refusal boundary, worker final-renderer, PM real-up early-refusal boundary
+  or PM final-renderer checks
+- **WHEN** retained real-call refusal witnesses and direct product launch-renderer refusal witnesses run
+- **THEN** a lost early refusal fails the diagnostic/purity observation even if a later check refuses,
+  and a lost final-renderer refusal fails its own witness despite correct helpers
+- **AND** with a stopped PM and legal policy, the real-up sample bypasses both identity checks before prompt
+  creation together, retaining real
+  guard functions and the final renderer, and observes prompt/diagnostic changes with the existing bad custom
+  template through real up; it does not add a second direct-start experiment
+- **AND** removing one redundant check while another preserves the same early refusal is not falsely
+  required to fail; the observation concerns the effective caller boundary, not textual call presence
+- **AND** caller wiring is not certified by a replacement helper, a success stub or self-comparison of product tokens
+
+#### Scenario: Actual wrong-model and lost-binding observations remain grounded
+
+- **GIVEN** the normal private recording CLI and cwd decoy `--model=wrong:low`
+- **WHEN** retained legal worker/PM template and builtin launches and PM explicit continuation execute
+- **THEN** real Bash argv preserves quoted spaces, wildcard/brace/tilde/backslash data, unique selected
+  provider/model and worker SID or PM explicit continuation value; assignment/PM records agree with delivered identity
+- **AND** continued/fresh controls, trusted/untrusted PM metadata and publication-failure rollback remain
+  actual interface/state/process checks, not direct parameter-return assertions
+
+#### Scenario: Parameter failures reach the real parent verdict
+
+- **GIVEN** the existing flip parent's actual result-consumption path for these five arms
+- **WHEN** a child unexpectedly exits 0, times out, has a setup error or lacks a required rule failure,
+  or its healthy/restored result fails
+- **THEN** the parent emits a named failure, increases its own failure count and exits non-zero
+- **AND** restoring the real outcomes restores parent success; a bounded parent sample proves only this
+  consumption path, not execution of the complete mutation matrix
+
+#### Scenario: Only this batch's repeated executions and incidental observations retire
+
+- **WHEN** source-attributed old and candidate execution inventories are reconciled with focused verification
+- **THEN** normal boundary replaces the old potential 562 negative CLI attempts, conditional on writer
+  acceptance, with the design's named real witnesses and shared direct assertions; each of the five arms has
+  no complete boundary call, while other arms/groups and normal legal/transaction checks remain
+- **AND** retirement of per-attempt captures and unrelated observations on the five mutant trees is explicit,
+  not described as equivalent preservation of every old assertion or as a fixed number of seconds saved
+- **AND** author static evidence, non-author executed results and post-merge byte checks are distinguished;
+  focused evidence cannot be presented as a complete normal suite, complete 61b or measured §61 speedup
 
 ### Requirement: The gate lock's holder record names its kind, its owner, its elapsed time and its bound
 

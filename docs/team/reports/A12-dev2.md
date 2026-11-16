@@ -1,3 +1,105 @@
+# A12 · 参数检查去重规格收尾（最终）
+
+agent: dev2   status: **DELIVERED（实际归档及短检查完成）**   time: 2026-11-16T16:33:57Z
+branch: `task/A12-archive-routing-parameter-check`   PR/MR: -（local）
+archive commit: `24d32a34` · prior report: `e26c47a7`
+
+## 最终结论
+
+实际归档路径为 **`openspec/changes/archive/2026-11-16-routing-parameter-check-dedup/`**。在本人稳定dev2任务工作树（原生nearest root、repo-local）上只执行一次实际 `openspec archive -y routing-parameter-check-dedup`，rc0；沿用首轮已经确认的规划4/4、任务6/6和现成私有trial，没有重跑根/版本/上下文或试归档。
+
+**五工件逐文件原样移动，Git均为R100；正式verification与PM接受的现成trial逐字节相同。** 两处普通段落空行处理已由主检出A12 brief/review及D256明确接受，需求文字、原17场景标题、六个新增场景及其顺序不变，23标题均恰一次。目标块外前缀86239B、后缀68947B（含原Purpose）保持；其余489个OpenSpec文件不变。实际整棵OpenSpec树与trial **495/495** 文件字节相同，产品/tests/CI及发布0.4.7不变。首轮BLOCKED、比较rc1及active-change的21/21回执完整保留在下方历史节和原件中，不以最终结论抹去。
+
+## 最终 Deliverables
+
+| Path | What |
+|---|---|
+| `openspec/changes/archive/2026-11-16-routing-parameter-check-dedup/` | `.openspec.yaml`、proposal、design、tasks及delta五文件原样归档；tasks仍6/6 |
+| `openspec/specs/verification/spec.md` | 原生同步唯一已接受MODIFIED块，保留17标题并增加六场景；无delta-style headers |
+| `docs/team/reports/A12-dev2.md` | 本最终结论、实际归档后回执、完整首轮历史 |
+
+原件继续保存在唯一根 `E=/var/tmp/a12-routing-archive.JTCWfi`。`results/actual-archive.*`为实际原生命令，`actual-vs-trial.*`为本轮字节比较，`archive-staged-status.*`为五项R100，`post-archive-*`为归档后短检查；未清理本根或P467/V172/P468/V173原件。
+
+## 最终 OpenSpec assessment
+
+| Dimension | Score | Evidence |
+|---|---|---|
+| Completeness | 6/6已完成；五工件全部原样归档 | 首轮原生6/6、实际native Complete及五项R100；未改任何任务正文/勾选 |
+| Correctness | 正式结果495/495与现成trial相同；17+6标题各一次 | `actual-vs-trial.stdout` rc0，复用trial原逐项内容/外文比较；仅两空行由PM明确接受 |
+| Coherence | 单目标同步、Purpose和可执行字节不变 | native仅1 modified；Git仅五次移动和verification修改；无手工同步/移动、无新过滤器 |
+
+### CRITICAL
+
+None。首轮C1为旧brief的整块字节条件，PM已核原始diff并接受两处普通段落格式，依据主检出 `reviews/A12.md`、更新brief和D256；实际输出随后与该trial完全相同，未改delta消除差异。
+
+### WARNING
+
+无新增finding。归档后非strict全仓validate的227行stderr完整保留：长需求提示及一个Purpose占位提示；不因此改旧Purpose，不声称全仓strict已绿。
+
+### SUGGESTION
+
+None。
+
+### Final assessment
+
+- Counts：CRITICAL 0 · WARNING 0（原生advisory另行披露）· SUGGESTION 0。
+- Readiness：实际归档与全部适用短检查完成；PM负责接受、合并和关单。
+- 适用未验项：None within this archive brief。所有行为、旧平台和长套件仍明确不执行；本轮没有boundary/parameters/五臂/CORE/完整61b/flip、smoke/FAST/meta/夜间、真实Pi/模型、性能、安装或构建成功主张。
+
+## 实际归档后 Verification evidence
+
+沿用首轮环境 `PATH="$HOME/.bun/bin:$PATH" TMPDIR=/var/tmp CI=1 OPENSPEC_TELEMETRY=0`，从本人稳定任务工作树执行：
+
+```text
+$ openspec archive -y routing-parameter-check-dedup
+Task status: ✓ Complete
+Specs to update:
+  verification: update
+Applying changes to openspec/specs/verification/spec.md:
+  ~ 1 modified
+Totals: + 0, ~ 1, - 0, → 0
+Specs updated successfully.
+Change 'routing-parameter-check-dedup' archived as '2026-11-16-routing-parameter-check-dedup'.
+rc=0；stderr为空
+$ <只读逐文件比较本人openspec与现成trial，并核对五工件原件>
+ACTUAL OpenSpec tree equals accepted existing trial: 495/495 files byte-identical
+FORMAL verification spec equals accepted trial exactly; prior prefix/Purpose/suffix and 17+6 scenario proof apply unchanged
+GIT all tracked product/tests/CI and other documents unchanged; selected change archived natively once on own branch
+rc=0；stderr为空
+$ openspec validate --all
+Totals: 20 passed, 0 failed (20 items)
+rc=0
+$ bash skills/teamsmith/tests/spec-refs.sh --check
+spec-refs: judged 122 reference(s) (49 distinct) in 14538 effective line(s); retired 0; undeclared 0; id families used [D,E,F,M,P,V] named [D,E,F,M,P,V]
+rc=0；stderr为空
+```
+
+以上20/20是**实际归档后**结果，少掉的是已移入archive的active change；首轮21/21仍仅是归档前active-change检查。引用有效行14540→14538与PM接受的两处空行处理一致，不代表删除引用或需求。实际五文件SHA均与下方首轮表一致，完整命令、stdout/stderr/rc留在上述原件，不强制加入Git。
+
+归档后报告暂存检查（原件 `results/post-archive-{ledger,diff,diff-cached}-final.*`）：
+
+```text
+$ bash skills/teamsmith/tests/ledger-ban.sh --names-file "$(git rev-parse --path-format=absolute --git-common-dir)/../.pi/team/forbidden-names.txt"
+ledger-ban: root=/home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev2 scope=published files=2835 hits=0 names=ok user=resolved
+rc=0；stderr为空
+$ git diff --check
+# 无输出，rc0
+$ git diff --cached --check
+# 无输出，rc0
+```
+
+首轮报告作为历史附录，与 `e26c47a7` 的报告完整字节相同，另经只读比较确认，未重写原BLOCKED或首轮错误。
+
+## 最终 Decisions and deviations / Suggested next steps
+
+- 按PM明确裁定接受现有trial两处原生段落格式，未改已接受delta、不新增通用空白过滤器/比较框架；首轮精确断言及失败原件未修改。
+- 旧行为、A驱动错误、A3/6→B6/6历史和160s/12s/1s受影响参考继续见下方原报告，未重跑或扩大成功主张。
+- 本地提交，不merge/push/tag/npm，不代PM写看板/接受记录。正式spec临时写权随本次交付归还PM；PM收存本轮原件后再决定清理，当前不清理。
+
+## 首轮历史原报告（e26c47a7，当时BLOCKED，非当前结论）
+
+以下首轮原文完整保留；其中“实际未归档”及“待裁定”是16:24时点事实，已由上方PM裁定和实际执行结果解决。
+
 # A12 · 参数检查去重规格收尾
 
 agent: dev2   status: **BLOCKED（仅私有试做，未实际归档）**   time: 2026-11-16T16:24:39Z
