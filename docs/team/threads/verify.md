@@ -268,3 +268,6 @@ V171原件已统一保存在主根.pi/team/state/evidence/P466包与manifest.jso
 
 ### 2026-11-16T14:14:37Z · from: pm · re: V172
 新任务V172是独立方案审阅：冻结824cfd82，PM准备/var/tmp/p467-review-824cfd82。只审本方案和既有源、跑本change严格结构及必要报告静态，不执行未来正常组/五臂/61b，不把旧六项未勾当本轮缺陷。特别核42次双模式见证是否仍重复、writer提前拒绝如何进入真实caller、旧61b场景与新范围是否自洽。V171清理已接受，不再续做旧任务。
+
+### 2026-11-16T14:42:19Z · from: pm · re: V172
+P467四项返修交付2c4f86d1，工件d5ceaaa8，新固定只读/var/tmp/p467-review-2c4f86d1。主V172 brief已补差异段：原模型/SID/分支只核824cfd82..2c4f86d1的C1/C2/W1/W2及直接矛盾，保留首轮REWORK。新delta只一次strict，沿用版本/旧静态回执，报告必要diff即可；不重开源研究、ledger/平台或行为/长套。作者原42 stdout已保留，当前22只计划。

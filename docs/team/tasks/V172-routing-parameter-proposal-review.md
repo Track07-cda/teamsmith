@@ -44,3 +44,11 @@ git diff --cached --check
 报告先给ACCEPTED/REWORK与能改变结论的证据、最小返修，再列CRITICAL/WARNING/SUGGESTION和实际未验边界。不得把源码推论或结构通过称行为实证；若必须有小样本才能定论，点名具体未知交PM，不自行扩跑。报告保留真实命令、版本、stdout/stderr/rc及临时原件位置，不强制加入原日志。较慢批次后台启动即结束回合，完成唤醒再收取，不等待/轮询。
 
 不跑参数/路由样本、构建、正常boundary/CORE、五臂/61b、smoke/FAST/meta/夜间/其它功能/安装/性能/真实Pi或模型；不重跑全仓strict/引用或选择平台。Conventional Commits含V172、`Agent: verify`，小步本地提交交付；不merge/push/归档/发布，不动0.4.7包。仅处理自己本次临时根，已收存的V171旧根不重建、不延伸清理。
+
+## 四项差异复看（2026-11-16）
+
+作者返修提交`d5ceaaa8`，最终冻结`2c4f86d1`，新只读独立检出`/var/tmp/p467-review-2c4f86d1`；原824cfd82检出保留，不切换。相对824cfd82只改四份规划文字和作者报告，元数据/产品/tests/CI/正式spec均未动。保持原V172模型/SID/任务分支，保留首轮6955816d的REWORK、四项和实际回执。
+
+只读`git diff 824cfd82..2c4f86d1`及必要相邻源，判断C1/C2/W1/W2是否收口和是否出现直接矛盾：两个list见证改unknown-before-model/resume并写固定前提/诊断；PM只采用real-up+start共同写前边界、不另做直接start实验；21次launch+既有PM provider的一次preview取代42次双跑；三处旧61b场景均明确前批已完成义务与本批证据边界。197个直接输入不扩表、原六未来任务未勾及一次非作者验收安排不变。
+
+本次delta实际改变，允许只在新固定源跑一次本change strict，保存真实rc；版本和原根/源盘点沿用已有回执，不重复ledger/引用/选择/旧静态平台，也不运行任何行为或长套。只补自己的报告最新结论、四项状态和必要diff-check；作者报告已明确保留原42的旧stdout，不能将本次22的计划当成旧实跑结果。若仍有缺口，只点名该项及最小句级修正，不重开其它已审部分、不添加新框架/样本矩阵。通过只是规划接受输入，PM尚未派apply。
