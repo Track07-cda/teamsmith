@@ -12,7 +12,7 @@
 | `docs/team/reports/**`、`docs/team/threads/**` | agent:* | 报告与线程（只写自己的报告文件） |
 | `docs/team/tasks/**`、`docs/team/BOARD.md`、`docs/team/ROADMAP.md`、`docs/team/DECISIONS.md`、`docs/team/OWNERSHIP.md` | PM | 任务书与看板 |
 | `skills/teamsmith/scripts/**`、`extension/**`、`panel/**`、`SKILL.md`、`references/**`、`templates/**` | apply 阶段任务书**明授**的 agent（默认 PM） | 实现；未获授权 → `BLOCKED:` 交回 PM |
-| `AGENTS.md` 的Teamsmith受管块、`docs/team/reports/P426-dev2/` 五份.log的取消跟踪 | agent:dev（P456 临时借用） | 仅任务书中的脱敏与保留本地原证据；受管块外逐字节不变，不改主检出；冻结交付后归还PM |
+| `AGENTS.md` 的Teamsmith受管块、`docs/team/reports/{P426-dev2,P443-dev,P444-dev2,P446-dev2,P449-dev}/**`共80份证据的取消跟踪 | agent:dev（P456 临时借用） | 仅任务书中的脱敏与保留本地原证据；受管块外逐字节不变，不改主检出；冻结交付后归还PM |
 | `.pi/**`、`AGENTS.md`、`README.md`、`docs/**`（除上面列出的） | PM | 团队协议与配置 |
 
 ## 名册
