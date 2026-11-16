@@ -1,6 +1,6 @@
 # teamsmith 0.4.7 · 发布接受记录
 
-状态：0.4.7已正式发布。用户批准后，npm latest与实际下载包已核验一致；公开CI仍在运行，结果出来后关闭发布跟进。
+状态：0.4.7已正式发布，npm latest与实际下载字节已核验；公开CI run43810623157已失败，三类具体失败交V164独立诊断。发布跟进暂不关闭，公开标签和npm包不修改。
 
 ## 验证与边界
 
@@ -33,7 +33,8 @@ P457模型路由测试提速仍在独立任务分支，不进入0.4.7。最终�
 
 ## 外部执行收据（2026-11-16）
 
-- 公开CI已确实启动：push run `43810623157`，来源fdd3247a；写本记录时四个分片运行中，尚不称通过。链接：https://github.com/Track07-cda/teamsmith/actions/runs/43810623157 。不是额外手动触发或重试。
+- 公开CI：push run `43810623157`，来源fdd3247a，最终failure。分片2成功，1/3/4失败；1是提醒真实Pi受控场景没有初始响应，3/4重复出现同一组P440路径显示断言，4另有install-shape两条裸init块期望差异。不能在未诊断前统称测试误报；独立核因交V164。原始63条ZIP日志及失败现场清单已取到运行时证据目录。链接：https://github.com/Track07-cda/teamsmith/actions/runs/43810623157 。没有额外手动触发或重试CI。
+- coverage本身的141段分片并集/四份清单均正确，唯一失败是按设计承接矩阵failure，不是漏测或另一个产品缺陷。查询期间的TLS EOF是取证网络问题，不代替上述实际测试失败；后以单次API请求临时地址取得原件，未修改系统网络配置。
 - npm实际暂存的是此前三路线安装已验证的原tgz，不从当前未提交工作区重新打包。命令为 `npm stage publish <已验证tgz> --access public --tag latest --registry=https://registry.npmjs.org`，退出0。
 - 暂存id：`9377c695-2b86-4ea2-a9a8-243056a6c01c`。npm回执为 `teamsmith@0.4.7`、286文件、shasum `ba087e0a6e5b6f033bde2577c3652d6f89847d30`，与验证包相同；实际上传原tgz的SHA-256为 `7fad61cf52e706fc7cff9af93215d69df2066569c36a66f6855ac1eb32908a4a`。
 - 用户确认“0.4.7 approved”后，于2026-11-16T05:52:25Z直接读取正式registry：`teamsmith/0.4.7`与dist-tags latest均为0.4.7。实际下载公开tarball，3041572 bytes、286文件；SHA-1/SHA-256/SRI三项与上述已验证原tgz完全一致，包内package.json版本0.4.7。没有重新安装、执行新测试或操作已有全局安装。收据：`.pi/team/state/release-0.4.7/npm-published-receipt.json`。
