@@ -48,3 +48,14 @@ git diff --cached --check
 ```
 
 不跑全仓strict（既有长需求仍未全部处理），不把未运行项称通过。不修改引用/选择登记，因此不额外跑其平台；若确实需要改变范围，报告交PM。Conventional Commits含P467、`Agent: dev2`，小步本地提交，最终报告随分支交付；不merge/push/归档/发布，不碰0.4.7包和标签。自己的临时目录只能按本次具体路径处理，不清理之前批次尚未收存的原件。
+
+## V172 定点返修（2026-11-16）
+
+非作者已审冻结824cfd82，报告6955816d已收主根`docs/team/reports/V172-verify.md`，结论REWORK（C1/C2/W1/W2）。方向与其余安排已接受，不重开研究，不进入apply。保持原任务、分支、模型/SID，读该报告后只修以下四项及直接关联文字/数字：
+
+1. C1：将worker `extra-consumes-model` 与PM `extra-consumes-resume`的真实list接线见证，换为旧faults已有的`extra-unknown-before-model` / `extra-unknown-before-resume`（extra为` --unknown harmless`）。明确固定输入、现有目标诊断和standalone extra可通过、周围模板role才拒绝的源依据；197个直接负例输入不扩表，不为此另加检查或运行样本。
+2. C2：选报告的real-up方案，不同时安排第二套直接start实验。在同一私有验证副本把PM real-up写前拒绝边界定义为`cmd-watch.sh`的real-up identity预检和`common.sh`的`team_pm_start`首道identity检查一起旁路；真实函数及最终renderer保持，用已有坏custom PM模板观察prompt/诊断变化。这里只改未来验证说明，不修改产品或现在执行旁路。
+3. W1：删“21个tag各preview/launch一次”的总规则。采用每tag一次launch，另留已有PM fresh `provider`坏模板的一次preview见证，覆盖独立PM preview入口；当前盘点为22次而不是42次，不设永久次数/PASS配额。同步proposal/design/tasks/delta/报告中所有关联表与措辞；合法启动/恢复/metadata/撤销不动。
+4. W2：完整MODIFIED块中原第132/227/241–242行相关旧场景，明确完整61b义务属于routing-argv前批，P457/V163已接受原件供该批证据；本批按新增场景获取受影响事实，未改部分引用旧记录。不删场景标题/旧义务，不再要求本候选提供新的完整61b，也不重新审计长原件。
+
+唯一写集仍为本change工件及自己的报告，不改V172报告、正式spec、产品/tests/CI或其它工件。修完只跑已改delta的本change strict，以及报告暂存后的必要ledger/diff各一次；不重复版本/根/选择/引用平台、不运行行为或长套。小步提交并报告相对824cfd82的真实差异和四项收口，交回原V172只复看这四项及直接矛盾，保留第一次REWORK及未验边界，不扩成全案重审。

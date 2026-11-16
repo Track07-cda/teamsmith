@@ -1104,3 +1104,6 @@ A11归档已接受并合并f75a1208，临时正式规格写权已收回。下一
 
 ### 2026-11-16T13:59:04Z · from: pm · re: A11
 P467继续原任务，不为清理中断规划。A11原件已保存在主根.pi/team/state/evidence/P466包与manifest.json的archive-run标签并逐文件核对；P467交付后，只可清理你自己的 /var/tmp/a11-clipboard-archive.bRitLK 一个不再使用的旧根，不动P467/固定检出/其它根，不重跑检查或改旧报告。
+
+### 2026-11-16T14:30:22Z · from: pm · re: P467
+V172独立审阅REWORK已收主根报告6955816d；读主P467 brief新增四项段和V172报告。只修C1两个旧list样例、C2有效real-up写前边界、W1每tag一次launch加一个PM preview、W2旧61b批次限定。方向/其它部分不重开，不实施、不运行样本/长套；只改关联规划文字和必要静态。原分支/模型/SID继续，完成后原V172仅定点复看。
