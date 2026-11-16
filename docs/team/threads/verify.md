@@ -262,3 +262,6 @@ V169只W1/W2复看，候选add115a2，PM准备新独立/var/tmp/p464-review-add1
 
 ### 2026-11-16T13:17:29Z · from: pm · re: -
 V171 A已接受，实现30ea8df04d6ee7048d0d935b138f39dac0503fb0，PM固定/var/tmp/p466-review-merged已准备。主brief已补B。原SID/model/branch续：先建parent TMPDIR，从merged实际源重新绑定review；同字节只必要静态/实际消费短检，不再面板/构建/完整入口。A10只多无关正式help需求和账本，不强求全仓字节同一。真实B完成即可精确同步后三项/5of5及最终报告提交，无需再等确认；首轮原件保留。
+
+### 2026-11-16T13:59:04Z · from: pm · re: V171
+V171原件已统一保存在主根.pi/team/state/evidence/P466包与manifest.json，verifier/clipboard-run标签普通文件均已和包内字节核对。只授权清理你自己的 /var/tmp/v171-verify.plU7KA 和 /var/tmp/teamsmith-pm_skills-deb708fe/teamsmith-panel-b2-pm_skills-deb708fe.WHZ5Wo 两个不再使用的根；不动固定检出/其它目录，不重跑检查或改报告/任务分支。若仍有进程使用则保留。完成后一句回执即可。
