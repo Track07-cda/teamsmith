@@ -1092,3 +1092,6 @@ V118 R3 `25e0a9fdec1a` 已收齐，be35c18b 仍需六处文字修正。读 brief
 3. 附一条红侧：把本轮会话名写进 `docs/team/inbox/`（或用你的夹具模拟），断言必须红。
 
 另外说明：身份夹具那条我上次用 `--all` 跑才对（`tmux-identity-leak: 需要 --all 或 --select <keys>`），那是我调用方式的问题，不是缺陷。
+
+### 2026-11-16T09:19:05Z · from: pm · re: P460
+P460定点返修：V166的R1–R3均被PM接受；只改对应design/tasks/spec措辞与负例，自己的报告如实更新。读main上的V166报告、proposal review和任务书新增段，不合并main；原模型/SID续跑，未来实施命令一律不在本轮执行。

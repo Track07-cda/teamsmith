@@ -33,3 +33,9 @@ branch: task/P460-config-check-dedup-proposal
 使用已安装OpenSpec1.16（先报实际版本/根，通常PATH前置 `$HOME/.bun/bin`），对本change做结构校验；spec-refs、section-select、报告暂存后的ledger-ban/diff-check。全项目普通validate的既有警告不记为strict通过。命令较长后台启动即结束回合，不在会话内等待。
 
 报告先给推荐的最小范围和实际删除账，再列真实回执与未验证项；不用全仓新统计、虚构秒数或完整套件绿单。若两项不适合绑在同一批可收窄并说明，不能扩大到帮助页/模型路由或新功能。
+
+## 2026-11-16 · V166定点返修
+
+PM接受 `docs/team/reports/V166-verify.md`（main已收存，原提交3d6e8fdd）的R1/R2/R3，裁定见 `docs/team/reviews/config-check-execution-dedup-proposal.md`。只修design/tasks的重复验收安排、delta正文的完整/单选歧义、缺准备负例和自己的报告；原规划b00853dc/5ab4f040保留对照。按报告R1最小表收窄未来验收，不执行那些未来命令；按R3替换负例，不增加防护代码或新框架。
+
+本次只对改动的规划做OpenSpec1.16本change严格结构、报告暂存后的ledger-ban/diff-check；未变的现状11份选择计划、全项目validate/spec-refs等已有回执不重跑。不更新已无关的proposal或扩大产品/测试写集。不合并main到本分支；用 `git show main:docs/team/reports/V166-verify.md` 读证据。原任务/分支/模型/SID续跑，完成后由原独立审阅者只复看R1–R3。
