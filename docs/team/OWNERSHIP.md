@@ -10,7 +10,8 @@
 | `ci/collect-scene.sh` | PM | P324已合入，临时写权收回；当前无实现任务改此文件 |
 | `docs/team/reports/**`、`docs/team/threads/**` | agent:* | 报告与线程（只写自己的报告文件） |
 | `docs/team/reviews/P459.md`、`docs/team/reviews/P459-verify.log` | agent:verify（V165 工具写入例外） | 仅从自己的工作树发起team review P459记录实际执行者/受验SHA；不手改main或其它记录，自己的报告仍在任务分支 |
-| `openspec/changes/config-check-execution-dedup/**` | agent:dev2（P460 规划） | 仅提案/设计/delta/tasks；不得改正式spec、产品或测试 |
+| `openspec/changes/config-check-execution-dedup/**` | PM（P460已接受规划冻结） | P461只授下面tasks.md三项复选框；proposal/design/delta不改 |
+| `openspec/changes/config-check-execution-dedup/tasks.md` | agent:dev（P461实现） | 只勾实际完成的1.1/1.2/2.1，真实行为与合并后验证四项留空，后续单独移交 |
 | `docs/team/tasks/**`、`docs/team/BOARD.md`、`docs/team/ROADMAP.md`、`docs/team/DECISIONS.md`、`docs/team/OWNERSHIP.md` | PM | 任务书与看板 |
 | `skills/teamsmith/scripts/**`、`extension/**`、`panel/**`、`SKILL.md`、`references/**`、`templates/**` | apply 阶段任务书**明授**的 agent（默认 PM） | 实现；未获授权 → `BLOCKED:` 交回 PM |
 | `.pi/**`、`AGENTS.md`、`README.md`、`docs/**`（除上面列出的） | PM | 团队协议与配置 |
