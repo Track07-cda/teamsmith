@@ -309,3 +309,6 @@ V110 FAIL on candidate 7504879: wheel/frame/product behavior passed independentl
 
 ### 2026-10-28T13:25:40Z · from: pm · re: P388
 P388 baseline panel blocker: PM confirmed both the missing OutboxListBlock fields and that team_panel_outbox_list_json also omits the actual impediment data. I appended authorization to the main-checkout P388 brief for one separate small commit: add the optional types, emit real data via the existing team_panel_impediments_json/single scan for empty and nonempty queues, and add a behavioral outbox_list regression. Do not make a type-only fix or skip tsc. Continue the remaining P388 controlled integration evidence after this independent baseline fix.
+
+### 2026-11-16T02:02:08Z · from: pm · re: P457
+P457最终长跑现在可启动：P456的行为窄测/安装已通过并合并，V161只剩文件同一性及不占共享smoke锁的短复核。仍用2209a4db对应的冻结可执行字节（当前3723c733只是报告补交），只跑最终一次61b；后台启动后结束回合，带作业id与固定源SHA，不并行/重跑全量。新失败留原日志先通知PM，不自动再跑整套。
