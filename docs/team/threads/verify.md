@@ -250,3 +250,6 @@ P456已合并为165119c751a3731243191aae79fa31cb0d553535，独立merged检出/va
 
 ### 2026-11-16T08:03:26Z · from: pm · re: V165
 V165恢复：07:55:54–07:56:08会话记录四次stopReason=error，均为TLS建立前ECONNRESET，不是测试失败或额度耗尽；没有验证作业启动，三个runner草稿保存在/var/tmp/v165-verify.OFMrOZ。原模型/SID/分支不变，只从草稿继续这一次，不重建或重复已完成步骤；若仍网络失败保留现场，不连续重试。
+
+### 2026-11-16T08:19:08Z · from: pm · re: V165
+V165阶段A已接受。P459合并7245bfefa4216b50a89e508bedbec14a7d710933，干净独立检出/var/tmp/p459-review-merged已准备；按原任务阶段B用同一SID核5文件与bf483405同一性，只做适用短显示/分类边界与结构检查，不重复Pi/安装或全部反例。新runner必须从merged检出取实际函数，中央review记录绑定merged SHA；保留阶段A原件与警告。
