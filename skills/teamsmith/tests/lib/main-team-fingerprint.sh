@@ -38,6 +38,8 @@ main_team_volatile() { # <relative path, starting with ./ >
   local p="$1" rest dir base
   main_team_authority_surface "$p" && return 1
   case "$p" in
+    # The live PM refreshes this capability record every 5s; its sibling files are not telemetry.
+    ./state/remind-tool/current.json) return 0 ;;
     ./state/*)
       rest="${p#./state/}"
       case "$rest" in

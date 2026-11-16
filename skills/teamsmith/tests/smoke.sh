@@ -5976,10 +5976,15 @@ git -C "$REPO" worktree remove --force "$P440_HOME_WT" >/dev/null 2>&1
 # ；！？，。）：都结束裸 root，而 ASCII 的 -_. 兄弟后缀仍然原样保留。
 P440_MATRIX_INPUT=$'主工作树：/a/b/pm-skills\n当前家目录：/srv/u\n路径：/a/b/pm-skills；家目录：/srv/u！\n引用「/a/b/pm-skills」与「/srv/u」？\n标点：/a/b/pm-skills，/srv/u。/a/b/pm-skills）：/srv/u；\n子路径：/a/b/pm-skills/review，家目录：/srv/u/.cache。\n句末点：/a/b/pm-skills. /srv/u.\n句末横线：/a/b/pm-skills- /srv/u-\n句末下线：/a/b/pm-skills_ /srv/u_\n兄弟：/a/b/pm-skills-ledger /a/b/pm-skills_other /a/b/pm-skills.cache'
 P440_MATRIX_EXPECTED=$'主工作树：<main-root>\n当前家目录：<home>\n路径：<main-root>；家目录：<home>！\n引用「<main-root>」与「<home>」？\n标点：<main-root>，<home>。<main-root>）：<home>；\n子路径：<main-root>/review，家目录：<home>/.cache。\n句末点：<main-root>. <home>.\n句末横线：<main-root>- <home>-\n句末下线：<main-root>_ <home>_\n兄弟：/a/b/pm-skills-ledger /a/b/pm-skills_other /a/b/pm-skills.cache'
-for P440_LOCALE in C C.UTF-8; do
-  P440_MATRIX_OUT="$(printf '%s\n' "$P440_MATRIX_INPUT" | LC_ALL="$P440_LOCALE" TEAM_MAIN_ROOT=/a/b/pm-skills HOME=/srv/u \
-    bash -c '. "$1"; team_review_ledger_display' _ "$SKILL_DIR/scripts/lib/cmd-review.sh")"
-  assert_eq "P440 C/UTF-8 标点矩阵（$P440_LOCALE）：净化一致且兄弟前缀保留" "$P440_MATRIX_OUT" "$P440_MATRIX_EXPECTED"
+# P459：同一矩阵覆盖 CI 的 HOME=/tmp；更长路径中间的 /tmp 不属于 HOME。
+P440_MATRIX_INPUT+=$'\nCI 路径：/var/tmp/teamsmith-ci-tmp/review-wt /srv/tmp/checkout /var/tmp /srv/tmp'
+P440_MATRIX_EXPECTED+=$'\nCI 路径：/var/tmp/teamsmith-ci-tmp/review-wt /srv/tmp/checkout /var/tmp /srv/tmp'
+for P440_HOME_ROOT in /srv/u /tmp; do
+  for P440_LOCALE in C C.UTF-8; do
+    P440_MATRIX_OUT="$(printf '%s\n' "${P440_MATRIX_INPUT//\/srv\/u/$P440_HOME_ROOT}" | LC_ALL="$P440_LOCALE" TEAM_MAIN_ROOT=/a/b/pm-skills HOME="$P440_HOME_ROOT" \
+      bash -c '. "$1"; team_review_ledger_display' _ "$SKILL_DIR/scripts/lib/cmd-review.sh")"
+    assert_eq "P440 C/UTF-8 标点矩阵（$P440_LOCALE HOME=$P440_HOME_ROOT）：净化一致且兄弟前缀保留" "$P440_MATRIX_OUT" "$P440_MATRIX_EXPECTED"
+  done
 done
 
 # P440 红侧：只在私有 skill 副本恢复旧的直接写盘，真实 review 必须重新带出绝对路径；随后同副本还原转绿。
@@ -25177,10 +25182,10 @@ if [ "$FAST" = "1" ]; then
   cond_skip "P442 真实 Pi 工具夹具" "FAST：私有真实 Pi/tmux + controlled model 另跑"
 elif [ ! -f "$P442_REAL_FIX" ]; then
   bad "P442 缺 tests/remind-tool-real.sh"
-elif ! command -v "${P442_PI:-$HOME/.bun/bin/pi}" >/dev/null 2>&1; then
+elif ! command -v "${P442_PI:-pi}" >/dev/null 2>&1; then
   cond_skip "P442 真实 Pi 工具夹具" "找不到真实 Pi（可设 P442_PI）"
 else
-  bash "$P442_REAL_FIX" >"$TMP/p442-remind-tool-real.log" 2>&1; P442_REAL_RC=$?
+  P442_EVIDENCE="$TMP/p442" P442_KEEP=1 bash "$P442_REAL_FIX" >"$TMP/p442-remind-tool-real.log" 2>&1; P442_REAL_RC=$?
   if [ "$P442_REAL_RC" -eq 0 ]; then
     assert_has "$TMP/p442-remind-tool-real.log" "remind-tool-real: passed=10 failed=0" "P442 真实 Pi：PM 工具/身份/配置错误/doctor 十组全绿"
   else
@@ -25240,10 +25245,10 @@ if [ "$FAST" = "1" ]; then
   cond_skip "P443 真实 Pi 停止恢复" "FAST：私有真实 Pi/tmux + controlled model 另跑"
 elif [ ! -f "$P443_REAL" ]; then
   bad "P443 缺 tests/remind-recovery-real.sh"
-elif ! command -v "${P442_PI:-$HOME/.bun/bin/pi}" >/dev/null 2>&1; then
+elif ! command -v "${P442_PI:-pi}" >/dev/null 2>&1; then
   cond_skip "P443 真实 Pi 停止恢复" "找不到真实 Pi（可设 P442_PI）"
 else
-  bash "$P443_REAL" >"$TMP/p443-recovery-real.log" 2>&1; P443_REAL_RC=$?
+  P442_EVIDENCE="$TMP/p443" P442_KEEP=1 bash "$P443_REAL" >"$TMP/p443-recovery-real.log" 2>&1; P443_REAL_RC=$?
   if [ "$P443_REAL_RC" -eq 0 ]; then
     assert_has "$TMP/p443-recovery-real.log" "remind-tool-real: passed=3 failed=0" "P443 真实 Pi：无通用提示恢复、忙碌不重复启动、切换/分叉立即撤下工具"
   else
@@ -25271,7 +25276,7 @@ if [ "$FAST" = "1" ]; then
 elif [ ! -f "$P444_REAL" ]; then
   bad "P444 缺 tests/remind-adversarial-real.sh"
 else
-  bash "$P444_REAL" >"$TMP/p444-real.log" 2>&1; P444_REAL_RC=$?
+  P442_EVIDENCE="$TMP/p444" P442_KEEP=1 bash "$P444_REAL" >"$TMP/p444-real.log" 2>&1; P444_REAL_RC=$?
   if [ "$P444_REAL_RC" -eq 0 ]; then
     assert_has "$TMP/p444-real.log" "remind-tool-real: passed=7 failed=0" "P444 真实 Pi：A+B、G1/G2、外部会话、调用/事件死亡与迟到重放全绿"
     assert_has "$TMP/p444-real.log" "remind-adversarial-real: isolation=ok" "P444 真实 Pi 受控对抗不碰主项目"

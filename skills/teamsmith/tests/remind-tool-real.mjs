@@ -12,8 +12,12 @@ const tests = dirname(fileURLToPath(import.meta.url)), skill = dirname(tests)
 const selection = (process.argv.find(a => a.startsWith('--select='))?.slice(9) ?? 'pm,large,identity,doctor').split(',')
 const evidence = resolve(process.env.P442_EVIDENCE ?? `/var/tmp/p442-real-evidence-${Date.now()}`)
 mkdirSync(evidence, { recursive: true, mode: 0o700 })
-const temporary = mkdtempSync('/var/tmp/p442-real-'), socket = join(temporary, 'socket')
-const pi = process.env.P442_PI ?? `${process.env.HOME}/.bun/bin/pi`, bunbin = dirname(pi)
+// Resolve against the caller's PATH before replacing HOME for the private Pi processes.
+const pi = process.env.P442_PI || spawnSync('bash', ['-c', 'command -v pi'], { encoding: 'utf8' }).stdout.trim()
+assert(pi, 'Pi not found on caller PATH (or set P442_PI)')
+const temporary = mkdtempSync(join(evidence, 'run-')), socket = join(temporary, 'socket')
+const bunbin = dirname(pi)
+console.log(`remind-tool-real: pi=${pi}`)
 mkdirSync(join(temporary, 'driver-home'))
 const base = { HOME: join(temporary, 'driver-home'), PATH: `${bunbin}:/usr/local/bin:/usr/bin:/bin`, LANG: 'C.UTF-8',
   TERM: 'xterm-256color', USER: process.env.USER ?? 'fixture', LOGNAME: process.env.LOGNAME ?? 'fixture', TMPDIR: temporary }
@@ -130,9 +134,15 @@ async function start(name, respond, opts = {}) {
   info.serverPid = tmux('display-message', '-p', '-t', pane, '#{pid}').trim()
   const script = join(root, 'launch.sh')
   const assignments = Object.entries(env).map(([key, value]) => `export ${key}=${sh(value)};`).join('\n')
-  writeFileSync(script, `#!/usr/bin/env bash\n${assignments}\nunset TEAM_ROOT TEAM_MAIN_ROOT TEAM_CONFIG_FILE TEAM_STATE_DIR\nbash -c ${sh(launch)}\nrc=$?; printf '%s\\n' "$rc" >${sh(info.done)}\nsleep 600\n`)
+  const launchError = join(dir, 'launch-stderr.txt')
+  writeFileSync(script, `#!/usr/bin/env bash\n${assignments}\nunset TEAM_ROOT TEAM_MAIN_ROOT TEAM_CONFIG_FILE TEAM_STATE_DIR\nbash -c ${sh(launch)} 2>${sh(launchError)}\nrc=$?; printf '%s\\n' "$rc" >${sh(info.done)}\nsleep 600\n`)
   tmux('respawn-pane', '-k', '-t', pane, `bash ${sh(script)}`)
   await until(() => existsSync(join(dir, 'session-start')) || existsSync(info.done), `${name} session_start`)
+  if (existsSync(info.done) && !existsSync(join(dir, 'session-start'))) {
+    const output = tmux('capture-pane', '-p', '-t', pane, '-S', '-')
+    writeFileSync(join(dir, 'launch-output.txt'), output)
+    throw new Error(`${name} Pi exited before session_start: rc=${readFileSync(info.done, 'utf8').trim()}\n${readFileSync(launchError, 'utf8')}${output}`)
+  }
   if (!['ordinary', 'worker', 'forged', 'no-entry'].includes(opts.invalid)) publishLaunch(info)
   if (release) release()
   if (opts.invalid === 'no-entry' && release) release()
@@ -221,7 +231,7 @@ async function restartForeign(info) {
     .replace(' -c --offline', ' --offline').replace(/ @\S*pm-prompt\.md\s*$/, '')
   const script = join(info.root, 'launch-foreign.sh')
   const assignments = Object.entries(info.env).map(([key, value]) => `export ${key}=${sh(value)};`).join('\n')
-  writeFileSync(script, `#!/usr/bin/env bash\n${assignments}\nunset TEAM_ROOT TEAM_MAIN_ROOT TEAM_CONFIG_FILE TEAM_STATE_DIR\nbash -c ${sh(launch)}\nrc=$?; printf '%s\\n' "$rc" >${sh(info.done)}\nsleep 600\n`)
+  writeFileSync(script, `#!/usr/bin/env bash\n${assignments}\nunset TEAM_ROOT TEAM_MAIN_ROOT TEAM_CONFIG_FILE TEAM_STATE_DIR\nbash -c ${sh(launch)} 2>${sh(join(info.dir, 'launch-stderr.txt'))}\nrc=$?; printf '%s\\n' "$rc" >${sh(info.done)}\nsleep 600\n`)
   tmux('respawn-pane', '-k', '-t', info.pane, `bash ${sh(script)}`)
   await until(() => events(info).filter(e => e.type === 'session_start').length > before &&
     events(info).filter(e => e.type === 'session_start').at(-1).sessionId !== oldSession, 'actual foreign process/session')

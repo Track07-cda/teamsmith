@@ -849,9 +849,9 @@ agents_run_case() { # <tree> <repo> <render> <label> <head-crlf> <tail-crlf> <bo
 # 既有契约上跑裸 `team init --no-skills`，受管块写成 `pm-skills:pm` / `dev verify` —— 会话名取了目录名，
 # 名册取了硬编码默认。判据两半：既有契约 → 契约现值（整块逐字节等于同参数的显式渲染）；无契约的新项目 →
 # 目录名 + 默认名册（两条路径没有合并成一条）。
-init_cfg_fixture() { # <tree> <repo>：把非默认的渲染参数写进契约（P402 的既有契约夹具）
-  local t="$1" p="$2"
-  run_tree "$t" "$p" init --no-skills --session cfg-session --agents "alice bob carol" \
+init_cfg_fixture() { # <tree> <repo> [init flags]：把非默认的渲染参数写进契约（P402 的既有契约夹具）
+  local t="$1" p="$2"; shift 2
+  run_tree "$t" "$p" init "$@" --session cfg-session --agents "alice bob carol" \
     --pm-window cfg-pm --docs docs/crew --vcs local --gates "make check" \
     --task-models 'routine=deepseek/deepseek-flash analysis=xai/grok-4.6 verify=kimi-coding/k3-256k' \
     --pm-model 'deepseek/deepseek-flash'
@@ -866,7 +866,7 @@ chk_init_render_from_config() { # <tree> <已 init 的仓库>：裸 init 取契�
   [ "$rc" = "0" ] || { printf '裸 init rc=%s（%s）' "$rc" "$(printf '%s\n' "$out" | tail -1)"; return 1; }
   after="$(file_hash "$cfg")"
   [ "$before" = "$after" ] || { printf '裸 init 改了既有契约（sha %s → %s）' "$before" "$after"; return 1; }
-  # 承重判据：整块逐字节等于「同一组参数显式渲染」的结果（单项 grep 只用来点名是哪一条错）
+  # 承重判据：参考树与裸 init 都默认安装，整块逐字节比较；单项 grep 只用来点名是哪一条错。
   e="$p.expected"; rm -rf "$e"; git_new "$e"
   init_cfg_fixture "$t" "$e" >/dev/null 2>&1 || { printf '参考渲染（同一组参数显式 init）失败'; return 1; }
   cmp -s "$e/AGENTS.md" "$p/AGENTS.md" || {
@@ -1068,7 +1068,7 @@ if want install; then
   # ②b P402：既有契约 + 非 --force 的裸 init → 渲染参数取契约现值（不是目录名/硬编码默认）；
   # 对照组是无契约的新项目：仍是目录名与默认名册（证明没有把两条路径合并成一条）。
   p="$tmp/p-cfg-render"; git_new "$p"; assert_isolated "$tree" "$p"
-  init_cfg_fixture "$tree" "$p" >/dev/null; rc=$?
+  init_cfg_fixture "$tree" "$p" --no-skills >/dev/null; rc=$?
   assert_eq "P402 夹具：非默认渲染参数写进契约" "$rc" "0"
   check_holds "P402 裸 init 取契约里的 session/名册/docs/PM 窗口/门禁（整块等于同参数的显式渲染）" \
     chk_init_render_from_config "$tree" "$p"
@@ -1593,8 +1593,8 @@ if old not in s:
     print("夹具没生效：找不到 P402 的契约回落块"); sys.exit(1)
 open(p, "w", encoding="utf-8").write(s.replace(old, new, 1))
 PYINITRENDER
-  pg="$tmp/f-init-render-green"; git_new "$pg"; init_cfg_fixture "$tree" "$pg" >/dev/null 2>&1
-  pf="$tmp/f-init-render-red"; git_new "$pf"; init_cfg_fixture "$ft" "$pf" >/dev/null 2>&1
+  pg="$tmp/f-init-render-green"; git_new "$pg"; init_cfg_fixture "$tree" "$pg" --no-skills >/dev/null 2>&1
+  pf="$tmp/f-init-render-red"; git_new "$pf"; init_cfg_fixture "$ft" "$pf" --no-skills >/dev/null 2>&1
   check_holds "⑮ 对照：真实树裸 init 取契约现值" chk_init_render_from_config "$tree" "$pg"
   check_breaks "⑮ 翻转：回落顺序退回目录名/硬编码默认（不看契约现值）" chk_init_render_from_config "$ft" "$pf"
   # ⑥ 真实树没被夹具动过：git status 指纹前后一致

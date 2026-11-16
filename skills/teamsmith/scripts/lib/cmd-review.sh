@@ -90,17 +90,18 @@ team_task_title() { # <ID> → 标题（BOARD 的「任务」列，其次任务�
 # 分支不是被判对象；其余任务仍是任务分支当前 tip。
 team_review_record_path() { printf '%s\n' "$TEAM_DOCS_ABS/reviews/$1.md"; }
 
-# root/ 一律替换；裸 root 的 ASCII 字母数字后缀，以及后随字母数字的 -_. 才算兄弟路径延续。
+# root 左侧不能仍是路径字符，避免 HOME=/tmp 改坏 /var/tmp；root/ 的子路径仍可替换。
+# 裸 root 的 ASCII 字母数字后缀，以及后随字母数字的 -_. 才算兄弟路径延续。
 # 句末 -_. 与其它右边界（含所有中文标点）都接受，不维护分隔符白名单，也不依赖 locale 的字符分类。
 team_review_ledger_display_root() { # <文本> <绝对根> <占位>
   local rest="$1" root="$2" marker="$3" out="" before after right continuation skip
   [ -n "$root" ] || { printf '%s' "$rest"; return 0; }
-  rest="${rest//"${root}/"/"${marker}/"}"
   while [[ "$rest" == *"$root"* ]]; do
     before="${rest%%"$root"*}"
     after="${rest#*"$root"}"
     right="${after:0:1}"
     continuation=0
+    case "${before: -1}" in [A-Za-z0-9/_.-]) continuation=1 ;; esac
     case "$right" in
       [A-Za-z0-9]) continuation=1 ;;
       [-_.]) case "${after:1:1}" in [A-Za-z0-9]) continuation=1 ;; esac ;;

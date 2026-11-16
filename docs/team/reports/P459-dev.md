@@ -1,0 +1,277 @@
+# P459 · 三项修复与运行记录分类修正已交付
+
+**根因及修复：** review 把 `/var/tmp` 中间的 `/tmp` 当成 HOME；初始化测试拿默认安装结果与 `--no-skills` 参考树比较；Pi 测试只找 HOME 下的 Bun 安装路径，并把启动即退出继续当业务等待。三个独立提交分别修正路径左边界、参考树安装方式、PATH 定位与提前退出分类。
+
+**第一轮验收未通过：** 固定提交 `82ea74962b4bb0624a820637d4135e6b4bbc41e8` 的唯一一次指定选段为 **458 passed / 6 failed / SKIP 3，rc=1**。review、初始化及真实 Pi 的 10/3/7 组行为均通过；六个失败全部点名主项目的 `state/remind-tool/current.json` 在检查期间变化。该文件由活 PM 每 5 秒刷新，现有共享隔离检查不认这种变化。未放宽检查、未重跑长组、未修改该未授权文件。
+
+**最终交付：** PM 于 07:35 裁定采用四组原件重放、另外两组只核原完整输出的组合证据。`992fb4c9` 仅将 `state/remind-tool/current.json` 这个活 PM 运行记录归为正常变化：四组原件的旧判定都只报该路径，新判定都无违例；任意旁文件、未知 state 文件、locator、reminders、Standby 的新增和修改仍报错；既有 isolation-ledger 为 15/0。未重跑 18 段或 20 个已绿真实 Pi 场景，原 458/6 不改写。§69 两组原始快照缺失的警告继续保留，组合证据是否接受由非作者独立判断。
+
+agent: dev   status: DELIVERED / SELF-PASSED（组合证据，待独立复验）   time: 2026-11-16T07:42:49Z
+branch: `task/P459-release-ci-fixes`   PR/MR: -
+
+## 07:27 的原件缺口记录（已由 07:35 裁定解除停止条件）
+
+已实际读取 `git show main:docs/team/tasks/P459-release-ci-fixes.md` 和线程最新条目；任务书来自 `713f7da7`，只授权将 `state/remind-tool/current.json` 单文件归为正常运行变化，并要求六组原始 before/after 逐组重放。任务书同时明确：原件缺失应如实停下，不能补造。
+
+通过本次唯一运行的 `/var/tmp/.teamsmith-tmp-ledger.smoke-983766-1794812957` 定位，以下四组各自两个原件均在，文件各 561157 bytes：
+
+| 原调用者 | 本次目录（内含 real-before.txt / real-after.txt） |
+|---|---|
+| CLI | `/var/tmp/teamsmith-remind-cli-pm_skills-deb708fe.VTEY1g/` |
+| delivery | `/var/tmp/teamsmith-remind-delivery-pm_skills-deb708fe.icXotV/` |
+| lifecycle | `/var/tmp/teamsmith-remind-lifecycle-pm_skills-deb708fe.OTBQO0/` |
+| pulse | `/var/tmp/teamsmith-remind-pulse-pm_skills-deb708fe.vJaij0/` |
+
+另外两组不是保留目录遗漏：`remind-adversarial-faults.sh:19` 与 `remind-adversarial-real.sh:20` 在判定后都无条件 `rm -f "$BEFORE" "$AFTER"`，既不受 P442_KEEP 也不受 TEAM_TMP_KEEP 影响。07:27 的只读检查在其实际创建位置 `/var/tmp` 找到的 `.teamsmith-p444-{fault,real}-{before,after}.*` 文件数为 **0**。两组各自外层日志仍在，分别保留 `fault-matrix: passed=12 failed=0`、`remind-tool-real: passed=7 failed=0` 与唯一变化路径，但没有原始哈希清单，不能冒充原始快照重放。
+
+**07:27 停止原因是缺两组原件，07:35 的任务书修订已允许不重放缺失原件的两组，改核完整输出及同一判定调用。** 原件未从别的时刻复制或合成，也没为补原件重跑长组。前三项实现和原始 458/6 完全保留，以下补验区分原件重放与只读日志核对，不称六组原件齐全。
+
+## Deliverables
+
+| Commit / Path | What / 实际影响 |
+|---|---|
+| `3e47023b` · `skills/teamsmith/scripts/lib/cmd-review.sh` | 去掉无边界的 `root/` 全局替换；在同一遍替换中拒绝左侧仍是路径字符的命中。只改公开 review 的路径显示，不改执行路径、门禁命令、退出码或判定。 |
+| `3e47023b` · `skills/teamsmith/tests/smoke.sh` 的 P440 矩阵 | 复用原 C/C.UTF-8、中文标点、句末 `-_.`、兄弟路径样本，加入 `/var/tmp`、`/srv/tmp`，用原 HOME 与 HOME=/tmp 两种布局执行同一矩阵。原真实 review 精确路径、绝对路径反例及同副本恢复保持原样。 |
+| `766a0024` · `skills/teamsmith/tests/install-shape.sh` | 原参数准备函数接收 init flags；最初写非默认配置仍显式 `--no-skills`，比较用的显式参考树与裸 init 都默认安装。config 哈希、完整 AGENTS 比较及 session/名册/docs/PM 窗口/gates 断言均保留。 |
+| `82ea7496` · `skills/teamsmith/tests/remind-tool-real.mjs` | 保留显式 P442_PI；未指定时从调用者 PATH 取 Pi，再隔离 HOME。现有 session-start/done 等待若先见退出且没有会话，立即输出真实 rc、stderr 与 pane 输出，不再等业务 watchdog。 |
+| `82ea7496` · driver 与 smoke §67–69 | 三组证据分别放到 `$TMP/p442`、`$TMP/p443`、`$TMP/p444`；driver 临时项目、HOME、socket 放在对应证据根的 `run-*` 下。原 launch/done/session/event/provider 文件与新增启动 stderr 同属已有 smoke 现场，无新收集器、白名单或段落。 |
+| `992fb4c9` · `skills/teamsmith/tests/lib/main-team-fingerprint.sh` | 仅添加 `./state/remind-tool/current.json` 精确路径的正常变化分类和一行说明。没有放行目录、旁文件或任何权威状态，没有改封装清理策略。 |
+| 本报告 | 记录原错误、修复后行为、原失败、分类补验及两组无法重放的证据边界。 |
+
+三个 `.sh` 包装器不需要改动：原 `exec node ...` / `node ...` 已继承 P442_EVIDENCE、P442_KEEP 和 PATH。未改变七个对抗场景，也未把 §69 改成 SKIP。
+
+## 原错误依据与最小反证
+
+### 1. 路径显示：原函数错误 → 新矩阵绿 → 旧函数红 → 原函数恢复绿
+
+原公开 CI 的证据与范围采用 `docs/team/reports/V164-verify.md` C1；另在本树修改前实际运行冻结函数：
+
+```bash
+export TEAM_MAIN_ROOT=/var/tmp/teamsmith-ci-tmp/s4/repo
+HOME=/tmp bash -c '
+  source skills/teamsmith/scripts/lib/cmd-review.sh
+  printf "%s\n" "独立 checkout：\`/var/tmp/teamsmith-ci-tmp/s4/review-wt\`" \
+    "主目录：/tmp/checkout" "兄弟组件：/srv/tmp/checkout" | team_review_ledger_display
+'
+```
+
+原输出为：
+
+```text
+独立 checkout：`/var<home>/teamsmith-ci-tmp/s4/review-wt`
+主目录：<home>/checkout
+兄弟组件：/srv<home>/checkout
+```
+
+定点反证执行了 `/var/tmp/p459-dev.ND49Qq/display-check.py`：从本树 smoke 原样提取 P440_MATRIX_INPUT 到原红侧之前的矩阵，分别以本树、`git show ab52f1ee:skills/teamsmith/scripts/lib/cmd-review.sh` 的私有副本、再以本树运行。私有副本带同树 gate-lock.sh，最后一次留存日志没有缺依赖错误。
+
+```text
+green rc=0：四组全部 PASS
+old-red rc=1：HOME=/srv/u 的 C/C.UTF-8 两组 PASS；HOME=/tmp 的 C/C.UTF-8 两组 FAIL
+restore rc=0：四组全部 PASS
+```
+
+指定 smoke §10 的真实 review 另给出：
+
+```text
+P440 review 绿：执行者/SHA/真实命令/结果保留，模板+锁+摘录+门禁尾部均无 main/home 绝对路径
+P440 兄弟前缀路径逐字保留，不改成不存在的占位拼接
+P440 HOME 下 checkout 按显示规则写成 <home>/…
+P440 review 红：rc=0/PASS/记录存在后，仅因绝对 main/home 路径判红
+P440 review 还原绿：同一私有副本恢复显示净化后断言通过
+```
+
+### 2. 初始化：原参考失败 → 安装方式对齐后绿 → 原⑮因真正参数错误红
+
+`/var/tmp/p459-dev.ND49Qq/init-check.py` 从旧/新 install-shape.sh 原样提取 `git_new/run_tree/file_hash/init_cfg_fixture/chk_init_render_from_config`，在独立 HOME、清除 TEAM_*/TMUX、Git 全局配置禁用的私有仓库执行共享检查函数。反例直接执行原⑮的相同源码修改与调用，不跑其余安装路线。
+
+```text
+old-reference rc=1
+裸 init 的受管块与同参数的显式渲染不同（实际 10290 字节 / 期望 9438 字节）
+参考：bash <skill-dir>/scripts/team help
+实际：bash "$(git rev-parse --path-format=absolute --git-common-dir)/../.pi/skills/teamsmith"/scripts/team help
+same-shape rc=0
+裸 init 写出 cfg-session:cfg-pm + 名册 + docs/crew + 门禁，整块等于显式渲染，契约字节不变
+existing-15 rc=0
+⑮ 对照：真实树裸 init 取契约现值 rc=0
+⑮ 翻转：回落顺序退回目录名/硬编码默认（不看契约现值） rc=1
+实际 tmux `f-init-render-red:pm`，期望 tmux `cfg-session:cfg-pm`；后续差异点名 Roster
+```
+
+完整共享消费者已经由本次指定 §39 执行一次，`install-shape.log:219–225` 仍保留⑮绿/红及最终 **203/0/SKIP0**。未把安装路径从比较中忽略，未改 P456 的三形状产品生成逻辑。外层 `grep -c ✓` 打印 204，包含结果行本身；本报告采用内层实际断言结果 203。
+
+### 3. Pi：旧定位找不到 PATH 上的 Pi；短命程序报告原始 rc
+
+原 CI 的缺失原件范围按 V164 W2：历史制品没有七份 Pi done/session/provider 原件，不能补造过去退出码；V164 的一次本地冻结原 driver 复现留下 `done=127`。本任务没有重新跑旧 driver 的七次 90 秒超时。
+
+本轮 `/var/tmp/p459-dev.ND49Qq/pi-controls.py` 的私有 HOME 没有 `.bun/bin/pi`，PATH 中实际程序为 `<caller-home>/.bun/bin/pi`，`--version` 实读 **1.5.2**。正文用 `<caller-home>` 代替账户家目录；未读取凭据。
+
+只运行两次原有单场景 `--select=adversarial-batch`，不发模型请求：
+
+```text
+# 保留新退出分类，只在私有副本恢复旧 Pi 路径表达式
+old-locator rc=1 elapsed=0.53s
+Pi exited before session_start: rc=127
+.../pi-home/.bun/bin/pi: No such file or directory
+# 显式 P442_PI 指向打印错误并 exit 42 的临时测试程序
+short-exit rc=1 elapsed=0.53s
+Pi exited before session_start: rc=42
+controlled Pi startup failure
+pi-controls: 2 expected failures correctly classified
+```
+
+两次均核对 done 精确等于 127/42、没有 session-start、日志没有 `watchdog:`。临时短命样本仅用于复用原单场景的启动失败输入，未加入产品、门禁或长期选择器。正常真实 Pi 由下述指定选段执行，未另行直接重复三组。
+
+## 验收命令与实际结果
+
+受测产品提交：`82ea74962b4bb0624a820637d4135e6b4bbc41e8`。
+脚本：`/var/tmp/p459-dev.ND49Qq/acceptance.sh`；外层日志：同目录 `acceptance.log`；每条命令另有独立 `.log`。
+
+环境为 `HOME=/var/tmp/p459-dev.ND49Qq/smoke-home`、`TMPDIR=/var/tmp`，PATH 前置调用者实际 Bun bin 并用系统 node/tmux；未设 P442_PI、TEAM_SMOKE_FAST。开跑/结束均确认私有 HOME 下 `.bun/bin/pi` 不存在。使用既有 `--snapshot` 把提交固定到独立快照，内部运行期间未提交、未改树；最终没有 rc=4 的指纹失效。
+
+```text
+$ bash -n skills/teamsmith/scripts/lib/cmd-review.sh skills/teamsmith/tests/smoke.sh skills/teamsmith/tests/install-shape.sh
+rc=0
+$ node --check skills/teamsmith/tests/remind-tool-real.mjs
+rc=0
+$ openspec --version
+1.16.0
+$ openspec validate --all
+Totals: 20 passed, 0 failed (20 items)
+rc=0（原长 requirement 文本 warnings 保留）
+$ bash skills/teamsmith/tests/spec-refs.sh --check
+spec-refs: judged 122 reference(s) (49 distinct) in 14321 effective line(s); retired 0; undeclared 0
+rc=0
+$ bash skills/teamsmith/tests/section-select.sh --check
+== 选段自检 ==  ok 13  bad 0  SKIP 1
+rc=0，17s；SKIP 是本检出缺 .pi/skills 的原条件项
+$ bash skills/teamsmith/tests/smoke.sh --snapshot=82ea7496 --select 10,10b,39,67,68,69 --keep </dev/null
+18 段收口；== 选段结果 == ✓458 ✗6；SKIP3；rc=1，510s
+快照运行结束：committed=82ea74962b4bb0624a820637d4135e6b4bbc41e8 rc=1
+```
+
+| 指定段 | 实测结果 | 具体依据 |
+|---|---|---|
+| 10 | 47/0，19s | P440 正常/兄弟/HOME、四组矩阵、真实红与恢复均通过 |
+| 10b | 72/0，30s | 既有记录/退出码/证据断言通过 |
+| 39 | 外层 1/0，134s；内层 203/0 | 原初始化消费者与⑮均通过 |
+| 67 | 外层 2/2，103s | real Pi 10/0、node 9/0；CLI 111/1、delivery 100/1 均只红主项目文件比对 |
+| 68 | 外层 2/2，53s | real Pi 3/0、recovery-unit 20/0；lifecycle 31/1、pulse 10/1 均只红同一比对 |
+| 69 | 外层 0/2，118s | real Pi 7/0、fault-matrix 12/0；两个封装都因同一文件变化返回 1，故没有伪报隔离通过 |
+
+Pi 实际解析路径在三个现存日志首行一致；§67/68 没有错误地 SKIP，§69 七场景全部跑完。SKIP3 均来自前导 §0b 的三个 skill-load 检查：私有 HOME 下找不到旧形式的 `pi dist/core/skills.js`；它们不是提醒组的 SKIP。本任务没有授权改该前导检查，也未将其记为通过。
+
+本次共执行的键：`0 0b 0c 0d 2 4 4b 5 3b 6 6i 9 10 10b 39 67 68 69`。未执行的 123 个键：
+
+```text
+0e 0f 0g 0h 0i 1 1b 1c 3 4c 6b 6c 6d 6e 6f 6g 6h 6j 6k 7 7b 8 10c 11 11b 11b2 11b3 11b4 11c 11d 11e 11e2 11f 11g 11h 11i 11j 14b 15b 15c 12 13 13b 13c 12b 12b-h0 12b-h0b 12b-h0d 12b-h0c 12b-pi 12b-pi2 12b-pi3 14 14c 54 14d 17 18 18b 18c 19 20 21 22 23 24 25 26 27 28 29 30 31 31c 32 33 12e 12f 12g 12h 12i 12j 12k 34 34b 34c 34d 35 36 37 38 38m 40 41 42 43 44 45 46 47 48 49 50 51 51m 51b 51c 52 53 57 58 15 55 56 59 60 61 61b 62 63 64 65 66
+```
+
+## 原六处失败的来源与最终分类补验
+
+六条原输出均为 `./state/remind-tool/current.json`：remind-cli 的 F、remind-delivery 的 H、remind-lifecycle 的 E、remind-pulse 的最终隔离、remind-adversarial-faults 与 remind-adversarial-real 的封装隔离。后两组内层分别是 **12/0** 与 **7/0**，日志并非业务失败后被简化成同一个路径错误。
+
+静态与现有现场核对所得：
+
+1. `tests/lib/main-team-fingerprint.sh` 的 `main_team_project_root` 从 git common-dir 找真正主检出；本次快照是 worktree，仍指向有活 PM 的同一主项目，而不是把主项目换成空沙盒。
+2. 该文件 `main_team_volatile` 没有 `state/remind-tool/`；所以此处任何正常刷新都被判非白名单变化。没有使用 `MAIN_TEAM_BREAK` 或修改共享判据。
+3. `extension/team-remind.ts:85,99–106` 每 5000ms 调 refresh 并 publish；`scripts/remind-capability.mjs:140–143` 每次发布包含 `at: new Date().toISOString()`。只读当前证据显示 `pid=394404`、`status=registered`，pid 与主项目 pm.pid 一致，其 cwd/root/state 均属于主项目；07:18:44 的 mtime 与随后 `at=2026-11-16T07:20:00.089Z` 说明测试结束后该文件仍由活 PM 刷新。
+4. 现成 before/after 文件确认同一路径 hash 真实变化，例如 lifecycle 的 `46c12325…` → `d9782ae2…`，delivery 的 `4fc2295e…` → `2d679dcc…`，不是缺文件或 grep 错误。本轮未改动真实提醒、Standby、Pulse 或 PM。
+
+**两次停止条件均已由 PM 窄授权及证据范围裁定解除。** `713f7da7` 授权单文件分类；07:35 的任务书修订允许四组原件加另外两组原输出的组合证据。没有增加现场收集白名单、没有停止真实 PM、没有反复跑长组碰刷新间隙。
+
+### 最终单文件改动与实测边界
+
+`992fb4c9` 在原 `main_team_volatile` 的 case 中增加一个精确项：
+
+```bash
+./state/remind-tool/current.json) return 0 ;;
+```
+
+它仍先调用 `main_team_authority_surface`；未排除 `remind-tool/` 目录，也未改任何调用者。原已绿的产品代码仍是 `82ea7496` 的同一字节；新增的只是测试对正常运行记录的分类。
+
+```text
+$ python3 /var/tmp/p459-dev.ND49Qq/classification-check.py
+replay cli: old=['./state/remind-tool/current.json'] new=[]
+replay delivery: old=['./state/remind-tool/current.json'] new=[]
+replay lifecycle: old=['./state/remind-tool/current.json'] new=[]
+replay pulse: old=['./state/remind-tool/current.json'] new=[]
+original-output faults: 12/0, sole violation=./state/remind-tool/current.json, caller unchanged; original snapshots unavailable (NOT REPLAYED)
+original-output real: 7/0, sole violation=./state/remind-tool/current.json, caller unchanged; original snapshots unavailable (NOT REPLAYED)
+short: only current.json changes -> old REJECT / new ALLOW
+short: sibling + unknown-state + locator + reminders + standby additions all REJECT
+short: same 5 protected files changed -> all REJECT
+classification-check: 4 original replays + 2 original-output reviews + 3 short predicate checks passed; no business scenarios rerun
+rc=0
+$ bash -n skills/teamsmith/tests/lib/main-team-fingerprint.sh
+rc=0
+$ bash skills/teamsmith/tests/isolation-ledger.sh
+identity ledger: telemetry -> rejected=0
+identity ledger: inbox -> rejected=1
+identity ledger: unknown-state -> rejected=1
+isolation-ledger: pass=15 fail=0
+rc=0
+```
+
+重放脚本直接 source 旧提交 `82ea7496` 的共享判据或本次新判据，读取上述四组原始文件；旧输出逐字等于唯一 current.json 路径、新输出为空，未改变输入。原始文件 SHA-256 前 16 位依次为：
+
+| 组 | before | after |
+|---|---|---|
+| cli | `03d7d440de5f2cf6` | `f74fe29e21da28dd` |
+| delivery | `2e63c187bdac08e9` | `1932868b2b68f7a8` |
+| lifecycle | `a53f9394bbed56bb` | `4c85db4926d61c35` |
+| pulse | `ed7e9a6b34885c00` | `eeb085ea282bcdbe` |
+
+短反例使用私有目录和同一 `main_team_snapshot/main_team_violations`：只修改 current.json 时新判据接受；再新增并修改 `reminder-locator.json`、`state/reminders/state.json`、`state/standby`、`state/remind-tool/side.json`、`state/p459-stray.json` 时，五条仍全部被报出。不是用字符串重写另一份分类逻辑。既有 isolation-ledger 的两个 `bad:` 来自故意写入 inbox/未知 state 的子检查，外层分别要求 rejected=1，最终 15/0，不能把预期反例当成该脚本失败。
+
+对缺原件的两组，完整读取原 `p444-faults.log` 和 `p444-real.log`，核对 12/7 条逐场景 PASS、各自总结 12/0 与 7/0、唯一违例路径；另逐字比较两封装与 `git show 82ea7496:<path>` 相同，确认仍调用同一个 `main_team_violations "$BEFORE" "$AFTER"`。这只是原输出与调用核对，不是新一次业务执行，也不是原件重放。
+
+首个一次性检查作业 `p459-classification-replay` rc=1：四组重放和两组原输出核对已完成，短反例的实际五条与预期五条仅排序不同，原因是 Python 字符排序与继承 locale 的 shell 排序不一致。仅将该仓外脚本比较改为排序后逐项相等，保留原失败日志 `classification-check-first.log`；未改共享判据或少比较任何路径。第二个作业 `p459-classification-final` rc=0，包含上述补验以及 validate/refs/selection，工具记录总计 236.8s；已收割，没有重跑任何业务场景。
+
+最终轻量检查另有原日志：`validate-final.log` 为 OpenSpec 1.16 的 20/0；`spec-refs-final.log` 为 122 refs / undeclared 0；`section-select-final.log` 为 13/0/SKIP1。没有以旧 CLI 或旧结果替代当前判据的检查。
+
+## 现场与交接
+
+- 本次原始外层/轻量/反例日志：`/var/tmp/p459-dev.ND49Qq/`。
+- 唯一指定选段完整日志：`/var/tmp/p459-dev.ND49Qq/selected.log`。
+- 原 smoke 现场：`/var/tmp/teamsmith-smoke-pm_skills-deb708fe.kbie4E/`；Pi 证据与私有运行根均在此目录的 `p442/ p443/ p444/`，包含 launch、stderr、done、session、events、requests、恢复文件，没有另建现场包或收集前缀。
+- 共享安装现场：`/var/tmp/teamsmith-install-shape-pm_skills-deb708fe.mYOZJ0/`；lifecycle/delivery 的原 before/after 位置分别为 `/var/tmp/teamsmith-remind-lifecycle-pm_skills-deb708fe.OTBQO0/`、`/var/tmp/teamsmith-remind-delivery-pm_skills-deb708fe.icXotV/`。
+- 五个后台作业全部收割：`p459-init-controls`、`p459-pi-start-controls` 为 rc=0；`p459-bounded-acceptance` 为 rc=1；补验脚本第一次 `p459-classification-replay` 为 rc=1（排序比较错误），修正后的 `p459-classification-final` 为 rc=0。保留原失败与最终补验日志交 PM，没有遗留长验证任务，不用项目级通配清理，也不触碰别人的目录。
+
+## OpenSpec assessment
+
+本单 `change: -`，只修既有实现/测试，不新增规格；验收锚点为 `verification#The record states what was verified`。
+
+| Dimension | Assessment | Evidence |
+|---|---|---|
+| Completeness | 原三项及续授权单文件分类已完成，交独立复验 | 四个代码/测试小提交；原指定命令实跑；四组原件重放、两组原输出核对及短补验完成 |
+| Correctness | 原红保留，补验范围明确 | HOME=/tmp 原红/新绿/恢复；no-skills 原红/新绿/⑮真参数错误红；Pi 127/42 即报与真实 10/3/7 通过；分类旁文件/权威状态反例仍报错 |
+| Coherence | 授权写集内，无新机制或规格副本 | 五个明授源文件和本报告；OpenSpec 1.16 最终非 strict 20/0；封装清理未改 |
+
+## CRITICAL / WARNING / SUGGESTION
+
+- CRITICAL 0：三项修复与续授权分类的指定实施/补验已完成；不代表原 458/6 被改成通过或已经独立接受。
+- WARNING 1：§69 两组原始 before/after 已被原封装删除，未能重放；只核原完整输出 12/0、7/0、唯一违例与同一调用。非作者须据此独立判断组合证据。
+- WARNING 2：前导三个 skill-load 检查条件跳过，另 section-select 原有一个检出前提跳过；没有检查过的行为不记绿。
+- Counts：CRITICAL 0 · WARNING 2 · SUGGESTION 0。
+
+## Final assessment 与未做项
+
+- Readiness：**DELIVERED / SELF-PASSED，按 PM 裁定提交组合证据，等待非作者独立复验**。最终代码/测试 tip 为 `992fb4c9`；原三项产品/测试内容与 `82ea7496` 相同，仅再添精确单文件分类。没有在最终 tip 重跑 18 段，不称最终提交一次全绿，也不宣称已独立验收或可发布。
+- 未跑：全量/FAST smoke、61b/meta/夜间/性能、独立三路线安装；没有另外直接重复工具/恢复/对抗三组。§39 内部既有安装消费者由指定命令正常执行，未删除覆盖。未跑 strict；本次仅引用真实 OpenSpec 1.16 非 strict 结果，未冒充全仓 strict 通过。
+- 没有真实模型、外部收件人、真实团队提醒/Standby/Pulse/PM 改动、模型/全局依赖调整、远端 CI、push、PR、merge、tag、npm 或已发布 0.4.7 包变更。真实 Pi 均使用私有 HOME、私有 tmux、loopback 受控 provider；这不构成自主性验证。
+- Decisions/deviations：指定六组选段只跑一次；两次停止均有已提交的历史报告，PM 随后明确授权单文件修正与四组原件/两组输出的组合证据。原 458/6、缺原件边界和首个仓外脚本排序错误均保留；未用七个业务场景通过抵销两个封装的历史隔离失败。
+
+## 收尾检查
+
+报告暂存后在本工作树检查：
+
+```text
+$ bash skills/teamsmith/tests/ledger-ban.sh --names-file "$(git rev-parse --path-format=absolute --git-common-dir)/../.pi/team/forbidden-names.txt"
+ledger-ban: root=/home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev scope=published files=2742 hits=0 names=ok user=resolved
+ledger-ban-rc=0
+$ git diff --check && git diff --cached --check
+diff-check-rc=0
+```
+
+本报告与收据提交在任务分支，未推送。`992fb4c9` 之后仅追加报告；下一步由 PM 安排非作者独立复验，保留两个无法重放的原件缺口，不在本席位补跑业务来消除警告。
