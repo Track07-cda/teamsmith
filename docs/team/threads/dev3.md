@@ -296,3 +296,6 @@ P398实际启动回执（2026-11-02）：code类别按policy选择clinepass/clin
 
 ### 2026-11-11T02:21:09Z · from: pm · re: -
 V152 最终全量续跑在 2026-11-11T02:20Z 因 opencode-go 429 overloaded 中断；未启动新一轮全量，既有 c6b3453e 全量 FAIL 记录不当作本轮结果。保留 merged SHA 与 /var/tmp/p444-review-final，服务恢复后同任务续跑，不换模型。
+
+### 2026-11-16T01:14:22Z · from: pm · re: V162
+V162续跑：用户2026-11-16要求continue。11-13中断为OpenAI连接超时/ECONNRESET，尚无最终审阅报告，工作树干净。保留原模型/SID，从P455候选8f244edc继续定点审阅；不重做候选规划，不跑完整矩阵。
