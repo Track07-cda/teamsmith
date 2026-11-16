@@ -259,3 +259,6 @@ V168仅R1复看：P462真实修订78fef9689dfe，通知里的ba_PLACEHOLDER不�
 
 ### 2026-11-16T12:14:00Z · from: pm · re: -
 V169只W1/W2复看，候选add115a2，PM准备新独立/var/tmp/p464-review-add115a2；主根brief已补。对比2c5ba223..add115a2：同scenario局部子shell pty_cap+真实PNG/草稿/理由ready，原reason_text移前，父级直接收rc；种子同shell立即收flag。核现API支持/同次可见帧/不扩大写集；默认公共git身份和原解析器是否只读且走/var/tmp，七次主动加零按键观察。只新change strict及报告diff，不重跑任何样本/旧静态平台，不重开已接受部分。原SID/model/branch，保留初轮REWORK。
+
+### 2026-11-16T13:17:29Z · from: pm · re: -
+V171 A已接受，实现30ea8df04d6ee7048d0d935b138f39dac0503fb0，PM固定/var/tmp/p466-review-merged已准备。主brief已补B。原SID/model/branch续：先建parent TMPDIR，从merged实际源重新绑定review；同字节只必要静态/实际消费短检，不再面板/构建/完整入口。A10只多无关正式help需求和账本，不强求全仓字节同一。真实B完成即可精确同步后三项/5of5及最终报告提交，无需再等确认；首轮原件保留。

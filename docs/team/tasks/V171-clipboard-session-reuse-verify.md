@@ -31,7 +31,11 @@ branch: task/V171-clipboard-session-reuse-verify
 
 失败保存完整原件并区分实现、观察或私有驱动搭建；不得自动重跑完整场景收集现场。若确有实现缺陷，报告实际已通过/失败/未执行子例并BLOCKED给PM，后续只收敛必要返修，不靠删断言/缩等待/换路径或set+e/无名||true换绿。
 
-## 阶段B · 等PM提供固定merged输入
+## 阶段B · 固定merged已到
+
+PM已接受c069c1be阶段A的真实证据（见reviews/V171.md），实现合并为 `30ea8df04d6ee7048d0d935b138f39dac0503fb0`，只读检出 `/var/tmp/p466-review-merged` 已准备。现在保持同一模型/SID/分支续B；先创建自己的父TMPDIR，避免首轮queue marker准备问题。必须从此merged读实际源码、重新绑定正式review，不能用硬编码790bfb35的continue-a.sh冒充。相同执行/本change规划字节仅必要静态与实际结果消费短检，不再起面板/构建/完整入口；实际全部通过即授权同步自己后三项与最终报告/原生5/5并提交，不等额外确认。这不是预判B结果。
+
+merged另外包含A10已验归档后正式verification新增的无关help需求及账本；它们不改变本change执行与planning，不强求全仓同字节，若你的manifest含它须如实说明此项差异。发现其它相关字节变化仍先交PM收敛；不扩大补验。原首轮错误标签、setup rc3和原始正常/坏/恢复原件保留。
 
 A真实交付后由PM接受/合并并提供干净merged检出和SHA。必须从merged实际读源，正式review绑定该SHA，不能硬编码旧候选目录冒充。比对脚本、正常bundle/库/实际输入与规划依赖；字节相同复用A，仅做必要静态/实际结果消费短检，不默认再起面板/构建/首例或完整clipboard。若相关字节变动先交PM收敛补验。B全部真实通过再精确同步清单5/5和最终OpenSpec评估；保留阶段A原件和未验边界，不用planning isComplete代替。
 
