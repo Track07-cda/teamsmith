@@ -644,11 +644,12 @@ scenario_clipboard() {
     cond_skip "B4 模型夹具" "本机没有 bun"
   fi
 
-  # The fake tools: each call is logged; the mode comes from the panel's environment.
+  # The fake tools log every real call and read this fixture's current mode input each time.
   cat > "$fx/fakebin/wl-paste" <<'EOWS'
 #!/usr/bin/env bash
 printf 'wl-paste %s\n' "$*" >> "$P20_CLIP_LOG"
-case "${P20_WL_MODE:-image}" in
+IFS= read -r mode < "$P20_WL_MODE_FILE" || exit 1
+case "$mode" in
   image)
     case "$1" in
       --list-types) printf 'text/plain;charset=utf-8\nimage/png\n' ;;
@@ -668,29 +669,69 @@ EOWS
   cat > "$fx/fakebin/xclip" <<'EOXC'
 #!/usr/bin/env bash
 printf 'xclip %s\n' "$*" >> "$P20_CLIP_LOG"
-case "${P20_X_MODE:-image}" in
+IFS= read -r mode < "$P20_X_MODE_FILE" || exit 1
+case "$mode" in
   image) case "$*" in *TARGETS*) printf 'image/png\n' ;; *) printf 'XCLIPDATA' ;; esac ;;
   *) exit 1 ;;
 esac
 EOXC
   chmod +x "$fx/fakebin/wl-paste" "$fx/fakebin/xclip"
 
-  clip_env() { # <wl mode> <x mode> [extra]
-    printf 'PATH=%s:%s TMPDIR=%s P20_CLIP_LOG=%s P20_WL_MODE=%s P20_X_MODE=%s %s' \
-      "$fx/fakebin" "$PATH" "$fx/tmpdir" "$fx/calls.log" "$1" "$2" "${3:-}"
+  clip_modes() { # <wl mode> <x mode>; change only after the preceding probe and edits finish
+    printf '%s\n' "$1" > "$fx/wl-mode"
+    printf '%s\n' "$2" > "$fx/x-mode"
+  }
+  clip_env() { # the same input paths for every retained panel start
+    printf 'PATH=%s:%s TMPDIR=%s P20_CLIP_LOG=%s P20_WL_MODE_FILE=%s P20_X_MODE_FILE=%s' \
+      "$fx/fakebin" "$PATH" "$fx/tmpdir" "$fx/calls.log" "$fx/wl-mode" "$fx/x-mode"
   }
   pasted_file() { ls "$fx/tmpdir"/teamsmith-paste-* 2>/dev/null | head -1; }
   paste_count() { ls "$fx/tmpdir" 2>/dev/null | grep -c 'teamsmith-paste-' || true; }
   reset_clip() { rm -f "$fx/tmpdir"/teamsmith-paste-*; : > "$fx/calls.log"; }
 
+  # 理由行里要有**整条**路径 —— 但路径比一行宽时产品会折行画出（P309 起临时根就比 120 列面板宽：夹具这条
+  # 156 列 > 可用的 116 列），逐行 grep 整条路径会把一条真的存在的事实判红。所以先把**理由框自己那几行**
+  # （标题行之后连续的 `│ ` 行，止于第一行别的东西）按画出的顺序拼回一行，再在这段文字里找整条路径：框外
+  # 的行不进这段文字，别处的路径顶替不了；路径为空时这条直接红，不会退化成 `grep -F ''` 的通真。
+  reason_text() { # <capture> → 待命原因框里被画的完整文本（拼成一行）
+    awk '/待命原因/{inbox=1; next}
+         inbox && /^│ /{sub(/^│ /,""); sub(/^> /,""); sub(/^ +/,""); out=out $0; next}
+         inbox{exit}
+         END{printf "%s", out}' "$1"
+  }
+  # 只在本次等待的子 shell 里绑定回调；原可见帧不变，ready 必须来自实际图片及相应正文。
+  # 引擎的 rc 直接回父调用方计失败，不指望子 shell 的 PTY_WAIT_FAILED 传回。
+  wait_clip_image() ( # <label> <PNG bytes> <draft|reason>
+    local label="$1" expected="$2" kind="$3"
+    pty_cap() {
+      local frame file ready=0
+      frame="$(cap_visible)"
+      printf '%s\n' "$frame"
+      file="$(pasted_file)"
+      if [ -n "$file" ] && [ -f "$file" ] && [ "$(cat "$file")" = "$expected" ]; then
+        case "$kind" in
+          draft) [ "$(draft)" = "a${file}d" ] && ready=1 ;;
+          reason)
+            [ "$(draft)" = 'half a thought' ] \
+              && [ "$(reason_text <(printf '%s\n' "$frame"))" = "why${file}" ] && ready=1 ;;
+        esac
+      fi
+      [ "$ready" -eq 1 ] && printf '@@clipboard %s %s ready @@\n' "$expected" "$kind"
+      return 0
+    }
+    pty_wait_frame - "$label" "@@clipboard $expected $kind ready @@"
+  )
+
   # ① 图片 → 临时文件路径，插在插入点；Wayland 优先且 xclip 不被调用
   printf 'ad' > "$(draft_file)"
   reset_clip
   start_pm '' ''
-  start_panel "$(clip_env image image)"
+  clip_modes image image
+  start_panel "$(clip_env)"
   keys m; wait_frame "B4 写信托盘" 'Enter 发送'
   keys Left
-  keys C-v; wait_frame "B4 图片落成临时文件路径" 'teamsmith-paste-'
+  keys C-v
+  wait_clip_image "B4 图片落成临时文件路径" PNGDATA8 draft || bad "B4 图片落成临时文件路径：未等到 PNGDATA8 和 a<path>d"
   cap_to image
   local file
   file="$(pasted_file)"
@@ -707,12 +748,19 @@ EOXC
 
   # ② Wayland 失败 → X11：仍成图，调用日志里 wl-paste 在 xclip 之前
   keys Escape; wait_frame "B4 写信收起" '!Enter 发送'
-  printf 'ad' > "$(draft_file)"
   reset_clip
-  start_panel "$(clip_env fail image)"
+  clip_modes fail image
   keys m; wait_frame "B4 写信托盘" 'Enter 发送'
+  keys C-e; keys C-u
+  type_text 'ad'
+  wait_draft "B4 X11 准备：完整草稿 ad" 'ad'
+  if [ "$PTY_WAIT_FAILED" -ne 0 ]; then
+    bad "B4 X11 准备：未等到完整草稿 ad"
+    return 1
+  fi
   keys Left
-  keys C-v; wait_frame "B4 Wayland 失败后 X11 回退成图" 'teamsmith-paste-'
+  keys C-v
+  wait_clip_image "B4 Wayland 失败后 X11 回退成图" XCLIPDATA draft || bad "B4 Wayland 失败后 X11 回退成图：未等到 XCLIPDATA 和 a<path>d"
   cap_to x11
   file="$(pasted_file)"
   assert_eq "B4 X11 回退：文件内容 XCLIPDATA" "$(cat "$file" 2>/dev/null)" "XCLIPDATA"
@@ -728,10 +776,16 @@ EOXC
 
   # ③ 无图片 → 文本回退，且不调用 xclip
   keys Escape; wait_frame "B4 写信收起" '!Enter 发送'
-  printf 'ad' > "$(draft_file)"
   reset_clip
-  start_panel "$(clip_env text image)"
+  clip_modes text image
   keys m; wait_frame "B4 写信托盘" 'Enter 发送'
+  keys C-e; keys C-u
+  type_text 'ad'
+  wait_draft "B4 文本回退准备：完整草稿 ad" 'ad'
+  if [ "$PTY_WAIT_FAILED" -ne 0 ]; then
+    bad "B4 文本回退准备：未等到完整草稿 ad"
+    return 1
+  fi
   keys Left
   keys C-v; wait_frame "B4 文本回退进草稿" '> afrom the clipboardd'
   cap_to text-fallback
@@ -741,10 +795,16 @@ EOXC
 
   # ④ 两个工具都不给东西：什么都不变；挂死的工具在界内被放弃
   keys Escape; wait_frame "B4 写信收起" '!Enter 发送'
-  printf 'half a thought' > "$(draft_file)"
   reset_clip
-  start_panel "$(clip_env fail fail)"
+  clip_modes fail fail
   keys m; wait_frame "B4 写信托盘" 'Enter 发送'
+  keys C-e; keys C-u
+  type_text 'half a thought'
+  wait_draft "B4 无工具准备：完整草稿 half a thought" 'half a thought'
+  if [ "$PTY_WAIT_FAILED" -ne 0 ]; then
+    bad "B4 无工具准备：未等到完整草稿 half a thought"
+    return 1
+  fi
   keys C-v; wait_draft "B4 无工具：探测什么都不改" 'half a thought'
   cap_to no-tool
   assert_eq "B4 无工具：草稿不变" "$(draft)" "half a thought"
@@ -754,10 +814,16 @@ EOXC
   assert_eq "B4 无工具后仍能打字" "$(draft)" "half a thoughtZ"
 
   keys Escape; wait_frame "B4 写信收起" '!Enter 发送'
-  printf 'half a thought' > "$(draft_file)"
   reset_clip
-  start_panel "$(clip_env hang fail)"
+  clip_modes hang fail
   keys m; wait_frame "B4 写信托盘" 'Enter 发送'
+  keys C-e; keys C-u
+  type_text 'half a thought'
+  wait_draft "B4 挂死工具准备：完整草稿 half a thought" 'half a thought'
+  if [ "$PTY_WAIT_FAILED" -ne 0 ]; then
+    bad "B4 挂死工具准备：未等到完整草稿 half a thought"
+    return 1
+  fi
   # 保留（P336）：挂死的工具下探测的结果是「什么都不发生」——没有回执行、没有文件、没有忙行，
   # 它的“结束”无处可观测；而这条要证明的正是「工具企着的时候面板照旧可输入」，所以 Z 必须落在
   # 工具还在挂的时候，这段空闲窗口不是等一个状态。
@@ -773,22 +839,14 @@ EOXC
   # ⑤ 理由模式：路径进理由行，消息草稿不动
   printf 'half a thought' > "$(draft_file)"
   reset_clip
-  start_panel "$(clip_env image image)"
+  clip_modes image image
+  start_panel "$(clip_env)"
   keys s; wait_frame "B4 待命理由输入行" 'Enter 进入待命'
   type_text 'why'
-  keys C-v; wait_frame "B4 理由行里出现图片路径" 'teamsmith-paste-'
+  keys C-v
+  wait_clip_image "B4 理由行里出现图片路径" PNGDATA8 reason || bad "B4 理由行里出现图片路径：未等到 why<path> 和原消息草稿"
   cap_to reason
   file="$(pasted_file)"
-  # 理由行里要有**整条**路径 —— 但路径比一行宽时产品会折行画出（P309 起临时根就比 120 列面板宽：夹具这条
-  # 156 列 > 可用的 116 列），逐行 grep 整条路径会把一条真的存在的事实判红。所以先把**理由框自己那几行**
-  # （标题行之后连续的 `│ ` 行，止于第一行别的东西）按画出的顺序拼回一行，再在这段文字里找整条路径：框外
-  # 的行不进这段文字，别处的路径顶替不了；路径为空时这条直接红，不会退化成 `grep -F ''` 的通真。
-  reason_text() { # <capture> → 待命原因框里被画的完整文本（拼成一行）
-    awk '/待命原因/{inbox=1; next}
-         inbox && /^│ /{sub(/^│ /,""); sub(/^> /,""); sub(/^ +/,""); out=out $0; next}
-         inbox{exit}
-         END{printf "%s", out}' "$1"
-  }
   if [ -z "$file" ]; then
     bad "B4 理由行里有图片路径（理由模式没有文件落地：路径为空）"
   else
@@ -809,9 +867,10 @@ EOS
   printf 'ad' > "$(draft_file)"
   reset_clip
   : > "$fx/team.log"
+  clip_modes image image
   tmux -L "$sock" kill-window -t "$sess:panel" 2>/dev/null || true
   tmux -L "$sock" new-window -d -t "$sess" -n panel -c "$ROOT" \
-    "TEAM_JS_BIN=$(printf '%q' "$js") $(clip_env image image) exec '$js' '$panel' --root '$ROOT' --team-cli '$fx/teamwrap.sh' --state-dir '$ROOT/.pi/team/state' --no-pulse --interval 1"
+    "TEAM_JS_BIN=$(printf '%q' "$js") $(clip_env) exec '$js' '$panel' --root '$ROOT' --team-cli '$fx/teamwrap.sh' --state-dir '$ROOT/.pi/team/state' --no-pulse --interval 1"
   wait_panel
   keys m; wait_frame "B4 写信托盘" 'Enter 发送'
   keys Left
@@ -827,7 +886,8 @@ EOS
   # 「窗口过去了」自己）；两段 5s 就是被测的长度。
   reset_clip
   : > "$fx/calls.log"
-  start_panel "$(clip_env image image)"
+  clip_modes image image
+  start_panel "$(clip_env)"
   sleep 5
   local idle_idle idle_compose
   idle_idle="$(wc -l < "$fx/calls.log" | tr -d ' ')"

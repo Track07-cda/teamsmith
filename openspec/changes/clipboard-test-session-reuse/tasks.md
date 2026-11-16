@@ -4,8 +4,8 @@
 
 ## 1. 替换四次准备（实现者，只实现/静态）
 
-- [ ] 1.1 先按 design §4 将同一 scenario 原 693/715/779 三处连续屏幕 token 等待替换为真实 PNG 及对应草稿/理由状态观察，使用原 pty_wait_frame 回调/稳定性/上限，直接消费该次 rc，保留原具名断言且不改库/宽度/路径；再按 §1 把两个假工具改为 fx 内普通模式输入，保留每次真实工具执行/返回值/日志并只在前例完成后切换。两项同一次 apply，以 `bash -n skills/teamsmith/tests/panel-b2.sh`、局部 diff 和原断言 inventory 核实；对应 Changed tool input / All original clipboard outcomes 场景，不先跑一轮完整 clipboard。
-- [ ] 1.2 按 design §2/3 用真实 C-e/C-u/种子及目标全文观察替换四个磁盘重置+start_panel，在同 shell 普通调用目标 wait_draft 后立即读取该次 PTY_WAIT_FAILED，将新准备失败记 bad 并显式返回到原 runner（不能先跑另一等待清标志），不增加成功计数；以静态调用账 8→4、八子例 assertion 保留表、其它场景/等待库/bundle 字节不变证明完成。对应 A reused panel receives its next seed / Idle observation and recovery coverage 场景。
+- [x] 1.1 先按 design §4 将同一 scenario 原 693/715/779 三处连续屏幕 token 等待替换为真实 PNG 及对应草稿/理由状态观察，使用原 pty_wait_frame 回调/稳定性/上限，直接消费该次 rc，保留原具名断言且不改库/宽度/路径；再按 §1 把两个假工具改为 fx 内普通模式输入，保留每次真实工具执行/返回值/日志并只在前例完成后切换。两项同一次 apply，以 `bash -n skills/teamsmith/tests/panel-b2.sh`、局部 diff 和原断言 inventory 核实；对应 Changed tool input / All original clipboard outcomes 场景，不先跑一轮完整 clipboard。
+- [x] 1.2 按 design §2/3 用真实 C-e/C-u/种子及目标全文观察替换四个磁盘重置+start_panel，在同 shell 普通调用目标 wait_draft 后立即读取该次 PTY_WAIT_FAILED，将新准备失败记 bad 并显式返回到原 runner（不能先跑另一等待清标志），不增加成功计数；以静态调用账 8→4、八子例 assertion 保留表、其它场景/等待库/bundle 字节不变证明完成。对应 A reused panel receives its next seed / Idle observation and recovery coverage 场景。
 
 ## 2. 一次完整整合与必要短检（非作者 verifier）
 
