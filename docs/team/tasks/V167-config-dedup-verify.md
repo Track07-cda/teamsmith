@@ -47,6 +47,8 @@ branch: task/V167-config-dedup-verify
 
 ## 阶段B：由PM提供合并输入后再执行
 
+**本次输入已到：** 阶段A报告6a188dca与候选b26bd419已正式接受（见 `docs/team/reviews/V167.md`）；代码合并为 `c442b57acb44433c7a761cb9f3f6dd43a75a3279`，PM准备干净 `/var/tmp/p461-review-merged`。保留同一SID/模型，不重做A。正式review绑定本merged SHA；从新检出取实际文件/短检查，不能沿用硬编码旧candidate的runner冒称merged。全部通过后按已授权分工同步自己的清单与报告，7/7后交付，PM再读最终证据接受关单。
+
 阶段A报告提交并通知PM，不自行合并。PM接受/合并后提供干净merged检出和SHA，同一会话核两编排文件、三子脚本/消费者与候选同一性，跑必要短结构/选择或原函数样本，并让正式review记录绑定merged。受测字节不变时不重跑33、七键、坏腿、51或完整矩阵。先保留原候选和原件，只有新差异影响证据才补对应入口。
 
 阶段A由PM接受并给出merged输入时，即授权你在阶段B全部真实通过、正式review绑定merged后，同步自己的清单副本与报告；不用再等一条额外确认才提交。确保原生7/7和实际证据一致，不得在收到merged输入和实际执行前提前勾3.2。这项同步许可不是PM预判未来结果：PM仍在最终读取证据后接受阶段B并关单。最终OpenSpec评估逐项回答Completeness/Correctness/Coherence、两个requirement/五场景及全部未验证项，不把尚未执行的阶段B写成PASS或零CRITICAL归档就绪。
