@@ -21,6 +21,7 @@ branch: task/P459-release-ci-fixes
 - `skills/teamsmith/tests/smoke.sh`：既有P440输入/矩阵，§67/68的Pi存在检查、§67–69调用时现有证据目录交接；不改其它段。
 - `skills/teamsmith/tests/install-shape.sh`：共享 `chk_init_render_from_config` 的同形参考准备及与⑮直接相关的既有断言。
 - `skills/teamsmith/tests/remind-tool-real.mjs`：Pi定位、现有启动等待的退出处理、现有输出/临时目录落到调用者已拥有的证据根。
+- `skills/teamsmith/tests/lib/main-team-fingerprint.sh`：下述续跑授权仅修正真实PM的 `state/remind-tool/current.json` 运行记录分类，不扩大到整个目录或权威状态。
 - `skills/teamsmith/tests/{remind-tool-real,remind-recovery-real,remind-adversarial-real}.sh`：必要的既有环境/证据交接，不重写封装。
 - 自己的 `docs/team/reports/P459-dev.md`。若新增测试样本，只在tests中复用/替换现有同目的样本，报告说明；不要新增框架、门禁段、长期选择器或现场收集白名单。其它路径需要时BLOCKED交PM。
 
@@ -31,6 +32,18 @@ branch: task/P459-release-ci-fixes
 3. **Pi测试启动器找错程序。** 保留显式P442_PI，未指定时用调用者PATH里的实际可执行Pi，不假定HOME/.bun/bin/pi；§67/68和同一个JS driver约定一致。私有HOME仍只用于测试隔离。复用现有启动等待，done早于session-start时立即报真实退出码和启动错误，不继续把“程序不存在”变成90秒业务超时。不要延长watchdog、建假HOME软链、删七场景或把§69改SKIP。既有driver的启动检查由正确退出分类替换，不叠加新防护层。
 
 现有证据不用新收集器：将已有launch/done/session/event/provider输出交给smoke的$TMP子目录，以便原现场包能保存失败原因；遵守私有临时根/精确清理，不向/tmp写产物。V164证明原CI没保存Pi原件，不能补造过去的退出码。
+
+## 2026-11-16续跑授权：同一处运行记录分类误判
+
+已提交82ea7496；第一次冻结选段实际458通过/6失败、510秒。原10/10b/39及真实Pi三组10/3/7均通过；六项尾部全指向真实主项目的 `state/remind-tool/current.json` 变化。原失败输出保留，不改成通过。
+
+PM另读实际运行记录及源码：该文件仍属于真实PM；`team-remind.ts` 的heartbeat每5000ms调用refresh，再由 `publishRemindCapability` 写入新at时间。现有指纹把合法运行记录当作夹具写入，不能要求真实PM停止活动来换绿。不是已证明的真实污染，不修改产品/真实状态。
+
+仅授权在共享分类函数里把这一个确实持续更新的运行记录归为正常变化；不排除整个remind-tool或state目录。`reminder-locator*`、`state/reminders/**`、Standby及未登记文件仍必须报变化。复用既有分类自检/真实污染反例，不另加守卫层、白名单框架或第二套实现。
+
+本次续跑只补：用已保留的六组before/after逐组重放新共享判定，确认唯一被重新分类的差异就是该运行记录；再跑现有 `isolation-ledger.sh` 与最短的分类/污染反例，证明任意旁文件和权威状态变化仍失败。如原件缺失或出现其它差异，如实停下说明，不把未保存的原件补造出来。
+
+下文的18段命令已经运行过，本次不得为这一分类修正把它或已绿的20个真实Pi场景重跑一遍。采用原始结果加上述定点补验，保留原458/6及每条补验真实范围；非作者仍须独立核三项修复和此分类边界，PM不代跑。完成后继续正式报告与交付，不停在PARTIAL。
 
 ## 验收与成本边界
 

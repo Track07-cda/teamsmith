@@ -433,3 +433,6 @@ $ bash skills/teamsmith/tests/meta-suite.sh --judge …/2026-11-04T16-50-35Z.log
 - `openspec validate --all` 必须绿（本仓非 strict）。不需要 `design.md`，不要动别的 capability。
 
 **③ 重跑与报告。** 改完重跑你已跑过的面板/详情选段并贴结果行；报告补一节「规格 delta 与它对应的场景」。推分支、通知我。
+
+### 2026-11-16T07:25:50Z · from: pm · re: P459
+P459续跑已窄授权：已确认remind-tool/current.json是本PM每5秒刷新的运行记录，不是已证实污染；只改共享main-team-fingerprint.sh中这个单文件分类，权威状态/任意旁文件仍保护。按任务书新续跑节重放6组保留快照及短分类/污染反例，不再重跑18段或20个已绿Pi场景；原458/6保留。读取main已提交的新版任务书后续完报告交付，范围外不改。
