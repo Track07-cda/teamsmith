@@ -1,9 +1,103 @@
 # V171 · 剪贴板准备复用独立验证
 
-agent: verify · status: STAGE-A-PASS（合并后复核未执行） · time: 2026-11-16T13:06:39Z
+agent: verify · status: PASS（A/B 均已完成） · time: 2026-11-16T13:21:34Z
 branch: `task/V171-clipboard-session-reuse-verify` · PR/MR: -（本地）
 
-## 结论
+## 最终结论
+
+**阶段 A/B 均通过，原生清单 5/5，CRITICAL/WARNING/SUGGESTION 均为 0。** 已验候选的唯一完整 clipboard 为 26/0、无等待错误；真实 C-v no-op 的原图片断言红且 child=1，字节恢复仅首例 6/0，实际种子结果消费者阻止后续 C-v。固定合并版本 `30ea8df04d6ee7048d0d935b138f39dac0503fb0` 的 101 个执行/本 change 规划依赖与已验候选逐字节相同，合并后实际结果消费及适用静态检查通过。正式 `P466` review 已重新绑定该 merged SHA，执行者仍为 verify。
+
+本轮未重启面板、未构建、未重跑首例或完整 clipboard；依据同一性复用 A 原始正常/坏/恢复/种子消费证据。没有把全仓字节相同当作前提：merged 正式 verification 另追加 A10 的无关 help requirement，原正文保留，本 change planning 与执行依赖均未变。原首轮错误标签、setup rc3 和全部原件仍保留。
+
+## 最终 OpenSpec assessment
+
+| Dimension | Score | Evidence |
+|---|---|---|
+| Completeness | **5/5 tasks，1/1 ADDED requirement** | `final-own-apply.json`：total=5、complete=5、remaining=0；任务原文与 merged 相同，保留作者 1.1/1.2，仅相对 merged 勾 2.1/2.2/2.3 |
+| Correctness | **1/1 requirement、6/6 scenarios** | A 唯一完整 26/0、实际 no-op/恢复/种子消费；B 101/101 同一及 merged 实际父函数对 A 正常/坏/恢复的 rc0/1/0 消费分别为 bad0/1/0 |
+| Coherence | **Design Adherence / Code Pattern Consistency 均通过** | 三处局部图像观察、四次真实编辑、原等待/键节奏/断言不变；B 从 merged 读取原函数/调用点及四项 contextFiles，未用旧硬编码 runner 冒充 |
+
+任务 1.1/1.2 的实现及 2.1/2.2 的动态证据见下方 A 原记录；2.3 由本节 B 证据闭合。6 个场景沿用 A 映射表，最后一项的 merged 同一性/结果消费边界本次补齐；其余不是重复执行。原生任务统计来自本席位授权同步后的记录分支，**实现行为结论始终绑定只读 merged 检出**，不把记录分支未同步的产品源码当作受测版本。
+
+### CRITICAL
+
+None。A 的 C1/C2 为保留待同步的 2.1/2.2，C3 为当时未执行的 2.3；B 实证通过并精确同步清单后均已关闭（`6d8cc242`、`final-own-apply.json`）。
+
+### WARNING
+
+None。
+
+### SUGGESTION
+
+None。
+
+### Final assessment
+
+- Counts：**CRITICAL 0 · WARNING 0 · SUGGESTION 0**。
+- Readiness：本 change 已验范围无未解决问题，具备按流程收尾条件；PM 仍负责证据接受与归档确认，本报告不执行或擅自授权 archive。
+- Applicable checks not verified：None within the brief。完整 clipboard 的合并后再次执行不是本 brief 必验项，因 101/101 字节同一而复用 A；不冒充一次新的完整跑。
+- Excluded：其它 b2 场景、完整 §38/smoke 调度、设置/帮助/配置整组、FAST/全量/meta/61b/夜间/产品安装/性能/真实模型均未运行，不称通过。总耗时比较及净提速未测。
+
+## 阶段 B · 合并后实际证据
+
+先创建 `/var/tmp/v171-verify.plU7KA/merged-parent-tmp`，再从自己稳定 worktree 调获授工具。独立只读检出 `/var/tmp/p466-review-merged` 起止 HEAD 均为上述完整 merged SHA，普通及 ignored 状态均空。没有写入此检出或主检出其它路径。
+
+```text
+$ TEAM_GATES='bash /var/tmp/v171-verify.plU7KA/stage-b.sh' TEAM_REVIEW_TIMEOUT=300 TMPDIR=<已建私有父目录> ... team review P466 --dir /var/tmp/p466-review-merged --branch 30ea8df04d6ee7048d0d935b138f39dac0503fb0
+actual merged source audit rc=0
+merged bash-n rc=0
+merged change-strict rc=0
+merged actual result consumption rc=0
+merged read-only: HEAD unchanged; clean/ignored=0; manifest 101/101 unchanged at end
+V171 STAGE B PASS; A full/bad/restored/seed evidence reused; no panel/build/full test rerun
+# team review 实际 rc=0，中央记录 PASS，执行者 verify。
+
+# audit-merged.py 从当前 merged cwd 实际读取：
+execution/planning identical 101/101
+actual merged parent function + immediate child-status callsite byte-identical; not smoke scheduling
+# proposal/specs/design/tasks 四个 contextFiles 分别读 2744/5452/14124/3933 bytes。
+# 正式 verification 仅追加无关 A10 help requirement，旧字节保留；不在本 change 执行/规划 manifest 内。
+
+# 从 merged 摘出的原 p38_verdict，消费 A 的实际 log/rc：
+merged consumer input leg=normal actual-rc=0
+merged consumer result leg=normal bad=0 pass=1
+merged consumer input leg=bad actual-rc=1
+✗ 38-h panel-b2.sh 写信面（11 场景） 有失败
+merged consumer result leg=bad bad=1 pass=0
+merged consumer input leg=restored actual-rc=0
+merged consumer result leg=restored bad=0 pass=1
+# 原标签“11 场景”仍不代表本次执行 11 场景；没有调度 smoke 或重跑 child。
+
+$ openspec instructions apply --change clipboard-test-session-reuse --json
+# 同步后本席位记录树 nearest root，OpenSpec 1.16：
+progress: { total: 5, complete: 5, remaining: 0 }
+all five done: True
+$ openspec validate clipboard-test-session-reuse --type change --strict --no-interactive
+Change 'clipboard-test-session-reuse' is valid
+rc=0
+```
+
+B 原件：`stage-b.sh`、`audit-merged.py`、`merged-consume.sh`、`merged-source-audit.log`、`merged-consumption.log`、`merged-strict.log`、`merged-{status,apply}.json`、`merged-{before,after}.status`、`merged-vs-candidate.names.txt`、`merged-unrelated-formal-spec.diff`、`review-merged.{md,log}`。A 正常/坏/恢复日志 SHA-256 在 B 重新记录，与 A 原件相同；没有拿合成 rc 替代实际退出码。
+
+清单同步：从只读 merged 取完整 tasks 原字节，先验证与自己旧表除 checkbox 外一致，再仅相对 merged 改 2.1/2.2/2.3 的 `[ ]` 为 `[x]`，作者 1.1/1.2 保持 `[x]`。自己分支原为 0/5，因此 git diff 显示五处 checkbox 更动而非三处，**不是改了五项任务正文**。只读 merged 的原表仍 2/5，不在该检出写入。
+
+### 最终报告暂存后的 Ledger / diff checks
+
+```text
+$ bash skills/teamsmith/tests/ledger-ban.sh --names-file "$(git rev-parse --path-format=absolute --git-common-dir)/../.pi/team/forbidden-names.txt"
+ledger-ban: root=/home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/verify scope=published files=2807 hits=0 names=ok user=resolved
+ledger-ban rc=0
+$ git diff --check
+diff-check rc=0
+$ git diff --cached --check
+cached-diff-check rc=0
+```
+
+## 阶段 A 历史原报告（以下评估时点为 2026-11-16T13:06:39Z）
+
+本节保留 A 当时的 2/5、三个流程 CRITICAL 及 B 未验边界；**当前结论以上方最终评估为准**。A 原报告完整字节另存于提交 `c069c1be`，首次错误/反例原件不删除。
+
+### A 历史结论
 
 **阶段 A 的实际行为通过。** 固定候选 `790bfb35c9aadfdd8bc9389eb8c7fb5d138d40a6`（实现 `60907db2`）只运行了一次完整 clipboard：26 成功、0 失败、child rc=0，没有等待耗尽。真实 C-v 改成 no-op 后，原具名图片数量/内容断言失败，child rc=1；原 `p38_verdict` 收到该真实 log/rc 后记父失败。恢复原字节仅验首例为 6/0、rc=0；真实目标种子等待成功后注入失败标志，实际消费者记 bad、返回 1，未发送下一次 C-v。
 
@@ -20,7 +114,7 @@ branch: `task/V171-clipboard-session-reuse-verify` · PR/MR: -（本地）
 
 使用 change `clipboard-test-session-reuse`；按主检出的原生 `openspec-verify-change` skill 执行。OpenSpec **1.16.0**，候选实际 `status.json`/`apply.json` 为 `spec-driven`、nearest root 为候选，读取 contextFiles 中 proposal/specs/design/tasks 全四项。规划依据为候选 proposal review 的 ACCEPTED、D252；未以 planning 的 isComplete 或自己分支的旧 0/5 代替执行评估。
 
-## OpenSpec assessment
+## A 历史 OpenSpec assessment（原生清单 2/5 时点）
 
 | Dimension | Score | Evidence |
 |---|---|---|
@@ -51,17 +145,17 @@ branch: `task/V171-clipboard-session-reuse-verify` · PR/MR: -（本地）
 | 2.2 | 未勾 | 实际 no-op/父消费/恢复/准备失败消费全部覆盖；按 brief 等 B 后统一勾选 |
 | 2.3 | 未勾 | 本 change strict 已通过；merged SHA、同一性与必要短检未执行。旧 spec-refs/选择器平台未变，按 brief 复用接受回执而未重跑 |
 
-## CRITICAL（流程未收口，非实现缺陷）
+## A 历史 CRITICAL（流程未收口，现已由 B 全部关闭）
 
 1. C1：原生任务 2.1 仍未勾选。行为证据为 `normal.log`/`normal.rc`/`snapshots/`；完成 B 后按授权精确同步原 tasks，仅改勾选。
 2. C2：原生任务 2.2 仍未勾选。行为证据为 `bad.log`/`bad.rc`、`p38-consumption.log`、`restored.log`/`restored.rc`、`seed-consumer.log`；完成 B 后按授权精确同步原 tasks，仅改勾选。
 3. C3：原生任务 2.3 未完成，未收到固定 merged 输入。PM 接受 A 并准备干净 merged 检出后，由同一 verifier 读取 merged 实际源、比较已验依赖及必要短检；相同字节不再起面板/构建/完整 clipboard。
 
-## WARNING
+## A 历史 WARNING
 
 None in executed stage-A implementation checks。未验 merged 已列 C3，不重复计为 WARNING。
 
-## SUGGESTION
+## A 历史 SUGGESTION
 
 None。
 
@@ -96,7 +190,7 @@ ns=pm_skills-deb708fe
 
 为在 reset 前保存原件，正常入口仅加私有 `BASH_ENV=observe.sh` 读侧快照/xtrace 和 `PTY_TRACE=1`，不修改候选源、等待参数、按键、节奏或断言。两行 `can't find window: panel` 来自首例面板尚未创建时的读侧快照，非原引擎等待错误；原 normal.log 所有等待均 settled=1。原 trace 并发写有 UTF-8 字节交错，派生索引只对解码使用 replacement，原二进制 trace 未重写。
 
-## Verification evidence（真实执行）
+## A Verification evidence（真实执行，已复用到 B）
 
 后台 `V171-stage-a` 后由 `team_bg_wait` 收取；之后仅短检查 `V171-short-legs`，同样收取。正式中央记录最终 PASS，执行者 verify，SHA `790bfb35c`。
 
@@ -181,14 +275,14 @@ $ git diff --cached --check
 cached-diff-check rc=0
 ```
 
-## Final assessment
+## A 历史 Final assessment（已由 B 更新）
 
 - Counts: **CRITICAL 3（全为原生清单/merged 阶段未收口）· WARNING 0 · SUGGESTION 0**；本轮未发现实现缺陷。
 - Readiness: **阶段 A PASS，整体未归档就绪**。本报告不替代尚未运行的 B，不改候选 tasks 2/5。
 - Reuse：未变的 spec-refs/选择器/已接受规划回执按 brief 复用；101 文件执行/规划 manifest 已与候选 HEAD 字节核对，供 B 比较；没有以旧两条件样本代替本次实施验证。
 - Not verified：固定 merged 的实际源/同一性/必要短检（未提供输入），任务最终勾选与最终原生评估（B 后）；其它 b2 场景/38/设置/帮助/配置整组、smoke/FAST/全量/meta/61b/夜间/安装/性能/真实模型均按范围未执行，不能称通过。
 
-## Decisions and deviations / Next step
+## A 历史 Decisions and deviations / Next step（B 已执行）
 
 无产品、规划或候选写入；仅本报告与获授工具中央记录。没有改变真实 reminder/standby/PM 状态，没有 merge/push/archive/tag/npm、没有真实模型调用。首次私有搭建问题及续跑已如实保留，不自动重复完整场景。
 
