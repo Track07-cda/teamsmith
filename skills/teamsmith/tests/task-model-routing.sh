@@ -15,7 +15,7 @@ while [ $# -gt 0 ]; do
   case "$1" in --select) SELECT="${2:?}"; shift 2 ;; --flip) SELECT=flip; shift ;; *) printf 'unknown option: %s\n' "$1"; exit 2 ;; esac
  done
 for group in ${SELECT//,/ }; do
-  case "$group" in policy|machine|config|upgrade|dispatch|resume|transaction|limits|preview|sid-readers|pm|boundary|init|heal|adopt|updatecheck|argv-worker|argv-pm|flip) ;; *) printf 'unknown group: %s\n' "$group"; exit 2 ;; esac
+  case "$group" in policy|machine|config|upgrade|dispatch|resume|transaction|limits|preview|sid-readers|pm|boundary|init|heal|adopt|updatecheck|parameters|argv-worker|argv-pm|flip) ;; *) printf 'unknown group: %s\n' "$group"; exit 2 ;; esac
  done
 while IFS='=' read -r k _; do case "$k" in TEAM_*) unset "$k" 2>/dev/null || true ;; esac; done < <(env)
 TMP="$(tmp_root_create task-model-routing)" || exit 3
@@ -47,6 +47,13 @@ sha() { if [ -f "$1" ]; then sha256sum "$1" | cut -d' ' -f1; else printf absent;
 CLI="$TREE/skills/teamsmith/scripts/team"
 SKILL="$TREE/skills/teamsmith"
 REPO="$TMP/repo"; STATE="$REPO/.pi/team/state"; CONFIG="$REPO/.pi/team/config.sh"
+if has parameters; then
+  [ "$SELECT" = parameters ] || { printf 'parameters cannot combine with full groups: %s\n' "$SELECT"; exit 2; }
+  source "$SKILL/scripts/lib/common.sh" || exit 3
+  routing_parameter_probes
+  printf '\nRESULT pass=%s fail=%s selected=%s\n' "$PASS" "$FAIL" "$SELECT"
+  [ "$FAIL" = 0 ]; exit $?
+fi
 if has argv-worker || has argv-pm; then
   for group in ${SELECT//,/ }; do
     case "$group" in argv-worker|argv-pm) ;; *) printf 'argv samples cannot combine with full groups: %s\n' "$group"; exit 2 ;; esac
@@ -451,6 +458,7 @@ run_hook() { RC=0; effect_snapshot "before hook $*"; OUT="$(hooked "$@" 2>&1)" |
 stop_fixture_seat() { (cd "$REPO" && tmux kill-window -t "routing-fixture:$1") 2>/dev/null || true; }
 assignment_snapshot() { printf '%s:%s:%s' "$(sha "$STATE/dev.env")" "$(sha "$STATE/dev.pending")" "$(sha "$REPO/docs/team/BOARD.md")"; }
 if has boundary; then
+  routing_parameter_probes
   routing_template_probes
   routing_pm_template_probes
   routing_expansion_probes worker
@@ -458,6 +466,7 @@ if has boundary; then
   routing_role_probes worker
   routing_role_probes pm
   routing_resume_role_probes
+  routing_renderer_refusal_probes
 fi
 if has limits || has transaction; then
   run config set TEAM_TASK_MODELS 'routine=vendor/routine analysis=vendor/analysis verify=vendor/verify' --yes
@@ -1403,12 +1412,10 @@ fi
 
 if has flip; then
   CORE='policy,machine,init,config,upgrade,dispatch,resume,transaction,limits,preview,sid-readers,pm,heal,adopt,updatecheck,boundary'
-  # P358：臂预算。`flip_run` 只能给**所有臂一个值**（每条臂跑哪些组由变异体决定，耗时差一个量级），
-  # 所以这个值是**最慢那条臂**的上限，不是典型值：`template-shadow` 把 identity guard 整个拆掉之后，
-  # boundary 组 29 类故障模板 × 4 种模式全部走到真派单 —— 变异树实测 842s（2026-10-21，P358；同一条
-  # 命令的绿基线 411s）。原来的 900s 只剩 6% 余量，机器一忙就必然撞上（发布那轮 fail=2 → fail=1 的
-  # 漂移就是这里来的）。取实测 × 2 = 1800s，与整段 7200s 同一个口径：**它只回答「它没动」，不回答
-  # 「它慢」**。整段的上限归 §61b 那条段（smoke.sh 的 7200s），不因这里而变。
+  # P358's shared arm budget stays unchanged. Its historical 842s template-shadow
+  # reading preceded P468's parameters selection; it is not a reading of this
+  # replacement. The timeout distinguishes an unfinished child from intended red,
+  # never judges performance; the section-level 7200s budget is unchanged too.
   FLIP_ARM_BUDGET=1800
   # 撞上限只是 rc=124（1 是「它自己判红」）。超时必须是一条**点名**的红：只留 rc=124 就把「哪条臂、
   # 用满多少秒」留给下一个人去猜，那正是同一类问题的下一次复发（P358）。
@@ -1418,7 +1425,7 @@ if has flip; then
       "$1" "$1" "$FLIP_ARM_BUDGET" "$2"
   }
   # One full normal baseline; each red arm has its own copy. The two resplit
-  # arms also observe healthy/restored argv on that copy, not a second source-tree CORE.
+  # and five parameter arms observe healthy/restored on that same copy.
   flip_run() {
     local tag="$1" tree="$2" groups="$3" rc=0 started ended
     started="$(date +%s)"
@@ -1444,7 +1451,7 @@ if has flip; then
         latest-shell|latest-monitor) groups=sid-readers ;;
         pm-fallback) groups=pm ;;
         pm-publication) groups=dispatch,pm ;;
-        extra-shadow|template-shadow|template-unbound|template-roles|literal-shell-expansion) groups=boundary ;;
+        extra-shadow|template-shadow|template-unbound|template-roles|literal-shell-expansion) groups=parameters ;;
         pm-literal-resplit) groups=argv-pm ;;
         worker-literal-resplit) groups=argv-worker ;;
         monitor-record-drift) groups=sid-readers ;;
@@ -1462,7 +1469,7 @@ if has flip; then
         [ ! -d "$SKILL/$source_dir" ] || cp -a "$SKILL/$source_dir" "$scratch/skills/teamsmith/"
       done
       before="$(find "$scratch/skills/teamsmith/scripts" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
-      case "$mutation" in pm-literal-resplit|worker-literal-resplit)
+      case "$mutation" in pm-literal-resplit|worker-literal-resplit|extra-shadow|template-shadow|template-unbound|template-roles|literal-shell-expansion)
         flip_run "$mutation-healthy" "$scratch" "$groups"
         check "flip-$mutation-healthy" eq "$FLIP_RC" 0 ;;
       esac
@@ -1483,23 +1490,23 @@ if has flip; then
           check flip-identity-overclaim-argv grep -q '^FAIL publication-record-equals-argv:model-only$' "$TMP/flip-$mutation.log"
           check flip-identity-overclaim-opaque grep -q '^FAIL publication-record:opaque$' "$TMP/flip-$mutation.log"
           check flip-identity-overclaim-claim grep -q '^FAIL publication-claim-gap:model-only$' "$TMP/flip-$mutation.log" ;;
-        template-shadow) check flip-template-shadow-specific-worker grep -q '^FAIL template-refused:all-hardcoded:preview$' "$TMP/flip-$mutation.log"
-          check flip-template-shadow-specific-pm grep -q '^FAIL pm-template-refused:provider:launch$' "$TMP/flip-$mutation.log" ;;
+        extra-shadow) check flip-extra-shadow-specific-model grep -q '^FAIL parameter-extra-refused:model$' "$TMP/flip-$mutation.log" ;;
+        template-shadow) check flip-template-shadow-specific-worker grep -q '^FAIL parameter-template-refused:worker:all-hardcoded:continued$' "$TMP/flip-$mutation.log"
+          check flip-template-shadow-specific-pm grep -q '^FAIL parameter-template-refused:pm:provider:fresh$' "$TMP/flip-$mutation.log" ;;
         template-unbound)
-          check flip-unbound-worker-positional grep -q '^FAIL template-refused:positional-model:launch$' "$TMP/flip-$mutation.log"
-          check flip-unbound-worker-data grep -q '^FAIL template-refused:data-sid:preview$' "$TMP/flip-$mutation.log"
-          check flip-unbound-pm-positional grep -q '^FAIL pm-custom-missing-refused:positional-model:launch$' "$TMP/flip-$mutation.log"
-          check flip-unbound-pm-data grep -q '^FAIL pm-template-refused:data-provider:preview$' "$TMP/flip-$mutation.log" ;;
+          check flip-unbound-worker-positional grep -q '^FAIL parameter-template-refused:worker:positional-model:continued$' "$TMP/flip-$mutation.log"
+          check flip-unbound-worker-data grep -q '^FAIL parameter-template-refused:worker:data-sid:continued$' "$TMP/flip-$mutation.log"
+          check flip-unbound-pm-positional grep -q '^FAIL parameter-template-refused:pm:positional-model:continued$' "$TMP/flip-$mutation.log"
+          check flip-unbound-pm-data grep -q '^FAIL parameter-template-refused:pm:data-provider:fresh$' "$TMP/flip-$mutation.log" ;;
         template-roles)
-          check flip-role-worker-selector-as-data grep -q '^FAIL worker-role-refused:model:--skill:launch$' "$TMP/flip-$mutation.log"
-          check flip-role-pm-selector-as-data grep -q '^FAIL pm-role-refused:provider:--skill:launch$' "$TMP/flip-$mutation.log"
-          check flip-role-pm-resume-data grep -q '^FAIL pm-role-resume-refused:builtin:--skill --continue:launch$' "$TMP/flip-$mutation.log" ;;
+          check flip-role-worker-selector-as-data grep -q '^FAIL parameter-role-refused:worker:model:--skill$' "$TMP/flip-$mutation.log"
+          check flip-role-pm-selector-as-data grep -q '^FAIL parameter-role-refused:pm:provider:--skill$' "$TMP/flip-$mutation.log"
+          check flip-role-pm-resume-data grep -q '^FAIL parameter-resume-role-refused:--skill --continue$' "$TMP/flip-$mutation.log" ;;
         monitor-record-drift) check flip-monitor-record-drift-specific-nonce grep -q '^FAIL reader-monitor-unavailable:nonce$' "$TMP/flip-$mutation.log" ;;
         literal-shell-expansion)
-          check flip-literal-shell-specific-worker-template grep -q '^FAIL worker-expansion-refused:template:model-glob:launch$' "$TMP/flip-$mutation.log"
-          check flip-literal-shell-specific-worker-extra grep -q '^FAIL worker-expansion-refused:extra:model-glob:launch$' "$TMP/flip-$mutation.log"
-          check flip-literal-shell-specific-pm-template grep -q '^FAIL pm-expansion-refused:template:model-glob:launch$' "$TMP/flip-$mutation.log"
-          check flip-literal-shell-specific-pm-extra grep -q '^FAIL pm-expansion-refused:extra:model-glob:launch$' "$TMP/flip-$mutation.log" ;;
+          check flip-literal-shell-specific-worker-template grep -q '^FAIL parameter-expansion-refused:worker-template:model-glob$' "$TMP/flip-$mutation.log"
+          check flip-literal-shell-specific-pm-template grep -q '^FAIL parameter-expansion-refused:pm-template:model-glob$' "$TMP/flip-$mutation.log"
+          check flip-literal-shell-specific-shared-extra grep -q '^FAIL parameter-expansion-refused:shared-extra:model-glob$' "$TMP/flip-$mutation.log" ;;
         pm-literal-resplit)
           check flip-pm-resplit-specific-extra grep -q '^FAIL pm-expansion-literal-argv:extra$' "$TMP/flip-$mutation.log"
           check flip-pm-resplit-specific-resume grep -q '^FAIL pm-resume-literal-argv:builtin$' "$TMP/flip-$mutation.log" ;;
@@ -1543,11 +1550,15 @@ if has flip; then
           check flip-legacy-route-write-path grep -q '^FAIL init-legacy-config-set-derived$' "$TMP/flip-$mutation.log"
           check flip-legacy-route-paste grep -q '^FAIL init-paste-derived-exact$' "$TMP/flip-$mutation.log" ;;
       esac
-      cp -a "$SKILL/scripts/." "$scratch/skills/teamsmith/scripts/"
+      case "$mutation" in
+        extra-shadow|template-shadow|template-unbound|template-roles|literal-shell-expansion)
+          cp -p "$SKILL/scripts/lib/common.sh" "$scratch/skills/teamsmith/scripts/lib/common.sh" ;;
+        *) cp -a "$SKILL/scripts/." "$scratch/skills/teamsmith/scripts/" ;;
+      esac
       restored="$(find "$scratch/skills/teamsmith/scripts" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
       check "flip-$mutation-source-restored" eq "$restored" "$before"
       printf 'CONTROL %s source_before=%s source_restored=%s\n' "$mutation" "$before" "$restored"
-      case "$mutation" in pm-literal-resplit|worker-literal-resplit)
+      case "$mutation" in pm-literal-resplit|worker-literal-resplit|extra-shadow|template-shadow|template-unbound|template-roles|literal-shell-expansion)
         flip_run "$mutation-restored" "$scratch" "$groups"
         check "flip-$mutation-restored" eq "$FLIP_RC" 0 ;;
       esac

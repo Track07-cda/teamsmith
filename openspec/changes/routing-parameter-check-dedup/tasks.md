@@ -4,9 +4,9 @@
 
 ## 1. 共用参数规则与真实调用分开（apply）
 
-- [ ] 1.1 在三份既有助手中复用原输入，形成正常 boundary 和轻量 `parameters` 组共用的直接断言；保留独立固定期望、合法对照和 fresh/continued 语义差异。作者以 diff/`bash -n` 核对无产品修改、无新 parser/登记表、轻量分支在完整项目准备之前、调用 shell 消费真实 rc 并累计结果；行为由 2.1/2.2 一次验证（Normal parameter rules；Five original parameter faults）。
-- [ ] 1.2 用 design §3 的 21 个 tag 各一次 launch 加既有 PM fresh provider 的一次 preview 替换旧负向 CLI 排列；两个 list 见证用原 extra-unknown-before-model/resume 输入，预期 standalone extra 可接受、周围模板 role 才拒绝；补最终 renderer 拒绝观察。原全部合法启动/录参、PM continuation/metadata/撤销和其它组不动。作者交付旧/新调用点与退休 capture 的源码清单并静态核对，非作者在 2.1/2.2 判断真实结果，不以本次22次安排或旧总 PASS 数作永久守卫（Normal parameter rules；Correct helpers；Actual wrong-model）。
-- [ ] 1.3 仅将五个既有参数变异改选 parameters，更新必需失败名，在每个自身副本做 healthy/原故障/字节恢复/restored 并由现有父级消费。保留原变异器及其它 26 臂现状，不复活 P457 三处；作者用差异/语法检查证明修改边界并交付 bounded parent 的执行说明，不运行行为（Five original parameter faults；Parameter failures；Only this batch）。
+- [x] 1.1 在三份既有助手中复用原输入，形成正常 boundary 和轻量 `parameters` 组共用的直接断言；保留独立固定期望、合法对照和 fresh/continued 语义差异。作者以 diff/`bash -n` 核对无产品修改、无新 parser/登记表、轻量分支在完整项目准备之前、调用 shell 消费真实 rc 并累计结果；行为由 2.1/2.2 一次验证（Normal parameter rules；Five original parameter faults）。
+- [x] 1.2 用 design §3 的 21 个 tag 各一次 launch 加既有 PM fresh provider 的一次 preview 替换旧负向 CLI 排列；两个 list 见证用原 extra-unknown-before-model/resume 输入，预期 standalone extra 可接受、周围模板 role 才拒绝；补最终 renderer 拒绝观察。原全部合法启动/录参、PM continuation/metadata/撤销和其它组不动。作者交付旧/新调用点与退休 capture 的源码清单并静态核对，非作者在 2.1/2.2 判断真实结果，不以本次22次安排或旧总 PASS 数作永久守卫（Normal parameter rules；Correct helpers；Actual wrong-model）。
+- [x] 1.3 仅将五个既有参数变异改选 parameters，更新必需失败名，在每个自身副本做 healthy/原故障/字节恢复/restored 并由现有父级消费。保留原变异器及其它 26 臂现状，不复活 P457 三处；作者用差异/语法检查证明修改边界并交付 bounded parent 的执行说明，不运行行为（Five original parameter faults；Parameter failures；Only this batch）。
 
 ## 2. 一次独立行为验收与同一性（verify）
 

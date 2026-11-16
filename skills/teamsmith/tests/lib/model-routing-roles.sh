@@ -1,29 +1,8 @@
 #!/usr/bin/env bash
 # F5: isolated parameter-role controls; no runtime Pi/parser dependency.
 # Uses only the routing front door's real recorder/repo/HOME/private socket.
-routing_role_probes() { # worker|pm
-  local seat="$1" oldmap tag body mode before sid='' field tool good
-  oldmap="$(team_config_file_value "$CONFIG" TEAM_TASK_MODELS)"
-  run config set-task-model routine vendor/routine
-  check "$seat-role-category-ready" eq "$RC" 0
-  if [ "$seat" = worker ]; then
-    run config set TEAM_AGENT_CMD '' --yes
-    run config set TEAM_EXTRA_PI_ARGS '' --yes
-    run dispatch dev T1 docs/team/tasks/T1-fixture.md --model vendor/deep/model:high --fresh
-    check worker-role-assignment-ready eq "$RC" 0
-    team_assignment_load dev; sid="${TEAM_ASSIGN[sid]}"; stop_fixture_seat dev
-    good='--provider {provider} --model {model} --session-id {session_id}'
-  else
-    routing_fixture_tmux new-window -d -t routing-fixture -n role-anchor 'sleep 1200'
-    stop_fixture_seat pm
-    run config set TEAM_PM_EXTRA_PI_ARGS '' --yes
-    # config set 的前门拒收 `-` 开头的值：按既有夹具惯例用前导空格写入（读取侧 team_trim）。
-    run config set TEAM_PM_RESUME_ARGS ' --continue' --yes
-    (TEAM_PM_MODEL=vendor/pm:high; TEAM_PM_RESUME_ARGS=--continue; TEAM_PM_FRESH_LAUNCH=0; team_pm_metadata_publish fixture-role-control)
-    cp -p "$STATE/pm-launch.env" "$TMP/role-pm-trusted"
-    good='--provider {provider} --model {model} {resume_args}'
-  fi
-  local -a faults=()
+routing_role_faults() { # caller supplies seat/good and a local faults array
+  faults=()
   # Both emitted tool scalar roles, every identity selector and argv-list seam.
   # Unknown arity is NOT guessed, including unknown equals/quoted option forms.
   for tool in '--skill' '-e' '--unknown' '--unknown=value' '"--unknown"'; do
@@ -49,44 +28,66 @@ routing_role_probes() { # worker|pm
     faults+=('extra-consumes-model|--provider {provider} {extra_args} --model {model} --session-id {session_id}'
       'extra-unknown-before-model|--provider {provider} {extra_args} --model {model} --session-id {session_id}')
   fi
-  for body in "${faults[@]}"; do
-    tag="${body%%|*}"; body="${body#*|}"
-    if [ "$seat" = worker ]; then
-      run config set TEAM_AGENT_CMD "$TMP/recording-pi $body {prompt}" --yes
-      case "$tag" in extra-consumes-*) run config set TEAM_EXTRA_PI_ARGS ' --skill' --yes ;; extra-unknown-*) run config set TEAM_EXTRA_PI_ARGS ' --unknown harmless' --yes ;; esac
-    else
-      run config set TEAM_PM_CMD "$TMP/recording-pi $body {prompt}" --yes
+}
+routing_resume_role_faults() {
+  faults=('--skill --continue' '-e -c' '--unknown --continue' '--unknown harmless --continue' '--skill --session-id fixture-sid' '-e -s fixture-sid' '--unknown --session-id fixture-sid')
+}
+routing_parameter_role_probes() {
+  local seat kind good tool body tag extra resume field bound bad observed rc mode
+  local -a faults
+  for seat in worker pm; do
+    kind=launch; good='--provider {provider} --model {model} --session-id {session_id}'; bound='provider model session_id'
+    if [ "$seat" = pm ]; then kind=pm; good='--provider {provider} --model {model} {resume_args}'; bound='provider model'; fi
+    routing_role_faults
+    for body in "${faults[@]}"; do
+      tag="${body%%|*}"; body="${body#*|}"; extra=''; resume=''
+      [ "$seat" != pm ] || resume=' --continue'
       case "$tag" in
-        extra-consumes-*) run config set TEAM_PM_EXTRA_PI_ARGS ' --skill' --yes ;;
-        extra-unknown-*) run config set TEAM_PM_EXTRA_PI_ARGS ' --unknown harmless' --yes ;;
-        resume-unknown-*) run config set TEAM_PM_RESUME_ARGS ' --continue --unknown' --yes ;;
+        extra-consumes-*) extra=' --skill' ;;
+        extra-unknown-*) extra=' --unknown harmless' ;;
+        resume-unknown-*) resume=' --continue --unknown' ;;
       esac
-      (TEAM_PM_MODEL=vendor/pm:high; TEAM_PM_RESUME_ARGS="$(team_config_file_value "$CONFIG" TEAM_PM_RESUME_ARGS)"; TEAM_PM_FRESH_LAUNCH=0; team_pm_metadata_publish fixture-role-control)
-      cp -p "$STATE/pm-launch.env" "$TMP/role-pm-trusted"
-    fi
-    check "$seat-role-template-config:$tag" eq "$RC" 0
-    for mode in preview launch fresh-preview fresh-launch; do
-      [ "$seat" != pm ] || cp -p "$TMP/role-pm-trusted" "$STATE/pm-launch.env"
-      before="$(routing_observable_snapshot)"
-      check "role-capture:$seat:$tag:$mode:before" routing_binding_capture "$seat-role" "$tag" "$mode" before
-      if [ "$seat" = worker ]; then
-        case "$mode" in
-          preview) run dispatch dev T1 docs/team/tasks/T1-fixture.md --print ;;
-          launch) run dispatch dev T1 docs/team/tasks/T1-fixture.md ;;
-          fresh-preview) run dispatch dev T1 docs/team/tasks/T1-fixture.md --fresh --print ;;
-          fresh-launch) run dispatch dev T1 docs/team/tasks/T1-fixture.md --fresh ;;
-        esac
-      else
-        case "$mode" in preview) run up --print ;; launch) run up ;; fresh-preview) run up --fresh-pm --print ;; fresh-launch) run up --fresh-pm ;; esac
-      fi
-      check "$seat-role-refused:$tag:$mode" eq "$RC" 1
-      check "$seat-role-pure:$tag:$mode" eq "$(routing_observable_snapshot)" "$before"
-      check "role-capture:$seat:$tag:$mode:after" routing_binding_capture "$seat-role" "$tag" "$mode" after
-      if [ "$seat" = worker ]; then stop_fixture_seat dev; else stop_fixture_seat pm; fi
+      routing_parameter_template "parameter-role-refused:$seat:$tag" "$kind" "fixture-pi $body {prompt}" continued 1 '' "$extra" "$resume"
     done
-    if [ "$seat" = worker ]; then run config set TEAM_EXTRA_PI_ARGS '' --yes
-    else run config set TEAM_PM_EXTRA_PI_ARGS '' --yes; run config set TEAM_PM_RESUME_ARGS ' --continue' --yes; fi
+    for field in tool-prefix unknown-suffix extra-prefix; do
+      body="--skill harmless -e 'literal extension' $good --unknown 'two words'"; extra=''
+      [ "$field" != unknown-suffix ] || body="$good --unknown 'two words'"
+      if [ "$field" = extra-prefix ]; then body="{extra_args} $body"; extra=' --skill harmless -e "literal extension" --no-tools'; fi
+      for mode in fresh continued; do
+        routing_parameter_template "parameter-role-legal:$seat:$field:$mode" "$kind" "fixture-pi $body {prompt}" "$mode" 0 "$bound" "$extra" ' --continue'
+      done
+    done
   done
+  routing_resume_role_faults
+  for bad in "${faults[@]}"; do
+    rc=0; observed="$(TEAM_EXTRA_PI_ARGS=''; TEAM_PM_EXTRA_PI_ARGS=''; TEAM_PM_RESUME_ARGS="$bad"; team_pm_resume_args_guard 2>&1)" || rc=$?
+    printf 'OBSERVE parameter-resume-role-refused:%s rc=%s value=%s\n' "$bad" "$rc" "$observed"
+    check "parameter-resume-role-refused:$bad" eq "$rc" 1
+  done
+}
+routing_role_probes() { # worker|pm
+  local seat="$1" oldmap tag body mode before sid='' field tool good
+  oldmap="$(team_config_file_value "$CONFIG" TEAM_TASK_MODELS)"
+  run config set-task-model routine vendor/routine
+  check "$seat-role-category-ready" eq "$RC" 0
+  if [ "$seat" = worker ]; then
+    run config set TEAM_AGENT_CMD '' --yes
+    run config set TEAM_EXTRA_PI_ARGS '' --yes
+    run dispatch dev T1 docs/team/tasks/T1-fixture.md --model vendor/deep/model:high --fresh
+    check worker-role-assignment-ready eq "$RC" 0
+    team_assignment_load dev; sid="${TEAM_ASSIGN[sid]}"; stop_fixture_seat dev
+    good='--provider {provider} --model {model} --session-id {session_id}'
+  else
+    routing_fixture_tmux new-window -d -t routing-fixture -n role-anchor 'sleep 1200'
+    stop_fixture_seat pm
+    run config set TEAM_PM_EXTRA_PI_ARGS '' --yes
+    # config set 的前门拒收 `-` 开头的值：按既有夹具惯例用前导空格写入（读取侧 team_trim）。
+    run config set TEAM_PM_RESUME_ARGS ' --continue' --yes
+    (TEAM_PM_MODEL=vendor/pm:high; TEAM_PM_RESUME_ARGS=--continue; TEAM_PM_FRESH_LAUNCH=0; team_pm_metadata_publish fixture-role-control)
+    cp -p "$STATE/pm-launch.env" "$TMP/role-pm-trusted"
+    good='--provider {provider} --model {model} {resume_args}'
+  fi
+  local -a faults; routing_role_faults
   if [ "$seat" = pm ]; then
     (TEAM_PM_MODEL=vendor/pm:high; TEAM_PM_RESUME_ARGS=--continue; TEAM_PM_FRESH_LAUNCH=0; team_pm_metadata_publish fixture-role-control)
     cp -p "$STATE/pm-launch.env" "$TMP/role-pm-trusted"
@@ -128,27 +129,84 @@ routing_role_probes() { # worker|pm
     done
     if [ "$seat" = worker ]; then run config set TEAM_EXTRA_PI_ARGS '' --yes; else run config set TEAM_PM_EXTRA_PI_ARGS '' --yes; fi
   done
+  local diagnostic
+  for body in "${faults[@]}"; do
+    tag="${body%%|*}"; body="${body#*|}"
+    case "$seat:$tag" in
+      worker:model:--skill|pm:provider:--skill) diagnostic='identity argv role unprovable: --skill needs one literal tool-data value' ;;
+      worker:extra-unknown-before-model) diagnostic='identity argv role unprovable: unknown arity --unknown before protected --model' ;;
+      pm:extra-unknown-before-resume) diagnostic='identity argv role unprovable: unknown arity --unknown before protected {resume_args}' ;;
+      *) continue ;;
+    esac
+    if [ "$seat" = worker ]; then
+      run config set TEAM_EXTRA_PI_ARGS '' --yes
+      run config set TEAM_AGENT_CMD "$TMP/recording-pi $body {prompt}" --yes
+      check "$seat-role-template-config:$tag" eq "$RC" 0
+      [ "$RC" = 0 ] || return 1
+      if [ "$tag" = extra-unknown-before-model ]; then
+        run config set TEAM_EXTRA_PI_ARGS ' --unknown harmless' --yes
+        check "$seat-role-extra-config:$tag" eq "$RC" 0
+        [ "$RC" = 0 ] || return 1
+        routing_refusal_observe worker-role worker-role "$tag" fresh-launch "$diagnostic" dispatch dev T1 docs/team/tasks/T1-fixture.md --fresh
+      else
+        routing_refusal_observe worker-role worker-role "$tag" launch "$diagnostic" dispatch dev T1 docs/team/tasks/T1-fixture.md
+      fi
+      stop_fixture_seat dev
+      run config set TEAM_EXTRA_PI_ARGS '' --yes
+    else
+      run config set TEAM_PM_EXTRA_PI_ARGS '' --yes
+      run config set TEAM_PM_RESUME_ARGS ' --continue' --yes
+      run config set TEAM_PM_CMD "$TMP/recording-pi $body {prompt}" --yes
+      check "$seat-role-template-config:$tag" eq "$RC" 0
+      [ "$RC" = 0 ] || return 1
+      if [ "$tag" = extra-unknown-before-resume ]; then
+        run config set TEAM_PM_EXTRA_PI_ARGS ' --unknown harmless' --yes
+        check "$seat-role-extra-config:$tag" eq "$RC" 0
+        [ "$RC" = 0 ] || return 1
+        (TEAM_PM_MODEL=vendor/pm:high; TEAM_PM_RESUME_ARGS=--continue; TEAM_PM_FRESH_LAUNCH=0; TEAM_PM_SESSION_ID=''; team_pm_metadata_publish fixture-role-control)
+        check "$seat-role-record:$tag" eq "$?" 0
+        check "$seat-role-trusted:$tag" routing_pm_continuation_ready ' --continue'
+        routing_refusal_observe pm-role pm-role "$tag" launch "$diagnostic" up
+      else
+        routing_refusal_observe pm-role pm-role "$tag" fresh-launch "$diagnostic" up --fresh-pm
+      fi
+      stop_fixture_seat pm
+      run config set TEAM_PM_EXTRA_PI_ARGS '' --yes
+      run config set TEAM_PM_RESUME_ARGS ' --continue' --yes
+    fi
+  done
   if [ "$seat" = worker ]; then run config set TEAM_AGENT_CMD '' --yes
   else run config set TEAM_PM_CMD '' --yes; run config set TEAM_PM_RESUME_ARGS '' --yes; fi
   run config set TEAM_TASK_MODELS "$oldmap" --yes
   check "$seat-role-policy-restored" eq "$RC" 0
 }
 routing_resume_role_probes() {
-  local field bad mode before
+  local field bad mode diagnostic
+  local -a faults
   for field in builtin custom; do
     if [ "$field" = builtin ]; then run config set TEAM_PM_CMD '' --yes
     else run config set TEAM_PM_CMD "$TMP/recording-pi --provider {provider} --model {model} {resume_args} {prompt}" --yes; fi
-    for bad in '--skill --continue' '-e -c' '--unknown --continue' '--unknown harmless --continue' '--skill --session-id fixture-sid' '-e -s fixture-sid' '--unknown --session-id fixture-sid'; do
+    check "pm-role-resume-template:$field" eq "$RC" 0
+    [ "$RC" = 0 ] || return 1
+    routing_resume_role_faults
+    for bad in "${faults[@]}"; do
+      case "$field:$bad" in
+        'builtin:--skill --continue') mode=launch; diagnostic='identity argv role unprovable: --skill needs one literal tool-data value' ;;
+        'custom:-e -c') mode=fresh-launch; diagnostic='identity argv role unprovable: -e needs one literal tool-data value' ;;
+        *) continue ;;
+      esac
       run config set TEAM_PM_RESUME_ARGS " $bad" --yes
       check "pm-role-resume-config:$field:$bad" eq "$RC" 0
-      (TEAM_PM_MODEL=vendor/pm:high; TEAM_PM_FRESH_LAUNCH=0; TEAM_PM_RESUME_ARGS="$bad"; team_pm_metadata_publish fixture-role-resume)
-      for mode in preview launch fresh-preview fresh-launch; do
-        before="$(routing_observable_snapshot)"
-        case "$mode" in preview) run up --print ;; launch) run up ;; fresh-preview) run up --fresh-pm --print ;; fresh-launch) run up --fresh-pm ;; esac
-        check "pm-role-resume-refused:$field:$bad:$mode" eq "$RC" 1
-        check "pm-role-resume-pure:$field:$bad:$mode" eq "$(routing_observable_snapshot)" "$before"
-        stop_fixture_seat pm
-      done
+      [ "$RC" = 0 ] || return 1
+      (TEAM_PM_MODEL=vendor/pm:high; TEAM_PM_FRESH_LAUNCH=0; TEAM_PM_SESSION_ID=''; TEAM_PM_RESUME_ARGS="$bad"; team_pm_metadata_publish fixture-role-resume)
+      check "pm-role-resume-record:$field:$bad" eq "$?" 0
+      check "pm-role-resume-trusted:$field:$bad" routing_pm_continuation_ready "$bad"
+      if [ "$mode" = launch ]; then
+        routing_refusal_observe pm-role-resume pm-role-resume "$field:$bad" "$mode" "$diagnostic" up
+      else
+        routing_refusal_observe pm-role-resume pm-role-resume "$field:$bad" "$mode" "$diagnostic" up --fresh-pm
+      fi
+      stop_fixture_seat pm
     done
   done
   run config set TEAM_PM_RESUME_ARGS '' --yes

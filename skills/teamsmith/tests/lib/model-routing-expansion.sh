@@ -84,6 +84,56 @@ PY
   check pm-argv-metadata-unchanged eq "$(sha "$STATE/pm-launch.env")" "$metadata_before"
 }
 
+routing_expansion_faults() {
+  faults=(
+    'provider-glob|--pro*' 'model-glob|--mod*' 'sid-glob|--sess*'
+    'continue-glob|--cont*' 'resume-glob|--resu*' 'short-class|-?[r]ong'
+    'session-file-glob|*.jsonl' 'provider-class|--[p]rovider*'
+    'mixed-quote|"--mod"*' 'brace|{--model=wrong:low,--no-tools}'
+    'tilde|~/routing-note' 'doublequote-escape|"two\\\\words"'
+  )
+  # Match an actual short selector too (the first pattern deliberately matches
+  # nothing but still has unprovable pathname semantics).
+  faults+=('short-glob|-m*')
+}
+routing_resume_expansion_faults() {
+  faults=('--mod*' '--pro*' '--sess*' '--cont*' '--resu*' '{--model=wrong:low,--continue}' '--session-id ~')
+}
+routing_parameter_expansion_probes() {
+  local fragment tag seat kind body observed rc literal
+  local -a faults
+  routing_expansion_faults
+  for fragment in "${faults[@]}"; do
+    tag="${fragment%%|*}"; fragment="${fragment#*|}"
+    for seat in worker pm; do
+      kind=launch; body='--provider {provider} --model {model} --session-id {session_id}'
+      if [ "$seat" = pm ]; then kind=pm; body='--provider {provider} --model {model} {resume_args} {prompt}'; fi
+      routing_parameter_template "parameter-expansion-refused:$seat-template:$tag" "$kind" "fixture-pi $body $fragment" fresh 1 ''
+    done
+    rc=0; observed="$(TEAM_EXTRA_PI_ARGS=''; TEAM_PM_EXTRA_PI_ARGS=''; TEAM_PM_RESUME_ARGS=''; team_identity_extra_guard "$fragment" 2>&1)" || rc=$?
+    printf 'OBSERVE parameter-expansion-refused:shared-extra:%s rc=%s value=%s\n' "$tag" "$rc" "$observed"
+    check "parameter-expansion-refused:shared-extra:$tag" eq "$rc" 1
+  done
+  routing_resume_expansion_faults
+  for fragment in "${faults[@]}"; do
+    rc=0; observed="$(TEAM_EXTRA_PI_ARGS=''; TEAM_PM_EXTRA_PI_ARGS=''; TEAM_PM_RESUME_ARGS="$fragment"; team_pm_resume_args_guard 2>&1)" || rc=$?
+    printf 'OBSERVE parameter-resume-expansion-refused:%s rc=%s value=%s\n' "$fragment" "$rc" "$observed"
+    check "parameter-resume-expansion-refused:$fragment" eq "$rc" 1
+  done
+  literal='--label "two words" "--mod*" "{safe,words}" "~/routing-note"'
+  literal+=" 'one\\two'"
+  for seat in worker pm; do
+    kind=launch; body='--provider {provider} --model {model} --session-id {session_id}'; local bound='provider model session_id'
+    if [ "$seat" = pm ]; then kind=pm; body='--provider {provider} --model {model} {resume_args} {prompt}'; bound='provider model'; fi
+    routing_parameter_template "parameter-expansion-literal:$seat-template" "$kind" "fixture-pi $body $literal" fresh 0 "$bound"
+  done
+  rc=0; observed="$(TEAM_EXTRA_PI_ARGS=''; TEAM_PM_EXTRA_PI_ARGS=''; TEAM_PM_RESUME_ARGS=''; team_identity_extra_guard "$literal" && printf '%s\n' "${TEAM_LITERAL_TOKENS[@]}")" || rc=$?
+  check parameter-expansion-literal:shared-extra eq "$rc" 0
+  check parameter-expansion-literal-values eq "$observed" $'--label\ntwo words\n--mod*\n{safe,words}\n~/routing-note\none\\two'
+  rc=0; observed="$(TEAM_EXTRA_PI_ARGS=''; TEAM_PM_EXTRA_PI_ARGS=''; TEAM_PM_RESUME_ARGS=" --session-id 'fixture-literal-session'"; team_pm_resume_args_guard && printf '%s\n' "${TEAM_LITERAL_TOKENS[@]}")" || rc=$?
+  check parameter-resume-literal eq "$rc" 0
+  check parameter-resume-literal-value eq "$observed" $'--session-id\nfixture-literal-session'
+}
 routing_expansion_probes() { # worker|pm
   local seat="$1" field tag fragment mode before sid='' previous_map
   previous_map="$(team_config_file_value "$CONFIG" TEAM_TASK_MODELS)"
@@ -103,52 +153,7 @@ routing_expansion_probes() { # worker|pm
   [ "$seat" != worker ] || root="$REPO/.worktrees/dev"
   local -a decoys=('--provider=other' '--model=wrong:low' '--session-id=other-history' '--continue' '--resume=other-history' '-mwrong' 'other-history.jsonl')
   for fragment in "${decoys[@]}"; do printf 'identity decoy\n' > "$root/$fragment"; done
-  local -a faults=(
-    'provider-glob|--pro*' 'model-glob|--mod*' 'sid-glob|--sess*'
-    'continue-glob|--cont*' 'resume-glob|--resu*' 'short-class|-?[r]ong'
-    'session-file-glob|*.jsonl' 'provider-class|--[p]rovider*'
-    'mixed-quote|"--mod"*' 'brace|{--model=wrong:low,--no-tools}'
-    'tilde|~/routing-note' 'doublequote-escape|"two\\\\words"'
-  )
-  # Match an actual short selector too (the first pattern deliberately matches
-  # nothing but still has unprovable pathname semantics).
-  faults+=('short-glob|-m*')
-  for field in template extra; do
-    for fragment in "${faults[@]}"; do
-      tag="${fragment%%|*}"; fragment="${fragment#*|}"
-      if [ "$seat" = worker ]; then
-        run config set TEAM_EXTRA_PI_ARGS '' --yes
-        custom="$TMP/recording-pi --provider {provider} --model {model} --session-id {session_id}"
-        if [ "$field" = template ]; then
-          run config set TEAM_AGENT_CMD "$custom $fragment" --yes
-        else
-          run config set TEAM_AGENT_CMD '' --yes
-          run config set TEAM_EXTRA_PI_ARGS " $fragment" --yes
-        fi
-      else
-        run config set TEAM_PM_EXTRA_PI_ARGS '' --yes
-        custom="$TMP/recording-pi --provider {provider} --model {model} {resume_args} {prompt}"
-        if [ "$field" = template ]; then
-          run config set TEAM_PM_CMD "$custom $fragment" --yes
-        else
-          run config set TEAM_PM_CMD '' --yes
-          run config set TEAM_PM_EXTRA_PI_ARGS " $fragment" --yes
-        fi
-      fi
-      check "$seat-expansion-config:$field:$tag" eq "$RC" 0
-      for mode in preview launch; do
-        before="$(routing_observable_snapshot)"
-        if [ "$seat" = worker ]; then
-          if [ "$mode" = preview ]; then run dispatch dev T1 docs/team/tasks/T1-fixture.md --print; else run dispatch dev T1 docs/team/tasks/T1-fixture.md; fi
-        else
-          if [ "$mode" = preview ]; then run up --fresh-pm --print; else run up --fresh-pm; fi
-        fi
-        check "$seat-expansion-refused:$field:$tag:$mode" eq "$RC" 1
-        check "$seat-expansion-pure:$field:$tag:$mode" eq "$(routing_observable_snapshot)" "$before"
-        if [ "$seat" = worker ]; then stop_fixture_seat dev; else stop_fixture_seat pm; fi
-      done
-    done
-  done
+  local -a faults; routing_expansion_faults
   # Quoted wildcard/brace/tilde text is literal data, not an expansion. Builtin
   # PM must consume the lexer's tokens, not re-split the original quoted text.
   local literal='--label "two words" "--mod*" "{safe,words}" "~/routing-note"'
@@ -187,6 +192,40 @@ else:
 PY
     if [ "$seat" = worker ]; then stop_fixture_seat dev; else stop_fixture_seat pm; fi
   done
+  for field in template extra; do
+    for fragment in "${faults[@]}"; do
+      tag="${fragment%%|*}"; fragment="${fragment#*|}"
+      [ "$tag" = model-glob ] || continue
+      if [ "$seat" = worker ]; then
+        run config set TEAM_EXTRA_PI_ARGS '' --yes
+        custom="$TMP/recording-pi --provider {provider} --model {model} --session-id {session_id}"
+        if [ "$field" = template ]; then
+          run config set TEAM_AGENT_CMD "$custom $fragment" --yes
+        else
+          run config set TEAM_AGENT_CMD '' --yes
+          run config set TEAM_EXTRA_PI_ARGS " $fragment" --yes
+        fi
+      else
+        run config set TEAM_PM_EXTRA_PI_ARGS '' --yes
+        custom="$TMP/recording-pi --provider {provider} --model {model} {resume_args} {prompt}"
+        if [ "$field" = template ]; then
+          run config set TEAM_PM_CMD "$custom $fragment" --yes
+        else
+          run config set TEAM_PM_CMD '' --yes
+          run config set TEAM_PM_EXTRA_PI_ARGS " $fragment" --yes
+        fi
+      fi
+      check "$seat-expansion-config:$field:$tag" eq "$RC" 0
+      [ "$RC" = 0 ] || return 1
+      if [ "$seat" = worker ]; then
+        routing_refusal_observe "$seat-expansion" "$seat-expansion" "$field:$tag" launch 'identity argv cannot contain unquoted pathname/tilde expansion' dispatch dev T1 docs/team/tasks/T1-fixture.md
+        stop_fixture_seat dev
+      else
+        routing_refusal_observe "$seat-expansion" "$seat-expansion" "$field:$tag" launch 'identity argv cannot contain unquoted pathname/tilde expansion' up --fresh-pm
+        stop_fixture_seat pm
+      fi
+    done
+  done
   if [ "$seat" = pm ]; then routing_pm_resume_expansion_probes; fi
   for fragment in "${decoys[@]}"; do rm -- "$root/$fragment"; done
   if [ "$seat" = worker ]; then
@@ -204,21 +243,6 @@ routing_pm_resume_expansion_probes() {
     if [ "$field" = builtin ]; then run config set TEAM_PM_CMD '' --yes
     else run config set TEAM_PM_CMD "$TMP/recording-pi --provider {provider} --model {model} {resume_args} {prompt}" --yes; fi
     run config set TEAM_PM_EXTRA_PI_ARGS '' --yes
-    for fragment in '--mod*' '--pro*' '--sess*' '--cont*' '--resu*' '{--model=wrong:low,--continue}' '--session-id ~'; do
-      run config set TEAM_PM_RESUME_ARGS " $fragment" --yes
-      check "pm-resume-expansion-config:$field:$fragment" eq "$RC" 0
-      # Controlled same-key metadata makes this a real continuation test, not a
-      # fresh-pm call that discards resume_args before it can reach the shell.
-      (TEAM_PM_FRESH_LAUNCH=0; TEAM_PM_RESUME_ARGS=" $fragment"; team_pm_metadata_publish fixture-resume-expansion)
-      check "pm-resume-expansion-record:$field:$fragment" eq "$?" 0
-      for mode in preview launch; do
-        before="$(routing_observable_snapshot)"
-        if [ "$mode" = preview ]; then run up --print; else run up; fi
-        check "pm-resume-expansion-refused:$field:$fragment:$mode" eq "$RC" 1
-        check "pm-resume-expansion-pure:$field:$fragment:$mode" eq "$(routing_observable_snapshot)" "$before"
-        stop_fixture_seat pm
-      done
-    done
     fragment=" --session-id 'fixture-literal-session'"
     run config set TEAM_PM_RESUME_ARGS "$fragment" --yes
     check "pm-resume-literal-config:$field" eq "$RC" 0
@@ -232,6 +256,19 @@ routing_pm_resume_expansion_probes() {
     check "pm-resume-literal-launch:$field" eq "$RC" 0
     check "pm-resume-literal-argv:$field" python3 -c 'import json,sys; a=json.loads(open(sys.argv[1]).readlines()[-1]); assert a.count("--session-id")==1 and a[a.index("--session-id")+1]=="fixture-literal-session",a; assert a[a.index("--model")+1]=="pm:high",a' "$TMP/argv-jsonl"
     stop_fixture_seat pm
+    local -a faults; routing_resume_expansion_faults
+    for fragment in "${faults[@]}"; do
+      [ "$fragment" = '--mod*' ] || continue
+      run config set TEAM_PM_RESUME_ARGS " $fragment" --yes
+      check "pm-resume-expansion-config:$field:$fragment" eq "$RC" 0
+      [ "$RC" = 0 ] || return 1
+      # Real same-key continuation metadata; fresh would discard this input.
+      (TEAM_PM_MODEL=vendor/pm:high; TEAM_PM_FRESH_LAUNCH=0; TEAM_PM_SESSION_ID=''; TEAM_PM_RESUME_ARGS=" $fragment"; team_pm_metadata_publish fixture-resume-expansion)
+      check "pm-resume-expansion-record:$field:$fragment" eq "$?" 0
+      check "pm-resume-expansion-trusted:$field:$fragment" routing_pm_continuation_ready " $fragment"
+      routing_refusal_observe pm-resume-expansion pm-resume-expansion "$field:$fragment" launch 'identity argv cannot contain unquoted pathname/tilde expansion' up
+      stop_fixture_seat pm
+    done
   done
   run config set TEAM_PM_RESUME_ARGS '' --yes
   cp -p "$saved" "$STATE/pm-launch.env"

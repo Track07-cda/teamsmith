@@ -1,0 +1,166 @@
+# P468 · 共用参数检查的实现与静态交付
+
+agent: dev   status: DELIVERED（仅实施与静态）   time: 2026-11-16T15:17Z
+branch: `task/P468-routing-parameter-check-apply`   PR/MR: -（local，不推送）
+
+## 结论与交付范围
+
+四份测试文件已改为：正常 boundary 执行一次共用参数规则，保留设计指定的真实拒绝调用；五条参数故障改用同一 `parameters` 分组，不再各执行完整 boundary。合法启动、实际 argv、PM 记录损坏/恢复和撤销检查保留。**本席位没有运行任何行为检查，不能据此认定替换后的检查已通过或节省了多少时间。**
+
+固定实现提交：`68e8e2ea9fe4e725205848c1e7650c8f35b813cb`；比较基点：`0de91aae`。实施分步提交为 `e85c6b3f`（共用规则）、`93f40a0c`（真实调用收窄）、`ba50fdfe`（五臂接入）、`68e8e2ea`（fresh 部分绑定正例的准确命名）。本报告后续提交只收静态证据。
+
+## Deliverables
+
+| Path | What |
+|---|---|
+| `skills/teamsmith/tests/task-model-routing.sh` | 唯一 `parameters` 分组在完整项目准备之前返回；正常 boundary 只调用一次共享规则；五臂的分组、必需失败名和同副本 healthy/restored 接入 |
+| `skills/teamsmith/tests/lib/model-routing-boundary.sh` | 原模板输入移到可共用的普通函数；直接固定期望；具名 CLI 诊断/argv/状态/前后原件；最终 worker/PM renderer 拒绝观察 |
+| `skills/teamsmith/tests/lib/model-routing-expansion.sh` | 原 expansion 输入共用；仅保留 model-glob 的实际 template/extra 见证和 PM 两种显式 continuation；合法 literal argv 原块保留 |
+| `skills/teamsmith/tests/lib/model-routing-roles.sh` | 原角色输入共用；保留指定 scalar/list/resume 真实调用；合法角色启动与 publication 函数保留 |
+| `openspec/changes/routing-parameter-check-dedup/tasks.md` | 仅勾 1.1–1.3，2.1–2.3 保持未勾 |
+| `docs/team/reports/P468-dev.md` | 本报告，不提交临时日志 |
+
+## 源码迁移清单：不是实际执行计数
+
+旧位置以基点 `0de91aae` 为准，新位置以固定实现提交中的下列函数为准。旧的 562 是 writer 未提前拒绝时的潜在调用量，不是旧日志实测；新 22 是源码安排，不是已运行结果或永久配额。
+
+| 来源及旧调用点 | 旧潜在负向 CLI | 新真实调用安排 | 直接规则与退休原件 |
+|---|---:|---|---|
+| boundary `routing_template_probes`：29 项 × 四模式，扣 fresh 允许的 missing SID 两项 | 114 | continued：all-hardcoded、positional-model、data-sid、missing-sid-selector，各一次 launch | `routing_worker_template_faults` 同源输入；fresh/continued 直接判断；只保留这四次的前后 capture，其余模式/capture 删除 |
+| boundary `routing_pm_template_probes`：21 fresh × 两模式、7 continued × 两模式 | 56 | fresh provider/data-provider 各一次 launch；provider 另一次 preview；continued positional-model 一次 launch | `routing_pm_template_faults`/`routing_pm_missing_faults`；其余负向调用/capture 删除 |
+| expansion `routing_expansion_probes worker`：13 × template/extra × 两模式 | 52 | template:model-glob、extra:model-glob，各一次 continued launch | 原 13 项搬到 `routing_expansion_faults`；删除其它负向调用及逐次快照，不删除 cwd decoy 或合法 literal 实际启动 |
+| expansion `routing_expansion_probes pm` 与 `routing_pm_resume_expansion_probes` | 80 | template/extra:model-glob 各一次 fresh launch；builtin/custom `--mod*` 各一次 continued launch | 13 项 PM template/共用 extra 及原 7 项 resume 直接判定；不再把所有 fragment 乘两席位/两种 resume caller/两模式 |
+| roles `routing_role_probes worker/pm` | 100 / 104 | worker model:--skill continued、extra-unknown-before-model fresh；PM provider:--skill fresh、extra-unknown-before-resume continued，各一次 launch | `routing_role_faults` 保留原 25/26 输入生成内容；原其它模式及 `role-capture` 调用退休，留下的四次改由同内容 capture 函数记录 |
+| roles `routing_resume_role_probes`：7 × 两 caller × 四模式 | 56 | builtin `--skill --continue` continued、custom `-e -c` fresh，各一次 launch | `routing_resume_role_faults` 保留原七输入；其它负向模式/快照退休 |
+| 新的 builtin extra 实际调用 | - | worker continued / PM fresh `--model wrong:low` 各一次 launch | `parameter-extra-refused:model` 等直接规则不再冒称实际 caller 执行 |
+| 五条参数故障原 `groups=boundary` | 各一次完整 boundary | 各选 `parameters`，同副本 healthy → 原故障 → common.sh 字节恢复 → restored | 不再重复七个 boundary 子夹具及 PM 参数/metadata/撤销尾部；这些坏树上的附带观察明确退休，不声称全等保留 |
+
+原输入盘点仍为 `57+28+46+58+8=197` 个直接负例；fresh missing SID 是独立部分绑定正例，partial/opaque 的 fresh 允许及 continued 拒绝也有明确固定期望。该盘点不作为固定 PASS 数检查。合法 selector 的 bound fields，以及 literal 的 `two words`、`--mod*`、`{safe,words}`、`~/routing-note`、字面反斜杠、`fixture-literal-session` 都是固定期望，不从产品 tokenizer 反推。
+
+`routing_parameter_template` 的子 shell 只设置输入、调用真实产品函数、返回 rc/已绑定字段；`check` 在调用 shell 累计 PASS/FAIL。短分支只 source 所选 `$TREE` 的真实 `common.sh`，不 load config，不初始化 git/worktree/BOARD，不执行 writer/dispatch/up/tmux。正常 boundary 直接调用相同函数，不再另选 parameters 重跑。
+
+## 保留的实际观察与前提
+
+- `routing_refusal_observe` 要求 rc=1、指定参数错误、argv 文件 hash 不变、原 observable snapshot 不变，且保留 before/after 原件；writer 失败有单独 setup 断言并停止该函数，不能算安全拒绝。
+- 两个 list 见证使用原 `extra-unknown-before-model/resume`，extra 固定为 ` --unknown harmless`。共用直接规则另断言 standalone extra 成功及固定 token 值；真实模板期望分别是 `unknown arity --unknown before protected --model` 和 `unknown arity --unknown before protected {resume_args}`。没有用孤立 `--skill` 的缺值拒绝替代。
+- PM continued 见证沿用真实 metadata publisher，并新增真实 loader 对选中 model 和相同 resume-key 的检查；没有改用 fresh 消掉 resume 输入。PM custom resume-role 的 fresh 见证仍要求坏的 resume 配置被真实 guard 拒绝。
+- 原 PM fresh 合法控制、expansion literal 控制及 role 合法控制移到各自负例之前，作为实际合法前提；内容没有改写成函数返回值。源码同一性核账见下文。
+- `routing_renderer_refusal_probes` 分别观察 worker/PM 的 builtin-extra/custom-template：先合法 renderer rc=0 及固定 model，再要求真实 renderer rc=1 和特定参数错误。PM custom 用真实合法 policy 与 continuation metadata。没有 stub guard，也没有直接 start 的第二套实验。
+
+## 五臂与父结果消费
+
+仅五个分组由 boundary 改为 parameters。原 `model-routing-flips.py` 字节未动；五个故障都改 `scripts/lib/common.sh`，只恢复该文件，再沿用全部 scripts 的原 hash 检查和同一副本 restored 短执行。
+
+| 原故障 | 父级必需的直接失败名 |
+|---|---|
+| extra-shadow | `parameter-extra-refused:model` |
+| template-shadow | `parameter-template-refused:worker:all-hardcoded:continued`、`parameter-template-refused:pm:provider:fresh` |
+| template-unbound | 同前缀下 `worker:positional-model:continued`、`worker:data-sid:continued`、`pm:positional-model:continued`、`pm:data-provider:fresh` |
+| template-roles | `parameter-role-refused:worker:model:--skill`、`parameter-role-refused:pm:provider:--skill`、`parameter-resume-role-refused:--skill --continue` |
+| literal-shell-expansion | `parameter-expansion-refused:worker-template:model-glob`、`parameter-expansion-refused:pm-template:model-glob`、`parameter-expansion-refused:shared-extra:model-glob` |
+
+现有父级继续消费 child rc=1、具名 FAIL、原匹配/语法检查、healthy/restored rc=0 和恢复 hash；`flip_run`、超时具名红及最终 FAIL/非零逻辑未改。其它 26 臂的分组/专属断言未改；P457 两个 argv 样本及已退休的第二 CORE 不动。共享 extra 的一条直接失败不宣称四个真实 caller 都执行过，四个 caller 由正常 boundary 的 model-glob 见证承担。
+
+### 交给 verifier 的 bounded parent 执行说明（作者未执行）
+
+1. 在 PM 准备的固定实现提交独立检出上运行一次正常 `bash skills/teamsmith/tests/task-model-routing.sh --select boundary`，保留实际日志及原件。
+2. 仅在 verifier 自己的私有副本修改现有前门 flip 块两处选择：`CORE='parameters'`；`for mutation in ...` 的原长名单只留 `extra-shadow template-shadow template-unbound template-roles literal-shell-expansion`。其余父执行/消费、原变异器、规则助手和 budget 逐字节保持，留该二处 diff。
+3. 在该私有副本只运行一次现有 `--flip`。它自身取得 baseline 及每臂 healthy/原故障/restored，不先单跑五臂再跑 parent。这是 bounded parent，不是完整 61b/全矩阵。
+4. 从该次实际 rc/log 提取现有父消费代码做短回放；分别明确标记人工改为 rc0、rc124、setup rc、缺必需名、healthy 失败、restored 失败的输入，必须到达对应父 FAIL/非零，恢复真实结果则成功。不建立另一套故障算法，不冒称回放是新的行为运行。
+5. 在同批私有 fixture 按 design Migration 做 worker extra 早期边、整个 template 写前边及最终 renderer 的最小旁路；PM 只对真实 up 同时旁路 real-up identity 预检和 start 首道 identity 检查，保留真实 guard/最终 renderer，用既有 fresh provider 坏模板观察 prompt/诊断变化，不另做 direct start 实验。最终 renderer 使用本实现已有见证。
+6. 合并后同一 verifier 核四个执行文件字节同一，只补短 parameters 接入。未变的恢复/事务和 P457/V163 完整 61b 复用已接受原件，不追加 CORE/61b/FAST/smoke/meta 或其它矩阵。
+
+## OpenSpec assessment
+
+原生工具 `OpenSpec 1.16.0` 的 list/status/instructions 确认根为本 dev worktree，schema 为 spec-driven，规划 4/4；实施进度从 0/6 → 1/6 → 2/6 → 3/6，叶子在 tasks.md:7–9。2.1–2.3 保持未完成。
+
+| Dimension | Score | Evidence |
+|---|---|---|
+| Completeness | 实施 3/3；整体 3/6 | 四文件实现及原生 `apply-3-of-6.json`，未勾 verifier 三项 |
+| Correctness | 行为未判定 | 本任务只授权静态，未运行 boundary/parameters/故障或 caller 旁路 |
+| Coherence | 源码核账一致；待独立行为确认 | `source-audit.py` 对原输入、合法控制、PM 尾部、P457 样本和原变异器的文本/哈希核对 |
+
+## CRITICAL
+
+- None（静态范围）：变更清单仅四测试文件、tasks 三个勾选及本报告；行为正确性不在此判定。
+
+## WARNING
+
+- 2.1–2.3 的全部行为证据未取得，按 brief 留给非作者一次集中执行；没有断言数、真实调用数或耗时结果。
+
+## SUGGESTION
+
+- 无新增建议；下一步严格使用已接受 design Migration，不扩大到其它组。
+
+## Verification evidence
+
+原件根仅 `/var/tmp/P468-dev-static.e0paqo`，不 git add 日志/脚本。源码审计 `python3 /var/tmp/P468-dev-static.e0paqo/source-audit.py` 已实际执行，rc=0；它只读文件及 git show，不调用产品或测试行为。实际尾部：
+
+```text
+IDENTICAL other front-door groups and complete PM tail sha256=167806921d632484cc98f90d0b15bee6fd6102fe5f9d552d1afe0e71afb295d4
+IDENTICAL existing flip child runner and timeout consumption sha256=e5e2f96ea29a784206d5f30d8e0438a35e3a7a61a3ffaeb87fd3d2d63e91c3e8
+RELOCATED_INPUTS routing_worker_template_faults
+RELOCATED_INPUTS routing_pm_template_faults
+RELOCATED_INPUTS routing_expansion_faults
+RELOCATED_INPUTS routing_role_faults
+IDENTICAL original five-fault mutator skills/teamsmith/tests/lib/model-routing-flips.py sha256=c10a3a1040a612f148cd387e1464b628d3d27dfe97b52f2dac510a683dcda93d
+NO BEHAVIOUR EXECUTED by this source audit
+```
+
+完整 source-audit.log 还列出原合法 worker/PM selectors、quoted literal 启动/argv、PM 显式 continuation、role 合法控制、PM metadata matrix、publication 函数及两条 P457 argv 入口的同一性。四文件 hash、基点 diff、原生 3/6 JSON 及最终静态日志一并留在上述根。
+
+固定实现提交上的最终静态批次 `P468-static` 已完成并收取，exit=0，14.3s；日志 `final-static.log`。真实命令和输出如下：
+
+```sh
+export PATH="$HOME/.bun/bin:$PATH" TMPDIR=/var/tmp CI=1 OPENSPEC_TELEMETRY=0
+bash -n skills/teamsmith/tests/task-model-routing.sh
+# rc=0
+bash -n skills/teamsmith/tests/lib/model-routing-boundary.sh
+# rc=0
+bash -n skills/teamsmith/tests/lib/model-routing-expansion.sh
+# rc=0
+bash -n skills/teamsmith/tests/lib/model-routing-roles.sh
+# rc=0
+openspec validate routing-parameter-check-dedup --type change --strict --no-interactive
+# Change 'routing-parameter-check-dedup' is valid
+# rc=0
+git diff --check
+# rc=0
+git diff --cached --check
+# rc=0
+```
+
+Ledger ban（自己的 worktree，报告已暂存；使用现有名单，仅传路径，没有读取名单正文）：
+
+```sh
+$ bash skills/teamsmith/tests/ledger-ban.sh --names-file "$(git rev-parse --path-format=absolute --git-common-dir)/../.pi/team/forbidden-names.txt"
+ledger-ban: root=/home/<user>/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev scope=published files=2825 hits=0 names=ok user=resolved
+$ echo $?
+0
+```
+
+最终实现文件指纹（`source-sha256.txt`）：
+
+| 文件 | SHA-256 |
+|---|---|
+| task-model-routing.sh | `220ea9c695701d18f73bb9f77119da7ec88dfce003c2dd1dd645163a241c1f57` |
+| model-routing-boundary.sh | `7d0eed071734174bc26d5bc7ad3a59494a9b1a03aeadf6aeaa3abf456a6c4b62` |
+| model-routing-expansion.sh | `493b07030b86d837c7ff3ac720137cbc3b296fbbc0adbba26265a6f833a56a5a` |
+| model-routing-roles.sh | `fcd284c4ede1f69813d620ef432c69c580626f9470c01aef6d40e58e3a1db336` |
+
+这些 rc=0 只证明语法、规格工件格式、名单扫描和 diff 清洁；14.3s 是本次静态批次耗时，不是运行替换样本的性能读数。
+
+## Flip evidence
+
+未运行。此批是已接受的测试执行去重实现，原五故障、恢复和 caller/父级反例由非作者按 2.2 一次执行；本席位没有伪造 red→green，也没有引用旧作者绿结果替代本候选的行为。
+
+## Decisions and deviations
+
+无范围变更。合法控制只为满足“先有合法前提”而在各函数内换序，源码内容已核同一；新增参数正例不为补回旧 PASS。产品、模型配置、smoke/CI/选择表、正式 spec、已接受 proposal/design/delta、真实提醒/待命和已发布 0.4.7 均未改。
+
+## Final assessment
+
+- Counts: CRITICAL 0（静态范围）· WARNING 1（行为未验）· SUGGESTION 0。
+- Readiness: 本任务的实施和静态验收已完成；整体仍为原生 3/6，待 PM 指定非作者集中执行 2.1–2.3，不具备无条件合并/归档结论。
+- Unverified applicable checks: boundary、parameters、五条故障及恢复、parent 结果回放、caller/renderer 旁路全部未运行；这是任务书明确分给另一席位的行为验收。其它 routing 组、argv 组、CORE、61b、smoke/FAST/meta/夜间、其它矩阵、真实 Pi/模型、性能、安装和构建都未运行，也未声称通过。
+- 分支仅本地提交，报告之外不再改实现；不 merge/push/归档/发布，不更改真实团队配置、提醒或待命。PM 接手点为上述固定实现提交及本报告内 bounded parent 说明。
