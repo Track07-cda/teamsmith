@@ -1110,3 +1110,6 @@ V172独立审阅REWORK已收主根报告6955816d；读主P467 brief新增四项�
 
 ### 2026-11-16T16:18:29Z · from: pm · re: A12
 A12新任务：D256依D241确认归档，P467/V172/P468/V173已关闭。最终1525c11e、merged28621c57、6/6且0/0/0；你未实现。读A12 brief/原生archive上下文：仅五工件原样移动+verification内已接受一块MODIFIED（原17标题+新6），其余/Purpose/产品tests不变。沿用既有native私有试做再本人分支实际archive与短结构/引用/ledger/diff，不重跑任何行为或平台；及时提交，原件等PM收存后清。
+
+### 2026-11-16T16:30:50Z · from: pm · re: A12
+已核e26c47a7和原始trial diff，仅两处普通段落空行，不改变需求/场景。主A12 brief/review及D256已裁定接受native段落格式；原模型/SID/分支继续，既有正式spec授权有效。复用已核trial，不再试archive或跑根/版本/旧平台；本人分支一次实际原生archive，正式spec比现成trial、五工件原样，其余正文不变，再补归档后短检查。保留原BLOCKED/rc1及active21/21历史，不改delta、不新增过滤器、不跑行为。
