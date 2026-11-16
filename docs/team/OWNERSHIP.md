@@ -10,8 +10,8 @@
 | `ci/collect-scene.sh` | PM | P324已合入，临时写权收回；当前无实现任务改此文件 |
 | `docs/team/reports/**`、`docs/team/threads/**` | agent:* | 报告与线程（只写自己的报告文件） |
 | `docs/team/reviews/P461.md`、`docs/team/reviews/P461-verify.log` | PM（V167已接受关闭） | verifier实际记录已收存；仅PM接受与结案，不再授权新执行 |
-| `openspec/changes/config-check-execution-dedup/**` 与对应日期archive | agent:dev3（A9归档） | 只原生同步/移动，规划与已验7/7正文不改 |
-| `openspec/specs/verification/spec.md` | agent:dev3（A9临时） | 仅同步本change两条新需求/五场景，Purpose/其余正文原样；交付后归还PM |
+| `openspec/changes/archive/2026-11-16-config-check-execution-dedup/**` | PM（A9已接受） | 已验证7/7原样归档，不再授实现写入 |
+| `openspec/specs/verification/spec.md` | PM | A9限定同步已完成，临时写权收回；后续变更另授 |
 | `docs/team/tasks/**`、`docs/team/BOARD.md`、`docs/team/ROADMAP.md`、`docs/team/DECISIONS.md`、`docs/team/OWNERSHIP.md` | PM | 任务书与看板 |
 | `skills/teamsmith/scripts/**`、`extension/**`、`panel/**`、`SKILL.md`、`references/**`、`templates/**` | apply 阶段任务书**明授**的 agent（默认 PM） | 实现；未获授权 → `BLOCKED:` 交回 PM |
 | `.pi/**`、`AGENTS.md`、`README.md`、`docs/**`（除上面列出的） | PM | 团队协议与配置 |
