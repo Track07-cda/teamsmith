@@ -1,6 +1,6 @@
 # teamsmith 0.4.7 · 发布接受记录
 
-状态：实质验证通过，待本地标签核对与公开发布授权。尚未推送main/标签、暂存或发布npm。
+状态：本地标签已通过最终独立验证，用户已授权公开发布；main、dev与v0.4.7已推送，npm已暂存，等待用户网页2FA批准。暂存不等于正式发布。
 
 ## 验证与边界
 
@@ -29,4 +29,12 @@
 
 P457模型路由测试提速仍在独立任务分支，不进入0.4.7。最终发布源代码须与已验证165119c7一致，后续仅接受记录与账本更新；本地标签检查由同一验证者完成，不再跑长测试。
 
-公开步骤仍需要用户分别授权：`git push public main v0.4.7`；`npm stage publish --access public`（用户网页2FA批准后才正式发布）。不使用--tags、不移动已推出标签、不自动全局升级或操作其他项目。
+用户于2026-11-16明确回复“发布”，授权公开推送与npm暂存。实际执行 `git push public main v0.4.7`，随后同步dev；远端main/dev为fdd3247a451eeeec37985af73d2267b74790058b，标签对象e2e75cfe07e611eeab1d3c75cba719d1176fe4e6，解引用为同一fdd3247a。没有使用--tags或移动标签，没有自动全局升级或操作其他项目。
+
+## 外部执行收据（2026-11-16）
+
+- 公开CI已确实启动：push run `43810623157`，来源fdd3247a；写本记录时四个分片运行中，尚不称通过。链接：https://github.com/Track07-cda/teamsmith/actions/runs/43810623157 。不是额外手动触发或重试。
+- npm实际暂存的是此前三路线安装已验证的原tgz，不从当前未提交工作区重新打包。命令为 `npm stage publish <已验证tgz> --access public --tag latest --registry=https://registry.npmjs.org`，退出0。
+- 暂存id：`9377c695-2b86-4ea2-a9a8-243056a6c01c`。npm回执为 `teamsmith@0.4.7`、286文件、shasum `ba087e0a6e5b6f033bde2577c3652d6f89847d30`，与验证包相同；实际上传原tgz的SHA-256为 `7fad61cf52e706fc7cff9af93215d69df2066569c36a66f6855ac1eb32908a4a`。
+- npm正式版在暂存前读取为0.4.6；需用户网页2FA批准后再核正式版本、dist-tags和实际下载字节，不预先写成发布完成。
+- 原始暂存回执保存在被忽略的 `.pi/team/state/release-0.4.7/npm-stage.log`；认证只间接注入调用进程，临时npmrc只含环境变量引用且已清理，无凭据写入本仓或日志。

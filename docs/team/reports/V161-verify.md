@@ -1,11 +1,11 @@
-代码可发布：合并提交 `165119c7` 已由同一 verify 独立复核，两项实际发布阻塞均关闭。发布步骤尚未完成：预 tag 检查为 16 通过 / 2 失败 / 1 安装跳过，不能记为整条检查全绿；实际安装沿用同字节候选的三路线通过证据。
+可发布：本地 `v0.4.7` 固定 `fdd3247a`，最终核对为 18 通过 / 0 失败 / 1 安装跳过、rc=0，标签两项已转绿；实际安装沿用与标签全部 286 个包文件同字节的候选三路线通过证据。外部 main/tag/npm 发布尚未授权，本任务未执行。
 
 # V161 · 0.4.7 最终发布验证
 
-agent: verify   status: PASS (merged revision; pre-tag scope)   time: 2026-11-16T02:06:24Z
+agent: verify   status: PASS (local v0.4.7; authorized combined evidence)   time: 2026-11-16T02:19:58Z
 branch: `task/V161-release-047-final`   PR/MR: -
 
-## 验证范围与已核对的证据
+## 原冻结提交 222458cd 的范围与已核对证据
 
 按 PM 于 2026-11-13 更新的 V161 任务书，本次采用用户已授权的组合证据：原完整一阶结果、V159/V160 独立修复复验、本轮新的完整元套件记录；不再运行第二轮完整一阶，不重复 67/68 或 0e/36/40 定点检查。最终提交没有一次重新执行的完整一阶结果，不把 `team review --no-gates` 作为测试通过证据。
 
@@ -64,7 +64,7 @@ branch: `task/V161-release-047-final`   PR/MR: -
 
 中央 `history.tsv` 原生追加的行、日志头尾和逐段账目一致；没有手工改 history，也没用 `--judge` 生成记录。原始日志副本 `meta-full.log` SHA-256 为 `e256993673a0cbf6bc9f86c18ebfa4acdd80af205abcdfe737caa46d5d765dfc`。运行后再次逐文件读取冻结检出，与开跑前清单完全一致（HEAD、3545 个文件哈希、空 status、0 个未跟踪文件），见 `frozen-after-meta.json`。
 
-## 当前冻结提交短检查
+## 原冻结提交 222458cd 的短检查
 
 2026-11-16 本席位作业 `v161-short-final` 完成，15.9s、rc=0；逐条结果：
 
@@ -78,7 +78,7 @@ branch: `task/V161-release-047-final`   PR/MR: -
 
 14d 实际读到 `2026-11-13T08:07:03Z` GREEN（程序显示距今 2 天 ≤7 天），7 列记录、判据 `c715864b`、总时长 7841s 与 10 段均与日志对应。原一阶的第二条失败已通过这次真实读取关闭。该选段未跑的 136 个键保存在 `select-14d.log` 尾部，不把短检查当成全量。中央 `REL-0.4.7.md` 是工具生成的人工检查入口记录，**SKIPPED 不是测试失败，也不是全量 PASS**；它的默认“报告缺失”提示针对不存在的 REL 报告命名，实际报告为本 V161 文件。
 
-## 版本、打包与真实安装
+## 原冻结提交 222458cd 的版本、打包与真实安装
 
 本席位作业 `v161-release-install` 于 2026-11-16 完成（24.9s）。各命令退出码单独记录，批次 exit=0 **不代表**发布检查通过：
 
@@ -122,16 +122,16 @@ distrobox-host-exec podman run --rm --pid=host --cgroups=enabled --userns=keep-i
 
 | Path | What |
 |---|---|
-| `docs/team/reports/V161-verify.md` | 原冻结失败、P456 候选独立补验与合并提交复核报告；两项实质问题已关闭，保留预 tag 失败与全部执行边界 |
+| `docs/team/reports/V161-verify.md` | 原冻结、候选、合并与本地标签最终核对报告；原始失败保留，当前标签检查 rc=0，安装引用同字节实测证据 |
 | `docs/team/reports/V161-verify/` | 本工作树忽略的原始证据目录：冻结清单、原一阶/独立修复日志副本、来源 SHA-256、文件同一性记录、本轮日志 |
 
 ## OpenSpec assessment
 
-N/A — 本任务 `change: -`、`anchor: none (infra)`，只做发布验证，不写规格或 delta。当前冻结提交上已实际执行 OpenSpec 1.16.0 普通 `openspec validate --all`，20/0、rc=0，不是引用 V159/V160 的结果。未运行全仓 strict。
+N/A — 本任务 `change: -`、`anchor: none (infra)`，只做发布验证，不写规格或 delta。原冻结提交 222458cd 上已实际执行 OpenSpec 1.16.0 普通 `openspec validate --all`，20/0、rc=0，不是引用 V159/V160 的结果。合并版与最终标签为 21/0，命令与新增规划项见后文；各轮均未运行全仓 strict。
 
 ## CRITICAL
 
-受验合并提交 `165119c7` 未发现未解决的 CRITICAL；以下 C1/C2 是原 `222458cd` 的历史发现，原始 rc=1 和日志均保留。它们已由 P456 候选的独立补验、合并提交同一性与实际短检查关闭，具体结果见报告末两节。
+受验本地标签 `v0.4.7` / `fdd3247a` 未发现未解决的 CRITICAL；以下 C1/C2 是原 `222458cd` 的历史发现，原始 rc=1 和日志均保留。它们已由 P456 候选、合并提交、本地标签的分阶段独立证据关闭，具体结果见报告末三节。
 
 ### C1 · 原公开来源文件包含真实家目录、用户名和项目名（合并复核已关闭）
 
@@ -150,7 +150,7 @@ release-check 的公开面扫描命中 4 个类别/名单项：`[home]`、`[user
 ## WARNING
 
 - 最终提交不再运行一次完整一阶，按 D244 用户已授权的组合证据方式验收；原完整一阶的 5139/2 保留原始结果，不改写成全绿。
-- 未打 v0.4.7 tag 的两条失败属预期未完成步骤，原样保留：`最新 tag（v0.4.6）≠ package.json（0.4.7）`；原 `222458cd` 的 `HEAD 领先最新 tag v0.4.6 262 个提交`，候选为 `281 个提交`，合并提交为 `285 个提交`。原 26/4/0、候选 28/2/0、合并后显式跳过安装的 16/2/1 均保留，不能将 release-check rc=1 写成 PASS。
+- 发布工具仍提示 29 个旧 tag 不在受验 HEAD 历史上，见 `tag-final/release-check-skip-install.log`。当前 v0.4.7 检查通过，但发布时不能使用 `git push --tags`；外部动作获授权后也只处理本次单个 tag，本任务未删除或推送旧 tag。
 - version --check 的 0.4.7 内容正确，但私有 HOME 下提示继承 TEAM_SESSION 与目录推导身份不同，继承值被忽略；它不是共享 PM 已运行 0.4.7 的证据。按工具提示调用 reload_skills，工具返回当前上下文不能排队 follow-up、需手动 `/teamsmith-reload`；未重启或改动真实 PM，未升级全局技能。
 
 ## SUGGESTION
@@ -159,13 +159,13 @@ None；本轮不额外扩大范围。
 
 ## Final assessment
 
-- Counts: CRITICAL 0 · WARNING 3 · SUGGESTION 0（针对受验合并提交 `165119c7`）。
-- Readiness: **合并复核 PASS，代码可进入发布流程；未执行发布操作，不宣称预 tag 检查全绿**。原一阶两条失败由既有独立修复证据与元记录实读闭合；C1/C2 由候选独立行为/安装检查及合并后的同一性、真实公开扫描、不变量、80 份恢复核验关闭。中央 `P456.md` 已更新至合并 SHA，仍保留工具的 SKIPPED/gates none；执行证据是本报告末两节的各命令及原始日志，不把工具记录改成全量 PASS。
+- Counts: CRITICAL 0 · WARNING 3 · SUGGESTION 0（针对受验本地标签 `v0.4.7` / `fdd3247a`）。
+- Readiness: **PASS，可发布；发布动作仍须授权**。原一阶两条失败、C1/C2 已由分阶段实际证据闭合；最终标签检查 18/0/SKIP1、rc=0，三路线安装由 286/286 同字节候选真实结果覆盖。中央 `P456.md` 仍是合并 SHA 的 SKIPPED/gates none，不把它改成全量 PASS；本报告各阶段的真实命令/日志才是执行证据。
 - Unverified applicable checks and reasons:
   - 按 D244，没有在 `222458cd` 上再跑一次完整一阶；原一阶 19 条跳过仍按原原因保留，不宣称全部产品场景实跑。14d 本轮仅运行 5/141 段，未跑 136 键逐名列于 `select-14d.log` 尾部；67/68 与 0e/36/40 只审已有独立记录，没有重跑。
-  - 合并提交未重跑窄 26 项、三路线安装、元套件或性能：按任务书避免重复；代码/AGENTS 与候选一致，实际候选包 286/286 文件与合并检出同字节，复用本报告已有真实执行证据。合并后的 `--skip-install` 明确跳过 1 项，不把它记作本轮执行安装。
-  - 未做全仓 strict、夜间测试或真实全局升级；未建/推 tag、推 main、暂存或发布 npm。这些均非本任务授权动作，不写成已完成。
-- 原冻结检出 HEAD、3545 文件哈希与状态不变；候选检出 3474 文件、合并检出 3487 文件均与各自开跑前同哈希，未跟踪/忽略产物 0。见 `frozen-final.json`、`p456/snapshot-*.json`、`p456-merged/snapshot-*.json`。
+  - 合并提交与最终标签未重跑窄 26 项、三路线安装、元套件或性能：按任务书避免重复。代码/AGENTS 与已测合并提交一致，实际候选包 286/286 文件与标签检出同字节；复用已有真实执行证据。最终 `--skip-install` 明确跳过 1 项，不把它记作标签轮重新执行安装。
+  - 未做全仓 strict、夜间测试或真实全局升级；PM 已创建仅本地的 v0.4.7，本席位没有建/改 tag。未推 main/tag、暂存或发布 npm，未将这些外部步骤写成已完成。
+- 原冻结检出 3545 文件、候选 3474 文件、合并 3487 文件、最终标签 3491 文件均与各自开跑前同哈希、状态干净，未跟踪/忽略产物 0。最终轮还核对标签对象与解引用提交不变。见 `frozen-final.json`、各轮 `snapshot-*.json`。
 
 ## Verification evidence
 
@@ -323,4 +323,38 @@ rc=1
 
 ### 最终交付边界
 
-V161 的授权验证范围已完成，结论绑定 `165119c7` 及本报告列出的 D244 组合证据，不声称最终提交上一次完整一阶全绿。原 meta GREEN 仍为 `2026-11-13T08:07:03Z` / `222458cd` / 判据 `c715864b`，没有新造记录或改 history。是否进入发布步骤由 PM/用户决定；尚未建/推 v0.4.7 tag、推 main、暂存/发布 npm 或操作共享安装。由 PM 接收真实证据后更新看板与关闭任务。
+本阶段结论绑定 `165119c7` 及 D244 组合证据；当时标签尚未创建，原始 16/2/1、rc=1 保留。其后 PM 创建了仅本地的 v0.4.7，再由同一 verify 做以下最终标签核对，不改写历史失败、不重跑长套。原 meta GREEN 仍为 `2026-11-13T08:07:03Z` / `222458cd` / 判据 `c715864b`，没有新造记录或改 history。
+
+## 本地 v0.4.7 最终核对 · PASS
+
+PM 创建的是 annotated tag，实际标签对象 `e2e75cfe07e611eeab1d3c75cba719d1176fe4e6`，解引用提交 `fdd3247a451eeeec37985af73d2267b74790058b`；独立检出 `/var/tmp/rel47-tag-final` 的 HEAD 与它完全相同。没有由 verify 创建、移动或删除标签。
+
+与已独立接受的 `165119c7` 比较，仅 8 个账本路径变化；773 个非账本路径的 Git mode/type/blob 相同，所有产品和 AGENTS 不变。另直接打开此前实际验证安装的候选 tgz，全部 286/286 个文件与标签检出同字节；原包 SHA-256 仍为 `7fad61cf52e706fc7cff9af93215d69df2066569c36a66f6855ac1eb32908a4a`。完整收据为 `tag-final/tag-source-identity.json`，没有重跑安装或另造包。
+
+本席位作业 `v161-tag-final` 已收割，作业时长 14.7s、rc=0；逐命令日志时间为 2026-11-16T02:18:38Z—02:18:45Z：
+
+| 实际命令 | 结果 | rc |
+|---|---|---:|
+| `git rev-parse refs/tags/v0.4.7` / `git rev-parse 'v0.4.7^{commit}'`，并与独立 HEAD 比较 | 标签对象与提交如上，标签确实指向受验 HEAD | 0 |
+| 产品 Git 对象与实际候选 tgz 文件逐一比较 | 与 `165119c7` 同源，实际包文件 286/286 相同 | 0 |
+| `openspec --version` / `openspec validate --all` | 1.16.0 / 21 passed、0 failed，普通结构检查 | 0 / 0 |
+| `bash docs/team/tools/publish-public.sh --names-file "$NAMES_FILE"` | 扫 3491 文件、13 形状、8 名单项，0 命中 | 0 |
+| `bash skills/teamsmith/tests/ledger-ban.sh --names-file "$NAMES_FILE"` | 2718 文件、hits=0、names=ok | 0 |
+| `bash skills/teamsmith/scripts/team version --check` | 0.4.7 一致；会话刷新提示同前，无全局升级 | 0 |
+| `bash docs/team/tools/release-check.sh --skip-install --names-file "$NAMES_FILE"` | **18 通过 / 0 失败 / 1 跳过** | **0** |
+| 前后逐文件快照与标签对象/提交核对 | 3491 文件同哈希，状态干净，未跟踪/忽略产物 0，标签未变 | 0 |
+
+最终真实输出包含：
+
+```text
+✓ 最新 tag v0.4.7 = package.json（0.4.7）
+✓ tag v0.4.7 是 HEAD 的祖先（历史没被改写错位）
+✓ HEAD 就在 v0.4.7 上（发布对象唯一）
+! 安装路线（--skip-install）（跳过，不算通过）
+通过 18 · 失败 0 · 跳过 1
+rc=0
+```
+
+原预 tag 两条失败现在已实际转绿，不再是未完成步骤。原 `26/4/0`、候选 `28/2/0`、合并版 `16/2/1` 的 rc=1 都保留在各自原始日志；最新 `18/0/1` 只表示本次明确跳过安装后的命令通过，不伪称安装重跑或一次完整全量通过。安装、行为、元套件、自测和参考性能均按授权沿用前述真实证据，D244 的组合边界不变。
+
+最终结论绑定 **`v0.4.7` / `fdd3247a`**。原始日志和逐命令 rc 保存在 `tag-final/`，所有证据总清单为 `MANIFEST.sha256`。本任务只完成本地验证；未推 main/tag、未暂存或发布 npm、未访问认证文件、未改共享安装或真实配置。PM/用户未授权前不得执行外部发布，由 PM 接收本报告后更新看板与关闭 V161。
