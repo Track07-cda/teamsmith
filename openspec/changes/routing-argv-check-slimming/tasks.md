@@ -1,6 +1,6 @@
 # 实施清单
 
-本清单属于 `routing-argv-check-slimming`，尚未授权执行；全部框保持未勾。一个 apply 批次，由非提案作者实施；独立 verify 由非实现者承担。规格定位均为 `verification#A gate that cannot judge says so` 下本批具名场景，不创建第二份需求清单。
+本清单属于 `routing-argv-check-slimming`。授权实施及独立验证均已完成，最终证据见 P457/V163 的报告与 PM 接受记录。一个 apply 批次，由非提案作者实施；独立 verify 由非实现者承担。规格定位均为 `verification#A gate that cannot judge says so` 下本批具名场景，不创建第二份需求清单。
 
 ## 1. 两个短 argv 入口
 
@@ -17,7 +17,7 @@
 
 - [x] 3.1 冻结最终可执行字节后，后台执行一次 `TEAM_META=1 TEAM_SMOKE_FAST=0 bash skills/teamsmith/tests/smoke.sh --select 61b --keep </dev/null`，保留实际日志及 revision；核首个正常 CORE（含原真实 worker/PM 调用）、全部 31 条变异、两条同副本恢复以及最终父级 RESULT/进程退出。按实际新旧清单解释计数，不固定 203 或目标秒数；不另跑相同全分组作重复交付，也不把本次选段称 full smoke。（场景：Only the two routing boundary repeats and original-tree second CORE retire；Routing evidence reports actual scope instead of padding totals）
 - [x] 3.2 执行 `openspec validate routing-argv-check-slimming --type change --strict`、`bash skills/teamsmith/tests/spec-refs.sh --check`、`bash skills/teamsmith/tests/section-select.sh --check`、`bash skills/teamsmith/tests/section-guard.sh --loop-check`、ledger-ban 与 diff-check，报告列真实结果及未测范围；不得为账本补提交再跑小时级矩阵。（场景：Routing evidence reports actual scope instead of padding totals；既有 internal coverage 场景的非退休部分）
-- [ ] 3.3 非实现者核对固定候选的差异、各场景/计数、原始日志，独立跑两个短入口和有区分力的父级接线反例，完成 OpenSpec assessment；长矩阵只在实际差异/缺证据使既有完整集成结果不能复用时补跑并说明原因。合并后同一 verifier 固定合并 SHA，核执行文件同一性与索引/关键正常调用点并补适用短检查；有行为差异按差异补验，不把先前 receipt 改写为本次执行。（场景：Routing evidence reports actual scope instead of padding totals；沿用独立及 merged-revision verification 的既有要求）
+- [x] 3.3 非实现者核对固定候选的差异、各场景/计数、原始日志，独立跑两个短入口和有区分力的父级接线反例，完成 OpenSpec assessment；长矩阵只在实际差异/缺证据使既有完整集成结果不能复用时补跑并说明原因。合并后同一 verifier 固定合并 SHA，核执行文件同一性与索引/关键正常调用点并补适用短检查；有行为差异按差异补验，不把先前 receipt 改写为本次执行。（场景：Routing evidence reports actual scope instead of padding totals；沿用独立及 merged-revision verification 的既有要求）
 
 ## Workflow follow-up
 
