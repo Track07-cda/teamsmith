@@ -5,8 +5,7 @@ agent: dev
 category: code
 phase: opsx-apply
 change: -
-specs: verification
-anchor: openspec/specs/verification/spec.md#the-record-states-what-was-verified
+specs: verification#The record states what was verified
 deltas: -
 branch: task/P459-release-ci-fixes
 ---
