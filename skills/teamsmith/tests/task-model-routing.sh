@@ -15,7 +15,7 @@ while [ $# -gt 0 ]; do
   case "$1" in --select) SELECT="${2:?}"; shift 2 ;; --flip) SELECT=flip; shift ;; *) printf 'unknown option: %s\n' "$1"; exit 2 ;; esac
  done
 for group in ${SELECT//,/ }; do
-  case "$group" in policy|machine|config|upgrade|dispatch|resume|transaction|limits|preview|sid-readers|pm|boundary|init|heal|adopt|updatecheck|flip) ;; *) printf 'unknown group: %s\n' "$group"; exit 2 ;; esac
+  case "$group" in policy|machine|config|upgrade|dispatch|resume|transaction|limits|preview|sid-readers|pm|boundary|init|heal|adopt|updatecheck|argv-worker|argv-pm|flip) ;; *) printf 'unknown group: %s\n' "$group"; exit 2 ;; esac
  done
 while IFS='=' read -r k _; do case "$k" in TEAM_*) unset "$k" 2>/dev/null || true ;; esac; done < <(env)
 TMP="$(tmp_root_create task-model-routing)" || exit 3
@@ -46,7 +46,18 @@ contains() { [[ "$1" == *"$2"* ]]; }
 sha() { if [ -f "$1" ]; then sha256sum "$1" | cut -d' ' -f1; else printf absent; fi; }
 CLI="$TREE/skills/teamsmith/scripts/team"
 SKILL="$TREE/skills/teamsmith"
-REPO="$TMP/repo"; mkdir -p "$REPO/.pi/team" "$REPO/docs/team/tasks" "$REPO/docs/team/threads"
+REPO="$TMP/repo"; STATE="$REPO/.pi/team/state"; CONFIG="$REPO/.pi/team/config.sh"
+if has argv-worker || has argv-pm; then
+  for group in ${SELECT//,/ }; do
+    case "$group" in argv-worker|argv-pm) ;; *) printf 'argv samples cannot combine with full groups: %s\n' "$group"; exit 2 ;; esac
+  done
+  routing_argv_setup || { printf 'ERROR argv-setup failed\n'; exit 3; }
+  if has argv-worker; then routing_worker_argv_probe; fi
+  if has argv-pm; then routing_pm_argv_probes; fi
+  printf '\nRESULT pass=%s fail=%s selected=%s\n' "$PASS" "$FAIL" "$SELECT"
+  [ "$FAIL" = 0 ]; exit $?
+fi
+mkdir -p "$REPO/.pi/team" "$REPO/docs/team/tasks" "$REPO/docs/team/threads"
 git -C "$REPO" init -q -b main
 git -C "$REPO" config user.name fixture; git -C "$REPO" config user.email fixture@example.invalid
 printf '# fixture\n' > "$REPO/README.md"; git -C "$REPO" add README.md; git -C "$REPO" commit -qm fixture
@@ -1406,7 +1417,8 @@ if has flip; then
     printf 'FAIL flip-%s-arm-budget 臂 %s 用满臂预算 %ss（实跑 %ss）仍未出结果 —— 这是「它没跑完」，不是「它红了」\n' \
       "$1" "$1" "$FLIP_ARM_BUDGET" "$2"
   }
-  # One green baseline and one green restoration of the whole slice; each red arm has its own copy.
+  # One full normal baseline; each red arm has its own copy. The two resplit
+  # arms also observe healthy/restored argv on that copy, not a second source-tree CORE.
   flip_run() {
     local tag="$1" tree="$2" groups="$3" rc=0 started ended
     started="$(date +%s)"
@@ -1432,7 +1444,9 @@ if has flip; then
         latest-shell|latest-monitor) groups=sid-readers ;;
         pm-fallback) groups=pm ;;
         pm-publication) groups=dispatch,pm ;;
-        extra-shadow|template-shadow|template-unbound|template-roles|literal-shell-expansion|pm-literal-resplit|worker-literal-resplit) groups=boundary ;;
+        extra-shadow|template-shadow|template-unbound|template-roles|literal-shell-expansion) groups=boundary ;;
+        pm-literal-resplit) groups=argv-pm ;;
+        worker-literal-resplit) groups=argv-worker ;;
         monitor-record-drift) groups=sid-readers ;;
         init-legacy-proceeds|template-retired-key) groups=init ;;
         migration-row-removed|no-backup|no-shape-number) groups=heal ;;
@@ -1448,6 +1462,10 @@ if has flip; then
         [ ! -d "$SKILL/$source_dir" ] || cp -a "$SKILL/$source_dir" "$scratch/skills/teamsmith/"
       done
       before="$(find "$scratch/skills/teamsmith/scripts" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
+      case "$mutation" in pm-literal-resplit|worker-literal-resplit)
+        flip_run "$mutation-healthy" "$scratch" "$groups"
+        check "flip-$mutation-healthy" eq "$FLIP_RC" 0 ;;
+      esac
       python3 "$here/lib/model-routing-flips.py" "$scratch" "$mutation" > "$TMP/mutation-$mutation.json"
       check "flip-$mutation-target-matched" eq "$?" 0
       check "flip-$mutation-shape-valid" bash -c 'for file in "$1"/scripts/lib/*.sh; do bash -n "$file" || exit; done; node --check "$1/scripts/monitor.mjs"' _ "$scratch/skills/teamsmith"
@@ -1529,9 +1547,11 @@ if has flip; then
       restored="$(find "$scratch/skills/teamsmith/scripts" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
       check "flip-$mutation-source-restored" eq "$restored" "$before"
       printf 'CONTROL %s source_before=%s source_restored=%s\n' "$mutation" "$before" "$restored"
+      case "$mutation" in pm-literal-resplit|worker-literal-resplit)
+        flip_run "$mutation-restored" "$scratch" "$groups"
+        check "flip-$mutation-restored" eq "$FLIP_RC" 0 ;;
+      esac
     done
-    flip_run restored "$TREE" "$CORE"
-    check flip-restored-all-green eq "$FLIP_RC" 0
   fi
 fi
 printf '\nRESULT pass=%s fail=%s selected=%s\n' "$PASS" "$FAIL" "$SELECT"

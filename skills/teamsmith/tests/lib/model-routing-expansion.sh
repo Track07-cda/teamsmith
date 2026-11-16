@@ -1,6 +1,89 @@
 #!/usr/bin/env bash
 # F3: run real shell argv against files that turn an innocent-looking token into
 # an owned selector. Only the routing front door's private repo/HOME/socket is used.
+
+# Short resplit samples branch before the full fixture's git/process preparation.
+# Keep the PM guard and metadata publisher/loader real, with a private legal policy.
+routing_argv_setup() {
+  mkdir -p "$STATE" || return 1
+  printf "TEAM_TASK_MODELS='routine=vendor/routine'\nTEAM_PM_MODEL='vendor/pm:high'\n" > "$CONFIG" || return 1
+  printf 'identity decoy\n' > "$REPO/--model=wrong:low" || return 1
+  export TEAM_ROOT="$REPO" TEAM_MAIN_ROOT="$REPO" TEAM_STATE_DIR="$STATE" TEAM_CONFIG="$CONFIG" TEAM_SKILL_DIR="$SKILL"
+  TEAM_CLI=team; TEAM_PM_WINDOW=pm
+  source "$SKILL/scripts/lib/common.sh" || return 1
+  source "$SKILL/scripts/lib/cmd-agents.sh" || return 1
+  source "$CONFIG" || return 1
+  TEAM_EXTRA_PI_ARGS=''; TEAM_PM_CMD=''; TEAM_PM_SESSION_ID=''
+  TEAM_PM_EXTRA_PI_ARGS=''; TEAM_PM_RESUME_ARGS=''
+  cd "$REPO" || return 1
+}
+
+routing_worker_argv_probe() {
+  local rendered rc=0
+  TEAM_EXTRA_PI_ARGS=' --label "two words" "--mod*" "{safe,words}" "~/routing-note"'
+  TEAM_EXTRA_PI_ARGS+=" 'one\\two'"
+  rendered="$(team_pi_args vendor/deep/model:high)" || rc=$?
+  check worker-argv-renderer eq "$rc" 0
+  [ "$rc" = 0 ] || return 1
+  bash --noprofile --norc -c "printf '%s\\0' $rendered" > "$TMP/worker-argv.nul"; rc=$?
+  check worker-argv-shell eq "$rc" 0
+  [ "$rc" = 0 ] || return 1
+  check worker-expansion-literal-argv:extra python3 - "$TMP/worker-argv.nul" <<'PY'
+import json, pathlib, sys
+raw = pathlib.Path(sys.argv[1]).read_bytes()
+assert raw.endswith(b'\0'), raw
+argv = raw[:-1].decode().split('\0')
+print('ARGV worker-extra ' + json.dumps(argv))
+assert argv[:4] == ['--provider', 'vendor', '--model', 'deep/model:high'], argv
+assert argv.count('--provider') == argv.count('--model') == 1, argv
+assert argv[argv.index('--label'):] == ['--label', 'two words', '--mod*', '{safe,words}', '~/routing-note', r'one\two'], argv
+assert '--model=wrong:low' not in argv, argv
+PY
+}
+
+routing_pm_argv_probes() {
+  local field rendered rc metadata_before
+  TEAM_PM_FRESH_LAUNCH=0
+  TEAM_PM_RESUME_ARGS=" --session-id 'fixture-literal-session'"
+  team_pm_metadata_publish fixture-argv || { check pm-argv-metadata-publish eq 1 0; return 1; }
+  team_pm_metadata_load || { check pm-argv-metadata-load eq 1 0; return 1; }
+  metadata_before="$(sha "$STATE/pm-launch.env")"
+  for field in extra resume; do
+    if [ "$field" = extra ]; then
+      TEAM_PM_FRESH_LAUNCH=1; TEAM_PM_RESUME_ARGS=''
+      TEAM_PM_EXTRA_PI_ARGS=' --label "two words" "--mod*" "{safe,words}" "~/routing-note"'
+      TEAM_PM_EXTRA_PI_ARGS+=" 'one\\two'"
+    else
+      TEAM_PM_FRESH_LAUNCH=0; TEAM_PM_EXTRA_PI_ARGS=''
+      TEAM_PM_RESUME_ARGS=" --session-id 'fixture-literal-session'"
+    fi
+    rc=0; rendered="$(team_pm_pi_args)" || rc=$?
+    check "pm-argv-renderer:$field" eq "$rc" 0
+    [ "$rc" = 0 ] || continue
+    bash --noprofile --norc -c "printf '%s\\0' $rendered" > "$TMP/pm-argv-$field.nul"; rc=$?
+    check "pm-argv-shell:$field" eq "$rc" 0
+    [ "$rc" = 0 ] || continue
+    local name=pm-expansion-literal-argv:extra
+    [ "$field" != resume ] || name=pm-resume-literal-argv:builtin
+    check "$name" python3 - "$TMP/pm-argv-$field.nul" "$field" <<'PY'
+import json, pathlib, sys
+raw = pathlib.Path(sys.argv[1]).read_bytes()
+assert raw.endswith(b'\0'), raw
+argv = raw[:-1].decode().split('\0')
+print('ARGV pm-' + sys.argv[2] + ' ' + json.dumps(argv))
+assert argv[:4] == ['--provider', 'vendor', '--model', 'pm:high'], argv
+assert argv.count('--provider') == argv.count('--model') == 1, argv
+assert not any(x in argv for x in ['-c', '--continue', '--model=wrong:low']), argv
+if sys.argv[2] == 'extra':
+    assert argv[argv.index('--label'):] == ['--label', 'two words', '--mod*', '{safe,words}', '~/routing-note', r'one\two'], argv
+    assert '--session-id' not in argv, argv
+else:
+    assert argv.count('--session-id') == 1 and argv[argv.index('--session-id'):] == ['--session-id', 'fixture-literal-session'], argv
+PY
+  done
+  check pm-argv-metadata-unchanged eq "$(sha "$STATE/pm-launch.env")" "$metadata_before"
+}
+
 routing_expansion_probes() { # worker|pm
   local seat="$1" field tag fragment mode before sid='' previous_map
   previous_map="$(team_config_file_value "$CONFIG" TEAM_TASK_MODELS)"
