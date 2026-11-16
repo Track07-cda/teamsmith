@@ -1,9 +1,15 @@
 # V168 · 帮助页单次生成方案的独立审阅
 
+**最终结论：ACCEPTED，仅限规划。** 修订 `78fef9689dfe` 已准确补齐 R1 的日志、源版本、help 132 局部成功 / 全轮 rc=1 及 V167 消费适用边界；本轮只看两文件差异，未重跑检查或行为。当前 **CRITICAL 0 · WARNING 0 · SUGGESTION 0**。四项未来任务仍为 0/4，不代表行为通过、获准 apply 或归档就绪；交 PM 正式 proposal review。
+
+agent: verify   status: DELIVERED（规划 ACCEPTED，R1 已关闭）   time: 2026-11-16T11:29:11Z
+branch: `task/V168-help-route-proposal-review`   PR/MR: -（本地）
+
+## 第一轮记录（ea6e9534，保留原 REWORK）
+
 **结论：REWORK，仅补一处旧证据引用。** 47 个命令的第二次相同 canonical 调用确为唯一退休对象，单文件实现与一次正常 route / 短反例 / 合并后短补验的分工成立；design 还须把旧证据绑定到实际日志、源版本与局部成功范围（R1）。本 change 严格结构校验及本报告暂存后检查均通过；不要求新增测试或重跑完整帮助，不是行为通过或归档就绪结论。
 
-agent: verify   status: DELIVERED（规划 REWORK，一处文字返修）   time: 2026-11-16T11:22:48Z
-branch: `task/V168-help-route-proposal-review`   PR/MR: -（本地）
+第一轮交付时间为 2026-11-16T11:22:48Z；以下至第一次 Suggested next steps 是原候选的历史判断，原提交 `61ade73d` / `8f598d30` 保留。当前结论见开头及末节 R1 差异复看，不将历史 WARNING 误作仍未解决。
 
 ## Deliverables
 
@@ -128,3 +134,38 @@ git diff --cached --check
 ## Suggested next steps
 
 PM 收取本轮证据后，请提案者只补 R1 的 design 引用，并以静态差异核对收口；不重开完整方案或行为验证。PM 正式 proposal review 接受前不派 apply。看板与正式 review 由 PM 维护，本席位没有其写权。
+
+## R1 差异复看（78fef968，最终 ACCEPTED）
+
+依主检出 V168 brief 的 R1 补充及线程 2026-11-16T11:28:30Z，只读比较实际修订 `78fef9689dfed24f1582b98c41fec7df860aa7b3`；没有采用通知中的占位符。原独立检出 HEAD 仍是 `ea6e9534d440b0b8cf220cf66bcc0b031e24ef48`、状态为空，未切换它。实际写集恰为 design 一段替换及作者报告两行新增，2 文件 / 3 行新增 / 1 行删除；proposal、delta、tasks、元数据及全部源/输入不变，不重开已接受的五项判断。
+
+`design.md:83` 对 R1 各事实的修订均与第一轮独立证据一致：
+
+- 原件 `/var/tmp/rel47-first-order.log`、完整 SHA-256 `9ca9986e014307573cf7577ad6572d6a2d5c59f4f6fccd81158ea7b2375d2545`、源提交 `572856a3ae57503396019020f58e8e6abcc08db4` 均绑定正确。
+- 明写全轮 5139 成功 / 2 失败、rc=1，只有 help 子脚本 132 条局部成功；不把全轮或 681 秒当本批成功/收益。
+- 明写 help-surface、manifest、routes、routes-pages 与规划候选 `ea6e9534` 原字节相同；帮助消费者为 1322 字节，排除已删除的配置重复块。
+- 对 cmd-project、cmd-review、cmd-watch、common 的期间差异，明确引用 V167 §7 的逐项消费适用性，不假称产品依赖树全同；未来只改本批比较，相关输入改变才定点补验，仍不默认重跑 51 或其它未改组。
+
+这些字句关闭了唯一 R1，结论由第一轮 REWORK 改为 **ACCEPTED（规划）**，当前 CRITICAL 0 / WARNING 0 / SUGGESTION 0；没有新增建议、实施要求、验证场景或运行次数。作者报告两行只记同一文字修订，没有改变四项未勾选的未来任务，也未把规划通过说成行为通过。
+
+本轮真实只读命令及输出：
+
+```sh
+git -C /var/tmp/p462-review-ea6e9534 rev-parse HEAD 78fef9689dfe
+# ea6e9534d440b0b8cf220cf66bcc0b031e24ef48
+# 78fef9689dfed24f1582b98c41fec7df860aa7b3
+git -C /var/tmp/p462-review-ea6e9534 status --short
+# 空
+git -C /var/tmp/p462-review-ea6e9534 diff --stat ea6e9534..78fef968
+# docs/team/reports/P462-dev2.md                    | 2 ++
+# openspec/changes/help-route-render-once/design.md | 2 +-
+# 2 files changed, 3 insertions(+), 1 deletion(-)
+git -C /var/tmp/p462-review-ea6e9534 diff --unified=3 ea6e9534..78fef968
+# rc=0；实际阅读全文核对上述一段及两行，不执行正文里的命令
+git -C /var/tmp/p462-review-ea6e9534 diff --check ea6e9534..78fef968
+# 无输出，candidate-diff-check rc=0
+git add docs/team/reports/V168-verify.md && git diff --check && git diff --cached --check
+# 无输出，own-report-diff-checks rc=0
+```
+
+沿用第一轮 `v168-proposal-checks` / `v168-final-report-scan` 的真实静态回执；本次按更新 brief 不重跑 strict、ledger-ban、选择器、任何套件或行为，也不重建样本。第一轮所有未验边界继续有效；本段只有必要 diff-check，回执随本次提交留存。PM 下一步可据本报告作正式 proposal review，是否派 apply 由 PM 另行处理；不合并、不推送、不归档。
