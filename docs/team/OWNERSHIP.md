@@ -13,7 +13,8 @@
 | `docs/team/reviews/P465.md`、`docs/team/reviews/P465-verify.log` | PM（V170已接受关闭） | 两阶段实际记录由dev3执行，已接受merged证据；临时工具写权收回 |
 | `docs/team/reviews/P466.md`、`docs/team/reviews/P466-verify.log` | PM（V171已接受关闭） | 两阶段实际记录由verify执行，已接受merged证据；临时工具写权收回 |
 | `openspec/changes/archive/2026-11-16-config-check-execution-dedup/**` | PM（A9已接受） | 已验证7/7原样归档，不再授实现写入 |
-| `openspec/specs/verification/spec.md` | agent:dev2（A11临时） | 只同步clipboard-test-session-reuse已接受的一条需求/六场景，既有Purpose/其它正文不变；冻结交付后归还PM |
+| `openspec/specs/verification/spec.md` | PM（A11已接受） | 已验一条需求/六场景原样同步；临时写权收回 |
+| `openspec/changes/archive/2026-11-16-clipboard-test-session-reuse/**` | PM（A11已接受） | 五工件原样归档，不再授实现写入 |
 | `openspec/changes/archive/2026-11-16-help-route-render-once/**` | PM（A10已接受） | 已验4/4的五文件原样归档，不再授实现写入 |
 | `docs/team/tasks/**`、`docs/team/BOARD.md`、`docs/team/ROADMAP.md`、`docs/team/DECISIONS.md`、`docs/team/OWNERSHIP.md` | PM | 任务书与看板 |
 | `skills/teamsmith/scripts/**`、`extension/**`、`panel/**`、`SKILL.md`、`references/**`、`templates/**` | apply 阶段任务书**明授**的 agent（默认 PM） | 实现；未获授权 → `BLOCKED:` 交回 PM |
