@@ -34,7 +34,9 @@ branch: task/V173-routing-parameter-check-verify
 
 任何失败保存完整原件，明确区分实现缺陷、检查观察或私有驱动搭建；不要自动重跑完整boundary/parent收集现场。真实缺陷BLOCKED给PM，准确列已过/失败/未执行部分，后续只返修相应项；不删断言、不缩超时、不换目录或用无名吞错换绿。
 
-## 阶段B · 等PM提供固定merged
+## 阶段B · 固定merged已提供
+
+PM已接受473bdd61的A证据并合并实施：`28621c5755f7bc7ec1700cd8ecab9b08fb83d5d7`，只读独立检出`/var/tmp/p468-review-merged`已准备。PM的合并差异核对显示整个tests及本change工件与b60de2ab相同；这不替代你自己的merged复核。保持当前模型/SID/任务分支，正式review绑定此merged，从它实际读源码/原生状态，按下述B范围执行。B真实通过即授权精确同步后三项为6/6并提交最终报告，不再停等确认；未通过如实交回，不先勾表。
 
 A真实交付后，PM接受并合并，再提供干净merged检出及SHA。同一verifier正式review绑定该SHA，从merged实际读四执行文件及规划/输入依赖；不能硬编码旧候选目录冒充。字节一致复用A，仅执行一次短`--select parameters`接入及必要结构/报告检查，不重跑正常boundary、五臂parent或调用边样本。若相关字节变化，先交PM收敛对应补验，不自行扩全量。
 
