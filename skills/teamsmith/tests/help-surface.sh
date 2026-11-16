@@ -1293,6 +1293,32 @@ check_invariants() {
 }
 
 # ---------------------------------------------------------------- route
+check_route_command() { # <command> — three current renders, one canonical file for both comparisons
+  local c="$1" canonical_rc long_rc short_rc failed=0
+  local canonical="$tmp/route-canonical.txt" long="$tmp/route-long.txt" short="$tmp/route-short.txt"
+  page en help "$c" >"$canonical"; canonical_rc=$?
+  page en "$c" --help >"$long"; long_rc=$?
+  page en "$c" -h >"$short"; short_rc=$?
+
+  if [ "$canonical_rc" -ne 0 ]; then
+    finding "route: $c 的 help $c 入口失败（rc=$canonical_rc）"; failed=1
+  fi
+  if [ "$long_rc" -ne 0 ]; then
+    finding "route: $c 的 --help 入口失败（rc=$long_rc）"; failed=1
+  fi
+  if [ "$short_rc" -ne 0 ]; then
+    finding "route: $c 的 -h 入口失败（rc=$short_rc）"; failed=1
+  fi
+  # A failed entry's bytes are not a page: compare only pairs that both rendered successfully.
+  if [ "$canonical_rc" -eq 0 ] && [ "$long_rc" -eq 0 ] && ! cmp -s "$canonical" "$long"; then
+    finding "route: $c 的两条入口不逐字节相同（--help）"; failed=1
+  fi
+  if [ "$canonical_rc" -eq 0 ] && [ "$short_rc" -eq 0 ] && ! cmp -s "$canonical" "$short"; then
+    finding "route: $c 的 -h 入口与 help 页不同"; failed=1
+  fi
+  return "$failed"
+}
+
 check_route() {
   section "route · 三级可达、两条入口逐字节相同、未知 token exit 2、无项目可用"
   local rc
@@ -1306,12 +1332,7 @@ check_route() {
   ok "每个分组页都列出命令"
   local c same=0
   for c in "${MG_ORDER[@]}"; do
-    if ! diff -q <(page en help "$c") <(page en "$c" --help) >/dev/null 2>&1; then
-      finding "route: $c 的两条入口不逐字节相同"; same=1
-    fi
-    if ! diff -q <(page en help "$c") <(page en "$c" -h) >/dev/null 2>&1; then
-      finding "route: $c 的 -h 入口与 help 页不同"; same=1
-    fi
+    if ! check_route_command "$c"; then same=1; fi
   done
   [ "$same" = "0" ] && ok "team help <命令> 与 team <命令> --help/-h 逐字节相同（${#MG_ORDER[@]} 个命令）"
   # a page never falls back to the menu

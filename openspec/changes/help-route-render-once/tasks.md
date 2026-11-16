@@ -4,8 +4,8 @@
 
 ## 1. 实现者：最小替换及静态交付
 
-- [ ] 1.1 仅改 `help-surface.sh` 的单命令比较和同文件最小共用函数：三入口 stdout 直接写当次文件、逐入口收 rc、两次原字节比较、同 shell finding/循环消费；退休每命令第二个 canonical 调用，保留原成功行及其它代码。以 `bash -n`、diff 和当前 manifest 静态核账证明 4N→3N、断言未退休，在作者报告记录实际写集；不运行行为样本。（三入口/字节/失败/接线四场景；design Decisions 1–3。）
-- [ ] 1.2 跑本 change 严格校验、`spec-refs.sh --check` 和 `section-select.sh --paths skills/teamsmith/tests/help-surface.sh` 静态登记；核未改 helper/page/manifest/其它组与产品依赖以及 51 的 HS_RC 消费分支，把输入版本、可复用原件身份及未测行为写入报告后冻结。无新段/needs/产品开关，不跑 51/全量/性能。（三入口场景的保留边界及接线场景；design Migration A/B。）
+- [x] 1.1 仅改 `help-surface.sh` 的单命令比较和同文件最小共用函数：三入口 stdout 直接写当次文件、逐入口收 rc、两次原字节比较、同 shell finding/循环消费；退休每命令第二个 canonical 调用，保留原成功行及其它代码。以 `bash -n`、diff 和当前 manifest 静态核账证明 4N→3N、断言未退休，在作者报告记录实际写集；不运行行为样本。（三入口/字节/失败/接线四场景；design Decisions 1–3。）
+- [x] 1.2 跑本 change 严格校验、`spec-refs.sh --check` 和 `section-select.sh --paths skills/teamsmith/tests/help-surface.sh` 静态登记；核未改 helper/page/manifest/其它组与产品依赖以及 51 的 HS_RC 消费分支，把输入版本、可复用原件身份及未测行为写入报告后冻结。无新段/needs/产品开关，不跑 51/全量/性能。（三入口场景的保留边界及接线场景；design Migration A/B。）
 
 ## 2. 非作者：唯一行为批次及合并后短补验
 
