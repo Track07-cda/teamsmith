@@ -57,3 +57,14 @@ bash docs/team/tools/release-check.sh --self-test
 `docs/team/reports/V161-verify.md` 首行给可发布/不可发布、真实命令与 rc、原全量断言/段数/跳过原因与源提交、新元 GREEN 日期及源提交、各修复的独立复验证据、安装与包清单、原始日志和性能读数。明确 D244 授权与“没有在最终提交上再跑一次完整一阶”的边界。按 CRITICAL/WARNING/SUGGESTION/Final assessment 分节，未验证范围如实列出。
 
 不修改实现，不合并，不建/推 tag，不推 main，不暂存/发布 npm。把结果提交到自己的任务分支并通知 PM。任何新失败由 PM 裁决返修，不吞错、不加跳过、不延长超时。
+
+## 2026-11-16 · P456定点补验
+
+原BLOCKED报告edbe3384保留，其后仅因P456作补验，不重跑元套件、完整一阶、14d或参考性能。候选为5eafd5f4，PM独立干净检出 `/var/tmp/p456-review-5eafd5f4`。P456由dev实现，你不是实现者。
+
+- 读取P456源码差异/报告及原始窄测runner，独立执行已有初始化P440/P456子块与28-i3子用例，覆盖自托管、普通项目主检出/worker真实生成命令、--no-skills、受管块外和config/BOARD不变、旧AGENTS生成参数改回则原断言红。复用原断言，不自行扩成完整17/28段；原初始化红侧是替换而非新增永久自证层。新参数表达式必须真实能运行，不以grep文字代替命令可用。
+- 新增功能变化只有AGENTS路径生成；cmd-watch仅注释、28-i3目录名中性化、80份证据取消跟踪，分别核对逻辑不变和主报告仍在。核80份取消跟踪清单与主仓被忽略备份 `.pi/team/state/release-0.4.7/legacy-evidence/manifest.json` 一致，不删除或改写原证据。
+- 在新检出执行公开扫描、ledger-ban、普通OpenSpec、索引自检、版本与release-check（三条安装路线含本次新生成逻辑），不重复release自测（工具未变）。尚未tag的2条失败原样列出，其余必须关闭。只输出前5项的旧日志不能当总清单。
+- 主仓已有80份本地备份；worker曾有未跟踪空的旧change目录，已rmdir而非改spec。独立干净检出不应有这个目录，不把该工作树遗留写成真实规格缺失。
+
+中央额外工具写入例外为 `docs/team/reviews/P456.md` 与 `P456-verify.log`，可以 `team review P456 --dir /var/tmp/p456-review-5eafd5f4 --branch 5eafd5f4 --no-gates` 留真实执行者与候选；no-gates仍不是全量PASS依据。结论写回自己的V161报告并通知PM。候选通过后等待PM合并，再由同一你在PM准备的merged-SHA检出核文件同一性、补适用短检查；不机械重复已完成的大套/安装/性能。不提前勾done。
