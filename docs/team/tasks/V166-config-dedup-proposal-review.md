@@ -32,3 +32,9 @@ branch: task/V166-config-dedup-proposal-review
 这是proposal review，不是实现的opsx-verify，不用默认team review完整门禁来审几份文档。较慢检查后台启动即结束回合，完成通知后收割；不在回合内等待。
 
 报告先给判定，再给每项改变结论的证据、CRITICAL/WARNING/SUGGESTION、最小返修和未验证边界；别把计划中的行为说成已验证。通过只意味着PM可接受规划，不意味着实现/归档就绪。
+
+## R1–R3返修定点复看
+
+新固定候选 `1589612c4ff9`，PM准备新独立检出 `/var/tmp/p460-review-1589612c`；旧5ab4f040检出保留对照。实际Git显示四文件返修和完整已提交报告，工作树干净；不依赖手工通知里的临时tip占位。
+
+只核相对5ab4f040的R1未来验收成本/R2完整与单选语义/R3不破坏项目根创建的负例，确认三项关闭且无附带变更；此前源码结论与11份现状选择计划不重跑、不重开全案。只补本change OpenSpec1.16结构、报告暂存后的ledger/diff短检查，不执行未来的smoke、配置坏腿或setup/缺定义负例。原V166模型/SID/分支续跑，仅更新自己的原报告，保留首轮REWORK事实。

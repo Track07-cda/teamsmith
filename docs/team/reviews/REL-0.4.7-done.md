@@ -1,0 +1,1 @@
+- 2026-11-16T09:31:43Z · `team close REL-0.4.7 --status done` · OK：复验记录 docs/team/reviews/REL-0.4.7.md（判定 PASS）
