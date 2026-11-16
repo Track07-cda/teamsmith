@@ -1267,7 +1267,7 @@ The correctness gate SHALL distinguish a product-only checkout, which deliberate
 
 Only a check whose named prerequisite is one of those deliberately absent internal surfaces SHALL skip on a product-only checkout. Each such attribution MUST print `SKIP（条件不满足）`, the affected check and missing prerequisite, be counted as a skip rather than a pass, and reach the gate's output and per-section/run accounting. Missing product files, unavailable required tools, a failed executed assertion, and corruption of a present internal surface MUST retain their existing failure/degradation rules; the checkout classification MUST NOT swallow them. An executed check's verdict MUST rest on evidence the subject itself carries: when the call's command word is the wrapped command itself (`tmux`), an isolation wrapper defined in one file MUST NOT certify a mutation call made by another file, while a dedicated wrapper name defined alongside the caller MAY keep its directory-level meaning; a check MUST NOT be reported as satisfied on evidence the subject does not have. A run with prerequisite skips and no failures SHALL exit 0, without claiming the skipped checks passed; a real failure alongside skips MUST still exit non-zero.
 
-The same correctness command SHALL run on both shapes, with no second public suite. The product's static checks, skill loading, published-spec validation, container-build checks and every ledger-independent fixture MUST remain eligible exactly as before (including the existing FAST/full and tool-premise rules). A fixture that provisions its own ledger MUST still run in the product-only checkout. For an internal checkout, except for the three route-page control replacements and the reply-observer duplicate-execution retirement specified below, every pre-existing assertion MUST still execute with its original verdict and at least its pre-change per-section pass count under identical run settings; replacing an existing assertion with a new one MUST NOT satisfy that coverage comparison. CI's correctness step MUST retain its blocking failure semantics, and it SHALL run the product floor the way `verification#CI runs the two gates separately and performance does not block` states: a failing applicable product assertion in that step fails the job, and the selection it makes is disclosed in the output tail rather than presented as the full gate.
+The same correctness command SHALL run on both shapes, with no second public suite. The product's static checks, skill loading, published-spec validation, container-build checks and every ledger-independent fixture MUST remain eligible exactly as before (including the existing FAST/full and tool-premise rules). A fixture that provisions its own ledger MUST still run in the product-only checkout. For an internal checkout, except for the three route-page control replacements, the reply-observer duplicate-execution retirement and the routing-argv repeat replacements specified below, every pre-existing assertion MUST still execute with its original verdict and at least its pre-change per-section pass count under identical run settings; replacing an existing assertion with a new one MUST NOT satisfy that coverage comparison. CI's correctness step MUST retain its blocking failure semantics, and it SHALL run the product floor the way `verification#CI runs the two gates separately and performance does not block` states: a failing applicable product assertion in that step fails the job, and the selection it makes is disclosed in the output tail rather than presented as the full gate.
 
 The route-page replacement exception is the three complete nested walks in the route-page controls for a column-zero
 command line, an undeclared command-page usage and an unread group level, as specified by
@@ -1298,6 +1298,28 @@ bounded run or original mutation arm SHALL be retired under that exception. Chil
 be subtracted from parent counters that never included them. The replacement SHALL report its actual checks
 and distinct skipped observation identities, never pad passes to preserve an obsolete raw total. This exception
 does not modify the route-page obligations above or permit a new prerequisite skip.
+
+The routing-argv exception SHALL retire only the complete boundary executions for
+`worker-literal-resplit` and `pm-literal-resplit`, replacing them with actual-shell argv checks, and the
+second complete CORE executed on the unmutated source tree at the end of `--flip`. It SHALL retain the
+first complete normal CORE, including the normal worker/PM literal-argv launch and continuation checks,
+and all other mutation arms. The replacement SHALL preserve the three existing intended-failure identities:
+`worker-expansion-literal-argv:extra`, `pm-expansion-literal-argv:extra` and
+`pm-resume-literal-argv:builtin`. Each modified arm SHALL obtain healthy, mutated and byte-restored results
+on its own copy, with real PM identity validation and legal private configuration/continuation metadata.
+Expected argument values SHALL be fixed independently of the product tokenizer; the observation SHALL be
+arguments actually formed by Bash, not product tokens compared with themselves. An unmet setup or renderer
+error MUST NOT count as the intended argv failure.
+
+This exception deliberately drops unrelated template/role/refusal/PM-transaction observations on those two
+mutated trees and a second independent normal-tree repeatability sample; it does not claim equivalent
+preservation of those incidental observations. Their normal coverage remains in the first CORE and original
+groups. The retired full executions SHALL have no alternate slow entry and no prerequisite skip. Existing
+parent failure accounting SHALL consume child exit codes, intended-failure names and healthy/restored outcomes;
+a sample failure MUST NOT disappear in a helper-only result. Actual replacement assertions SHALL be counted
+where executed, separately from child totals; a retired pass MUST NOT be reported as executed, and no fixed
+global total or net elapsed saving is promised. This exception changes neither the route-page/reply-observer
+exceptions nor normal first-order routing coverage.
 
 #### Scenario: The release export skips only unavailable internal checks
 
@@ -1331,9 +1353,10 @@ does not modify the route-page obligations above or permit a new prerequisite sk
 
 - **GIVEN** pre-change and post-change independent internal checkouts with identical tools and FAST settings
 - **WHEN** `TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh </dev/null` runs in each
-- **THEN** every pre-existing assertion outside the three named route-page replacements and the identified reply-observer retired executions is present in the post-change executed assertion inventory with its original verdict, each unaffected section's pass count is at least its baseline, and no new checkout-prerequisite skip appears
+- **THEN** every pre-existing assertion outside the three named route-page replacements, the identified reply-observer retired executions and the named routing-argv retired executions is present in the post-change executed assertion inventory with its original verdict, each unaffected section's pass count is at least its baseline, and no new checkout-prerequisite skip appears
 - **AND** this FAST run does not produce the route-page replacement evidence; that separate source-attributed baseline, retained non-FAST record/manual undeclared-usage receipt and explicit non-FAST `routes.sh pages` inventory are judged by the named scenario below, without relaxing any retained assertion or count obligation
 - **AND** reply-observer replacement evidence comes from its focused absence sample and normal §62 run, with only the named duplicate executions retired and with parent/child counts kept separate
+- **AND** routing-argv replacement evidence comes from short actual-shell samples and one final complete 61b integration run, with only its named repeats retired; the first CORE's normal real callers remain exercised and no first-order speedup is inferred
 - **AND** a scratch mutation that replaces any retained internal assertion with a prerequisite skip still fails the inventory/count comparison, even if new assertions keep the aggregate pass total unchanged
 
 #### Scenario: Partial internal trees and broken installs remain red
@@ -1389,7 +1412,63 @@ does not modify the route-page obligations above or permit a new prerequisite sk
   CLI claim, counts FAST/smoke output as the sample evidence, or labels a retired nested walk as an executed pass
 - **WHEN** that evidence is compared with the named replacement scope and executed assertion inventory
 - **THEN** it fails the coverage comparison even if the reported total equals or exceeds the baseline;
-  only the three specified route-page complete-walk replacements and the separately named reply-observer retirement are allowed
+  only the three specified route-page complete-walk replacements, the separately named reply-observer retirement and the routing-argv retirement below are allowed
+
+#### Scenario: Routing argv replacements detect the original resplitting errors
+
+- **GIVEN** healthy private source copies and copies carrying the original `worker-literal-resplit` or
+  `pm-literal-resplit` mutation, legal fixed model policy and PM continuation metadata
+- **WHEN** their replacement samples form arguments through the product command renderer and real Bash
+- **THEN** healthy samples exit 0 with one complete provider/model and the fixed literal extra values
+  `two words`, `--mod*`, `{safe,words}`, `~/routing-note` and a literal backslash value;
+  PM continuation delivers the single session value `fixture-literal-session`
+- **AND** the original worker mutation exits 1 naming `worker-expansion-literal-argv:extra`, and the
+  original PM mutation exits 1 naming both `pm-expansion-literal-argv:extra` and
+  `pm-resume-literal-argv:builtin`; PM continuation actually uses the explicit resume-arguments path,
+  not a fresh launch or a higher-priority session-id path that bypasses the mutation
+- **AND** PM identity validation is real and succeeds on these legal premises; a renderer/setup failure,
+  a tokenizer self-comparison or hand-authored argv cannot substitute for that red side
+
+#### Scenario: Routing restoration observes the same mutated copy
+
+- **GIVEN** each of the two changed arms has passed its short healthy check on its own disposable copy
+- **WHEN** the original mutation fails that check, its changed script bytes are restored on that same copy,
+  and the identical short check is run there again
+- **THEN** both the restored script-byte comparison and the short behavioural check pass with exit 0,
+  without substituting the original tree or running complete boundary/CORE for that restoration
+- **AND** the other mutation arms retain their existing actual restoration obligations, without claiming
+  that an unmutated-tree run proves every other copy's behaviour was restored
+
+#### Scenario: Routing short outcomes reach the existing flip parent
+
+- **GIVEN** a disposable run through the existing flip parent for the two changed arms
+- **WHEN** a short child has an unexpected exit code, lacks its required intended-failure name, or fails its
+  healthy/restored check
+- **THEN** the parent emits the corresponding named `FAIL flip-...`, increments its own failure total and
+  exits non-zero; timeout/setup errors are not accepted as the intended mutation red
+- **AND** with original healthy/mutated/restored outcomes the same parent accepts both arms; a bounded
+  parent-wiring sample is labelled as such, never as a complete matrix run
+
+#### Scenario: Only the two routing boundary repeats and original-tree second CORE retire
+
+- **WHEN** source-attributed old execution inventory and the candidate's complete 61b log are compared
+- **THEN** the old final unmutated-tree CORE and its success assertion are absent, the first normal CORE
+  remains complete, the two resplit arms use their short samples, and the other 29 arms retain their
+  original groups, assertions and verdicts
+- **AND** the two replacements no longer execute the seven unrelated boundary subfixtures or their PM
+  transaction tail, while the original normal real-call coverage remains in the first CORE; no retired
+  full execution is moved to a slow/optional entry, counted as passed or relabelled as a prerequisite skip
+
+#### Scenario: Routing evidence reports actual scope instead of padding totals
+
+- **WHEN** delivery and independent verification evidence for this routing-only replacement are read
+- **THEN** old normal-tree, old boundary-child, new short-child and flip-parent inventories/counters remain
+  separately attributed; only the removed final parent success and actually executed new parent checks
+  explain that parent's count difference
+- **AND** one final non-FAST complete 61b integration run supplies the first normal CORE and all retained
+  mutation evidence; short samples do not claim that complete run, full smoke, or faster normal §61
+- **AND** historical costs and new elapsed readings remain references, not correctness thresholds or a
+  claim that old retired seconds equal net savings
 
 ### Requirement: The gate lock's holder record names its kind, its owner, its elapsed time and its bound
 
