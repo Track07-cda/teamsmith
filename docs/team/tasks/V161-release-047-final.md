@@ -68,3 +68,7 @@ bash docs/team/tools/release-check.sh --self-test
 - 主仓已有80份本地备份；worker曾有未跟踪空的旧change目录，已rmdir而非改spec。独立干净检出不应有这个目录，不把该工作树遗留写成真实规格缺失。
 
 中央额外工具写入例外为 `docs/team/reviews/P456.md` 与 `P456-verify.log`，可以 `team review P456 --dir /var/tmp/p456-review-5eafd5f4 --branch 5eafd5f4 --no-gates` 留真实执行者与候选；no-gates仍不是全量PASS依据。结论写回自己的V161报告并通知PM。候选通过后等待PM合并，再由同一你在PM准备的merged-SHA检出核文件同一性、补适用短检查；不机械重复已完成的大套/安装/性能。不提前勾done。
+
+## 本地标签最终核对（不触发外部发布）
+
+合并165119c7已经同一你独立复核通过。PM会把接受记录/报告提交后创建仅本地的v0.4.7标签，并提供`/var/tmp/rel47-tag-final`干净独立检出。只核：tag确实指该HEAD、与165119c7的全部产品/包文件同一性、普通OpenSpec、公开/账本扫描、版本及`release-check --skip-install --names-file <既有名单>`。预计标签两项转绿，安装跳过依旧引用你已经实际验证且同字节的三路线证据；不用重跑行为、安装、自测、性能或长测试。完成后补最终报告，记录标签SHA与实际rc。该标签还没推送，用户未授权公开main/tag/npm前任何人不得执行这些外部步骤。
