@@ -299,3 +299,6 @@ V152 最终全量续跑在 2026-11-11T02:20Z 因 opencode-go 429 overloaded 中�
 
 ### 2026-11-16T01:14:22Z · from: pm · re: V162
 V162续跑：用户2026-11-16要求continue。11-13中断为OpenAI连接超时/ECONNRESET，尚无最终审阅报告，工作树干净。保留原模型/SID，从P455候选8f244edc继续定点审阅；不重做候选规划，不跑完整矩阵。
+
+### 2026-11-16T12:07:46Z · from: pm · re: -
+V170阶段A已接受，代码合并为7d768f1a134e88e72e74fd43f6c34788718b8a3a，干净/var/tmp/p465-review-merged已准备。主检出brief已补阶段B输入；原SID/model/branch核全部实际字节同一，正式review P465绑定本merged，只短正常+一个坏/恢复，不再全manifest route或重做A。原run.sh硬编码旧候选，须从merged取片段/新路径，不冒称。保留A原件；B真正通过后按原授权同步自己的2.1/2.2和最终报告，清掉报告C1/C2，不另等确认。
