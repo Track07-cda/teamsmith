@@ -78,39 +78,41 @@ window, one process, the tick keeps logging. `team pulse up` restores the consol
 
 ## The project-settings view (P22)
 
-The settings overlay (`,`) carries one navigation row — `项目设置` / `Project settings` — which opens the
-project-settings view. It replaces the page's blocks (title band, tabs and key band stay) and lists the project
-contract from `team __panel-data --block settings`, whose payload is exactly `team config list --json`: one row
-per schema key plus one per key the file carries that the schema does not know, grouped by the **functional
-group the command reports** (the schema row's `group`, rendered as a section rule), with the file's value, the
-schema's default for an unset key, the line's own inline comment, the effect-class badge and the command's
-warning/route text. `↑`/`↓` walk the row window (a click focuses a row, a second click opens it), `/` opens the
-compose editor in `filter` mode (matches label, raw key, value, category or assignment; `esc` clears), and `esc`
-returns to the overlay row it was opened from (`q` keeps its global collapse meaning). A `refuse` row opens no
-editor — the command's route is shown. An editable row opens the compose line's `setting` mode holding the
-file's value (or the schema default): the first `enter` runs `team config set … --dry-run` and renders the
-confirmation (the class's timing; a danger reply needs one more `enter`), the second `enter` runs
-`team config set … --yes` with the fingerprint pinned when the editor opened; the exit code maps to the receipt
-and every settle re-reads the list and the audit footer.
+The settings overlay (',') opens **Project settings**. The default list puts every reported task category
+first, followed by PM model, concurrent tasks by model, check interval, PM recoveries per hour and startup
+update check. **Project commands** contains install command, acceptance command and acceptance time limit;
+**Model records** contains committed assignments and the last PM startup, not live-process claims.
+Esc returns to the originating entry, then the original overlay focus. No navigation is persisted.
 
-Under the keys, the same view separates **future policy** from **committed records** (P232). The categories
-block lists one row per `TEAM_TASK_MODELS` entry in the read's own order; `enter` opens a picker built from the
-project's known models plus a free-text entry (no removal entry: the writer has none) and every accept writes
-through `team config set-task-model <category> <model>` — the pair list is never composed in the console. The
-category receipt says the write affects new tasks only and that a committed task keeps its model/SID. The
-`TEAM_TASK_MODELS` row itself routes to that block instead of opening an editor, and `TEAM_PM_MODEL` keeps its
-ordinary model editor (`team config set TEAM_PM_MODEL …`). The assignments block below is **read-only**: one row
-per seat showing the committed `state/<seat>.env` record (task, category, complete model, `selected_via`/
-`launch_via`, SID) plus the PM's own `state/pm-launch.env` record — a seat without a complete record says so
-rather than borrowing the policy's model. Nothing in the view restarts a pulse, a PM or a seat; a legacy
-contract (retired model keys) shows the command's migration diagnosis, naming the CLI route, and offers no
-seat/default editor.
+The settings read remains `team __panel-data --block settings` / `team config list --json`. The UI selects
+eight existing keys plus the actual category rows; it does not mirror the full CLI schema or use its groups
+as UI headings. Excluded keys stay available through the full CLI and cannot reappear through search.
+Values, defaults, choices, permissions and genuine warnings/repair routes remain command-owned.
+Ordinary rows show effective values without repeated raw keys, comments, default markers or class badges.
+Only the selected operation carries necessary new-task/PM/Pulse timing.
 
-The view is console-only: `--print`/`--json` never read it, a parked console spawns no `settings` child (the
-`detail` block's on-demand rule), and the reader rides the open view, never the frame cadence.
+Arrows and the wheel use the current list; click once to focus and twice to open. Search matches the current
+view's labels, identifiers and values; Esc clears the filter. Lists and pickers fill the card and scroll when
+long. Model records expose full task/category/model/session/provenance fields; Enter opens scrollable full
+details, including long values and error/repair text. Missing and unreadable assignment records remain distinct.
 
-The pty fixtures for it are `tests/panel-p21.sh` (scenarios `settings write conflict categories readonly`, driven
-through the real CLI behind an argv-logging wrapper).
+Ordinary options validate and save on one accept; free input opens with the original value and requires an
+old/new confirmation; danger still needs its extra confirmation. The model-concurrency editor changes applicable
+model and simultaneous quantity fields in one unsaved draft. Add/remove affect only that draft, 0 means no
+limit from that entry, and final save confirms/writes one complete `TEAM_MODEL_LIMITS` value. Untouched tokens,
+order and duplicates remain; an actual edit joins tokens with spaces. Cancel, invalid and stale writes preserve
+configuration bytes. Malformed source stays available in the existing whole-value editor, without discarding
+bad tokens. An empty value is not deletion or a promise to disable runtime defaults.
+
+Writes still use only `team config set` or per-category `set-task-model`, with actor panel, the opening
+fingerprint, validation and background settle re-read. The console never reads the audit log or executes
+install/acceptance/restart commands. Category changes affect new tasks, PM model changes require
+`team up --fresh-pm`, and check-interval changes require `team pulse restart`.
+The views remain console-only: parked settings, `--print` and `--json` never request the settings block.
+
+The existing pty batch is `tests/panel-p21.sh settings groups wheel choices choices-schema write conflict
+categories readonly flip`. Implementation checks are static; an independent verifier runs that batch once
+against a frozen candidate, with the original two product mutations and normal policy finish.
 
 ## Compose and the three actions (pulse-console B2)
 

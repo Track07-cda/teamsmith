@@ -314,15 +314,15 @@ export interface SettingsKey {
   route?: string
   /**
    * The key's schema-derived choice set (M55), verbatim from `team config list --json`. The
-   * console reads its options from here and from nowhere else: a key or a value added to the
-   * command's schema appears without rebuilding the bundle. Absent against an older command.
+   * console reads its selected operations' options from here: a choice added to a retained key
+   * appears without rebuilding the bundle. Absent against an older command.
    */
   choices?: SettingsChoices
   /**
    * The key's functional domain (P30): the schema row's tenth column, verbatim from `team config
    * list --json` ('' for a key the schema does not know, and for a schema row that declares none).
-   * The view's headings are looked up by this token (`group_<token>`); the bundle keeps no
-   * key→group table. Absent against an older command.
+   * Retained as complete CLI metadata; console purpose headings do not use it.
+   * Absent against an older command.
    */
   group?: string
   /** False for a key in the file the schema does not know (read-only row). */
@@ -343,6 +343,16 @@ export interface SettingsChoices {
   empty: boolean
   /** The command's own note; a `path` kind carries its existence rule (file|dir|exec|any). */
   note: string
+}
+
+export type SettingsPage = 'main' | 'commands' | 'records' | 'limits' | 'rule'
+export interface LimitsDraft {
+  original: string
+  tokens: string[]
+  changed: boolean
+  rule: number
+  target: { row: number; key: string; value: string; cls: string; fingerprint: string; kind?: string; choices?: SettingsKey['choices'] }
+  confirm?: { danger: boolean }
 }
 
 /** One drawn entry of the choice picker (M55). */
@@ -377,6 +387,9 @@ export interface SettingsChoicePicker {
    * the accept writes `team config set-task-model <category> <model>` — never a pair list.
    */
   category?: boolean
+  ruleField?: boolean
+  /** Opening read, not a later background refresh. */
+  target?: { row: number; key: string; value: string; cls: string; fingerprint: string; category?: string; kind?: string; choices?: SettingsKey['choices'] }
 }
 
 /** One future task-category policy row as `team config list --json` reports it (P232). */
@@ -729,6 +742,7 @@ export interface DetailWindow {
 
 /** The project-settings view's row window as the frame rendered it (P22/B2). */
 export interface SettingsWindow {
+  width?: number
   /** The focused focusable row (an index into the filtered row list). */
   focus: number
   /** The first drawn focusable row. */
@@ -821,7 +835,12 @@ export interface ViewState {
   detailScroll?: number
   /** True while the project-settings view replaces the page's blocks (P22/B2). */
   settings?: boolean
+  /** The setting/filter editor supplies its own current-key hint instead of the view's key band. */
+  settingsEditing?: boolean
   /** The focused row in the filtered project-settings row list. */
+  settingsPage?: SettingsPage
+  limitsDraft?: LimitsDraft | null
+  settingsDetails?: string[] | null
   settingsFocus?: number
   /** The filter text (`''` = no filter). */
   settingsFilter?: string

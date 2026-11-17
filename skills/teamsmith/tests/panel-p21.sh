@@ -69,7 +69,7 @@ js="${_js_arg:-$(command -v node || true)}"
 sock="p21-$$"
 sess="p21-$$"
 keep="${_keep_arg:-0}"
-[ "$keep" = "1" ] && export TEAM_TMP_KEEP=1
+[ "$keep" = "1" ] && export TEAM_TMP_KEEP=1 TEAM_P21_KEEP=1
 tmp="$(tmp_root_create panel-p21)" || exit 3
 PASS=0
 FAIL=0
@@ -187,7 +187,7 @@ pty_pane_state() { tmux -L "$sock" list-panes -t "$sess:panel" -F '#{pane_dead}:
 # paints line by line), so the frame must be settled — needles present + two consecutive captures
 # identical (title clock masked) — before the wait releases (M59).
 wait_editor() { # <tray title> [body marker]
-  pty_wait_frame - "editor $1" "╭─ $1" "${2:-}"
+  pty_wait_frame - "editor $1" "╭─ $(key_label "$1")" "${2:-}"
 }
 
 # Wait for the current frame to carry <text>; writes settle asynchronously. The latest capture is
@@ -285,7 +285,7 @@ panel_pid() { tmux -L "$sock" list-panes -t "$sess:panel" -F '#{pane_pid}' 2>/de
 # heading and, at the top of the list, would only appear on some badge (zh by default; the en pass
 # passes its own marker).
 open_view() {
-  local marker="${1:-身份与账本布局}"
+  local marker="${1:-模型}"
   keys ,
   sleep 0.7
   keys Down Down Down Down Down
@@ -304,11 +304,41 @@ open_view() {
 # own read (M65/D11 allows it — the interaction path is what must not read). A fixture that edits the
 # contract by hand needs this to see its own bytes on screen.
 reopen_view() {
-  keys Escape
-  sleep 0.5
-  keys Escape
-  sleep 0.5
+  filter_clear
+  if cap_now | grep -qE '╭─ (项目命令|模型记录)'; then
+    keys Escape
+    pty_wait_frame - "重开前返回主设置" '╭─ 项目设置' || bad "重开前未回到主设置"
+    filter_clear
+  fi
+  pty_key_when "重开前退出主设置" '╭─ 项目设置' Escape || bad "重开前主设置不在屏幕上"
+  pty_key_when "重开前关闭浮层" '› 项目设置' Escape || bad "重开前浮层不在屏幕上"
+  pty_wait_frame - "重开前浮层已关闭" 'teamsmith pulse' '!› 项目设置' || bad "重开前浮层未关闭"
   open_view
+}
+
+open_secondary() { # commands|records
+  filter_clear
+  local label="项目命令"
+  [ "$1" = records ] && label="模型记录"
+  filter_to "$label"
+  keys Enter
+  pty_wait_frame - "打开 $label" "╭─ $label" || bad "没有打开 $label"
+  _p21_filter=""
+}
+
+# Labelled widgets, not raw implementation keys.
+key_label() {
+  case "$1" in
+    TEAM_PM_MODEL) printf 'PM模型' ;;
+    TEAM_MODEL_LIMITS) printf '模型同时运行任务数' ;;
+    TEAM_PULSE_INTERVAL) printf '检查间隔' ;;
+    TEAM_PULSE_MAX_RESTARTS) printf 'PM每小时自动恢复次数' ;;
+    TEAM_UPDATE_CHECK) printf '启动时检查新版本' ;;
+    TEAM_GATES) printf '验收命令' ;;
+    TEAM_INSTALL_CMD) printf '安装命令' ;;
+    TEAM_REVIEW_TIMEOUT) printf '验收最长时间' ;;
+    *) printf '%s' "$1" ;;
+  esac
 }
 
 # Filter the view to <text> (the `/` line, then Enter applies). The editor opens holding the
@@ -366,12 +396,12 @@ focus_row() { # <grep -E pattern>
   return 1
 }
 
-# Wait for the choice picker (M55): its title carries the raw key after a ` · `, and the optional
+# Wait for the choice picker (M55): its title carries the operation label, and the optional
 # entry marker is what the caller asserts next. Both must be in one settled frame (M59): the title
 # alone is not proof the picker is usable — Ink paints a frame line by line, so a capture can catch
 # the title before the entry lines land (the PM's review run saw exactly that and cascaded).
 wait_picker() { # <KEY> [entry marker]
-  pty_wait_frame - "picker $1" " · $1" "${2:-}"
+  pty_wait_frame - "picker $1" "╭─ $(key_label "$1")" "${2:-}"
 }
 # The regression pin uses a short budget: a missing marker must fail fast, not burn the full one.
 wait_picker_quick() {
@@ -385,7 +415,7 @@ wait_picker_quick() {
 # Returns 0 when the widget is gone afterwards (closed by this esc, or already gone — no key sent),
 # 1 when an esc went out but the widget is still on screen.
 leave_picker() { # <KEY>
-  pty_cleanup_esc "picker $1" " · $1"
+  pty_cleanup_esc "picker $1" "╭─ $(key_label "$1")"
 }
 
 # P30/D2: the grouping is a functional domain, the effect class lives in the row's badge. A line
@@ -415,14 +445,14 @@ wheel_at() { # <down|up> <col> <row> [n]
 
 # Same rule for the write editor's cleanup sites (the tray title is the marker).
 leave_editor() { # <tray title>
-  pty_cleanup_esc "editor $1" "╭─ $1"
+  pty_cleanup_esc "editor $1" "╭─ $(key_label "$1")"
 }
 
 # Wait until the setting editor's tray is gone. The settings view's own frame also draws
 # `╭─ 项目设置`, so the probe matches the tray title the setting editor uses (the raw key), not any
 # box corner; the absence must be on a settled frame too (M59).
 wait_no_editor() {
-  pty_wait_frame - "editor closed" '!╭─ TEAM_'
+  pty_wait_frame - "editor closed" '!Enter 继续' '!Enter 保存 · Esc 取消'
 }
 
 # Walk the picker's cursor to the option whose line contains <text> (grep -F) and press Enter —
@@ -448,816 +478,388 @@ pick_option() {
 # ---------------------------------------------------------------- scenarios
 
 scn_settings() {
-  section "settings · 标签/类徽章/默认值/过滤/窗口/点击/CLI 对齐/refuse 路由/q（B2 + M49）"
+  section "settings · 精选操作/入口返回/过滤/错误/短长列表/填高/点击/q"
   server_up settings
-  # P232：这一段的契约是新的（类别策略 + 独立 PM）。老契约的档由 scn_categories 的 legacy 段专门覆盖；
-  # 这里要的是「正常契约下视图里没有裸 TEAM_*」这一条能成立。
-  policy_new 'routine=kimi-coding/k3-256k analysis=openai-codex/gpt-5.6-terra:xhigh' 'openai-codex/gpt-6.1-sol:high' \
-    || bad "策略升级事务没有跑通"
-  python3 - "$(cfg)" <<'PYFIX'
-import re, sys
-p = sys.argv[1]
-s = open(p, encoding='utf-8').read()
-s = re.sub(r'^TEAM_PULSE_NUDGE_GAP=.*$', 'TEAM_PULSE_NUDGE_GAP="900"  # 15min', s, count=1, flags=re.M)
-# M49：文件里手加一个 schema 不认识的键（命令报 known=false）—— 它没有标签可用，行回退显示原始键。
-s = s.rstrip('\n') + '\nTEAM_HAND_ADDED="hand"\n'
-open(p, 'w', encoding='utf-8').write(s)
-PYFIX
+  policy_new 'routine=example/one analysis=example/two verify=example/three' 'example/pm' || bad "策略准备失败"
   start_panel
-  local conf_before; conf_before="$(sha "$state/panel.conf" 2>/dev/null || echo none)"
-  local fstats
+  local pref_before; pref_before="$(sha "$state/panel.conf")"
   open_view
-  assert_eq "导航行打开视图没有写 panel.conf" "$(sha "$state/panel.conf" 2>/dev/null || echo none)" "$conf_before"
   cap_to view
-  # P30/D2：分组 = schema 第 10 列的功能域。视图开屏在只读骨架（identity），标题就是功能域名；
-  # 旧的三条类分组标题（立即生效 / 需重启 / 不可改）不再是标题（徽章词仍在，见类徽章段）。
-  assert_no_class_heading "$tmp/$current/view.txt"
-  # 行文本是人话标签（不是裸键），开屏聚焦行是 identity 的第一条 schema 键。
-  assert_match "$tmp/$current/view.txt" '› 项目名 +.*不可改' "开屏聚焦行是 identity 第一条（标签 + 不可改 徽章）"
-  assert_not "$tmp/$current/view.txt" "TEAM_GATES" "行里不再出现裸键 TEAM_GATES"
-  # P266：审计整块离开视图（标题与行都不画）——审计仍可用 `team config list` 自己的尾部和 `team config log` 读。
-  assert_not "$tmp/$current/view.txt" "审计（最近）" "P266：视图里没有审计标题"
-  assert_not "$tmp/$current/view.txt" "result=" "P266：视图里没有 state/config.log 的审计行"
-  assert_no_match "$tmp/$current/view.txt" '^(│ )? *(Audit|审计)' "P266：没有任何一行是审计标题"
-  # P266：夹具键是数据驱动的隐藏：行不在视图里，按标签与裸键过滤都搜不到，而同组其它行还在。
-  local p266_k p266_cfg_before p266_json p266_route p266_human p266_rc
-  for p266_k in TEAM_DISK_STATS_FILE TEAM_SMOKE_FAST TEAM_INBOX_WATCH_FORCE_FAIL TEAM_IW_REQUIRE_WATCH; do
-    filter_to "$p266_k"
-    cap_to "p266-hidden-$p266_k"
-    assert_not "$tmp/$current/p266-hidden-$p266_k.txt" "$p266_k" "P266：$p266_k 不在视图里（按裸键搜不到）"
-  done
-  assert_not "$tmp/$current/p266-hidden-TEAM_DISK_STATS_FILE.txt" "磁盘读数夹具" "P266：隐藏的夹具键连人话标签也搜不到"
-  filter_to 磁盘读数夹具
-  cap_to p266-hidden-label
-  assert_not "$tmp/$current/p266-hidden-label.txt" "磁盘读数夹具" "P266：按标签过滤也搜不到夹具键"
-  # 同一组（policy）里还有可见键：标题因为别的行还在，不因隐藏而空。
-  filter_to TEAM_MEMINFO_FILE
-  cap_to p266-group-alive
-  assert_has "$tmp/$current/p266-group-alive.txt" "权限与依赖" "P266：同组其它行还在（隐藏的只是夹具键，标题没跟着消失）"
-  assert_not "$tmp/$current/p266-group-alive.txt" "TEAM_MEMINFO_FILE" "P266：那一帧里仍然只有人话标签，没有裸键"
-  filter_clear
-  # 读面与命令面一字不变：人读表仍列出、--json 仍带声明标记、set 仍 refuse。
-  p266_cfg_before="$(sha "$(cfg)")"
-  p266_human="$( ( cd "$ROOT" && bash "$skill/scripts/team" config list ) 2>&1 )"
-  case "$p266_human" in *TEAM_DISK_STATS_FILE*) ok "P266：人类可读表仍列出夹具键" ;; *) bad "P266：人类可读表不再列出夹具键" ;; esac
-  p266_json="$( ( cd "$ROOT" && bash "$skill/scripts/team" config list --json ) 2>&1 )"
-  p266_route="$(printf '%s' "$p266_json" | python3 -c 'import json,sys; d=json.load(sys.stdin); print([k["route"] for k in d["keys"] if k["name"]=="TEAM_DISK_STATS_FILE"][0])')"
-  case "$p266_route" in "fixture-only: "*) ok "P266：--json 的 route 原样带 fixture-only: 前缀" ;; *) bad "P266：--json 的 route 丢了声明标记（$p266_route）" ;; esac
-  ( cd "$ROOT" && bash "$skill/scripts/team" config set TEAM_DISK_STATS_FILE /tmp/x --yes ) >/dev/null 2>&1
-  p266_rc=$?
-  assert_eq "P266：config set 夹具键仍 refuse（exit 5）" "$p266_rc" "5"
-  assert_eq "P266：refuse 没有动契约" "$(sha "$(cfg)")" "$p266_cfg_before"
-  # 组内保持 schema 顺序（项目名 在 会话名 之前）。
-  local n_first n_second
-  n_first="$(grep -n '项目名' "$tmp/$current/view.txt" | head -1 | cut -d: -f1)"
-  n_second="$(grep -n '会话名' "$tmp/$current/view.txt" | head -1 | cut -d: -f1)"
-  if [ -n "$n_first" ] && [ -n "$n_second" ] && [ "$n_first" -lt "$n_second" ]; then
-    ok "同一组内保持 schema 顺序（项目名 在第 $n_first 行，会话名 在第 $n_second 行）"
-  else
-    bad "组内顺序不对（项目名=$n_first 会话名=$n_second）"
-  fi
-  # 类徽章是词（P30/D4）：过滤到一条 apply 行看它的徽章。
-  filter_to 模型并发上限
-  cap_to badge-apply
-  cap_has "↑/↓ 行 · Enter 打开 · / 筛选" keyband
-  # One filter per class: the badge, the unset marker and the line's own comment (all unchanged).
+  assert_match "$tmp/$current/view.txt" '› routine +example/one' "默认先显示实际类别"
+  assert_has "$tmp/$current/view.txt" "自动检查" "默认有自动检查用途组"
+  assert_not "$tmp/$current/view.txt" "身份与账本布局" "全表不再占据首屏"
+  assert_not "$tmp/$current/view.txt" "立即生效" "普通行没有逐行生效徽章"
+  assert_not "$tmp/$current/view.txt" "未设 · 默认" "普通行直接给有效值"
+  assert_not "$tmp/$current/view.txt" "result=" "设置不显示审计"
+  local stats r u d gap
+  cap_visible_to default-count
+  stats="$(settings_window_stats "$tmp/$current/default-count.txt")"
+  read -r r u d gap <<<"$stats"
+  assert_eq "C3默认可选行=10（包含两个入口）" "$((r+u+d))" "10"
+  assert_eq "打开设置没有写偏好" "$(sha "$state/panel.conf")" "$pref_before"
   filter_to TEAM_PULSE_INTERVAL
-  cap_to restart
-  assert_has "$tmp/$current/restart.txt" "命令行：team config set TEAM_PULSE_INTERVAL <新值>" "CLI 提示行点名原始键（照敲命令用）"
-  filter_to TEAM_PROJECT
-  cap_to refuse
-  assert_match "$tmp/$current/refuse.txt" '项目名 +root · 不可改' "refuse 行的标签 + 不可改 徽章"
-  assert_has "$tmp/$current/refuse.txt" "这个值要改项目配置文件 .pi/team/config.sh，界面不能改" "refuse 提示行是那句普通的文件路线"
-  assert_not "$tmp/$current/refuse.txt" "手改" "P266：refuse 提示行里没有「手改」"
-  assert_not "$tmp/$current/refuse.txt" "只读" "P266：refuse 行的徽章不再写「只读」"
-  # P32：短列表（一条过滤结果）也把卡片填满 —— 空白留在卡片**里面**，卡片下边框仍紧贴键栏。
+  wait_row interval "有效值与必要生效提示" "检查间隔" "900" "team pulse restart" || bad "检查间隔未显示"
   cap_visible_to filter-fill
-  fstats="$(settings_window_stats "$tmp/$current/filter-fill.txt")"
-  IFS=' ' read -r _fr _fu _fd fgap <<<"$fstats"
-  if [ "${_fr:-0}" -ge 1 ] && [ "${fgap:-9}" -le 1 ]; then
-    ok "过滤到一条时卡片仍填满窗口（行=$_fr 空白=$fgap）"
-  else
-    bad "过滤到一条时卡片没有填满窗口（$fstats）"
-  fi
-  filter_to TEAM_PANEL_DETAIL_CAP
-  cap_to unset
-  assert_match "$tmp/$current/unset.txt" '详情文件读取上限 +未设 · 默认 131072' "未设的键显示 schema 默认值 + unset 标记"
-  filter_to TEAM_PULSE_NUDGE_GAP
-  cap_to comment
-  assert_match "$tmp/$current/comment.txt" '重复提醒间隔 +900 · 立即生效 +# 15min' "行内注释原样渲染"
-  # M49 回退：schema 不认识的键没有标签 → 行的主文本就是原始键（「不认识」徽章 + 提示行）。
-  filter_to TEAM_HAND_ADDED
-  cap_to unknown
-  assert_match "$tmp/$current/unknown.txt" 'TEAM_HAND_ADDED +hand · 不认识' "schema 不认识的键回退显示原始键"
-  assert_has "$tmp/$current/unknown.txt" "TEAM_HAND_ADDED：这个设置在文件里，工具不认识它" "未知键的提示行说清楚为什么没有标签"
-  # The filter matches the label (M49), key or value; esc clears it without closing the view.
-  filter_to 巡检周期
-  cap_to filter-label
-  assert_has "$tmp/$current/filter-label.txt" "巡检周期" "按标签搜到该行"
-  assert_not "$tmp/$current/filter-label.txt" "模型并发上限" "按标签过滤掉不匹配的行"
-  filter_to pulse
-  cap_to filter
-  assert_has "$tmp/$current/filter.txt" "巡检周期" "按原始键 pulse 仍能找到（行上仍是标签）"
-  assert_not "$tmp/$current/filter.txt" "模型并发上限" "过滤掉不匹配的行"
+  stats="$(settings_window_stats "$tmp/$current/filter-fill.txt")"
+  read -r r u d gap <<<"$stats"
+  assert_eq "过滤短列表只一行" "$((r+u+d))" "1"
+  [ "$gap" -le 1 ] && ok "短列表空白在卡片里" || bad "短列表卡片未填高"
+  filter_to 检查间隔
+  cap_to label-filter
+  assert_has "$tmp/$current/label-filter.txt" "检查间隔" "标签可搜索"
+  filter_to EXAMPLE/ONE
+  cap_to value-filter
+  assert_has "$tmp/$current/value-filter.txt" "routine" "值搜索不区分大小写"
+  keys Escape
+  wait_row clear "Esc清过滤但不关闭设置" "› routine" "项目命令" || bad "Esc过滤返回错误"
+  # 两个入口都沿原位置返回；鼠标单击只聚焦，第二击才打开。
+  local y before
+  before="$(sha "$(cfg)")"
+  y="$(cap_now | grep -n '项目命令' | head -1 | cut -d: -f1)"
+  [ -n "$y" ] && click_at 8 "$y"
+  wait_row nav-focus "单击聚焦项目命令" "› 项目命令" || bad "入口未聚焦"
+  assert_eq "单击不改配置" "$(sha "$(cfg)")" "$before"
+  y="$(cap_now | grep -n '› 项目命令' | head -1 | cut -d: -f1)"
+  [ -n "$y" ] && click_at 8 "$y"
+  wait_row commands "第二击打开命令" "╭─ 项目命令" "验收命令" || bad "命令入口未打开"
+  cap_visible_to commands-count
+  stats="$(settings_window_stats "$tmp/$current/commands-count.txt")"
+  read -r r u d gap <<<"$stats"
+  assert_eq "项目命令只有3项" "$((r+u+d))" "3"
+  keys Escape
+  wait_row commands-back "命令返回原入口" "› 项目命令" "╭─ 项目设置" || bad "命令未返回"
+  open_secondary records
+  wait_row records "尚无记录保留事实" "尚无派单记录" || bad "记录原因未显示"
+  keys Escape
+  wait_row records-back "记录返回原入口" "› 模型记录" "╭─ 项目设置" || bad "记录未返回"
   filter_clear
-  cap_to cleared
-  assert_has "$tmp/$current/cleared.txt" "项目名" "esc 清过滤后全部行回来（回到未过滤列表的顶部）"
-  assert_has "$tmp/$current/cleared.txt" "身份与账本布局" "清过滤后第一组标题也回来"
-  assert_has "$tmp/$current/cleared.txt" "项目设置" "esc 没有关掉视图"
-  # The focus window moves with the keys and counts what it hides at the top.
-  local i
-  for i in $(seq 1 40); do keys Down; sleep 0.02; done
-  if wait_cap window "↑"; then ok "窗口顶部出现被隐藏的行数计数行"; else bad "窗口滚动后没有出现 ↑N 计数行"; fi
-  assert_match "$tmp/$current/window.txt" '↑[0-9]+' "窗口顶部显示被隐藏的行数"
-  # A click moves the focus to an unfocused row; the second click opens that row's editor. M49：行
-  # 按**标签**认，原始键从第一次点击后的 CLI 提示行读（标签用来看，键用来敲）。
-  # P30：视图开屏在只读骨架上，先过滤出**多条** apply 行（「上限」命中模型并发上限 / 席位内存上限 /
-  # 详情文件读取上限…）——点击用例需要一条未聚焦的 apply 行。
-  filter_to 上限
-  cap_to click-set
-  local target_line label keyname
-  target_line="$(cap | grep -n '· 立即生效' | grep -v '›' | grep -v '命令行：' | head -1 | cut -d: -f1)"
-  if [ -n "$target_line" ]; then
-    label="$(cap | sed -n "${target_line}p" | sed 's/^│//' | sed -E 's/^ +//' | sed -E 's/  +.*//')"
-    click_at 20 "$target_line"
-    if wait_cap click "› $label"; then ok "第一次点击把光标放到那一行（按标签认行）"; else bad "第一次点击后光标没有落到那一行"; fi
-    keyname="$(cap | grep -F 'team config set' | grep -oE 'TEAM_[A-Z0-9_]+' | head -1)"
-    assert_has "$tmp/$current/click.txt" "team config set $keyname" "CLI 提示行跟着焦点换到该行的原始键"
-    # The window may have scrolled with the focus: click the row the cursor is on now.
-    target_line="$(cap | grep -n '› .*· 立即生效' | head -1 | cut -d: -f1)"
-    [ -n "$target_line" ] && click_at 20 "$target_line"
-    # M55：有选择集的键打开选择器（标题 `选择 … 的值 · KEY`），没有的仍是 compose 托盘。
-    # M59: wait for THIS row's widget (tray or picker title) on a settled frame — the view can sit
-    # settled *before* the editor paints (the row's data is re-read on open), so a settle-only
-    # probe misjudges; the pre-M59 serial `wait_editor || wait_picker` burned two full budgets.
-    local opened="" _probe_i c_probe
-    for _probe_i in $(seq 1 24); do
-      c_probe="$(cap)"
-      # P127: here-strings, not `printf | grep -q` — the probe frame can outgrow the pipe buffer
-      # and grep's early exit would SIGPIPE the printf writer (rc=141 → the open falsely unseen).
-      if { grep -qF -- "╭─ $keyname" <<< "$c_probe" || grep -qF -- " · $keyname" <<< "$c_probe"; } \
-         && pty_frame_settled "$c_probe"; then
-        opened="$c_probe"; break
-      fi
-      sleep 0.3
-    done
-    [ -n "$opened" ] || opened="$c_probe"
-    printf '%s\n' "$opened" > "$tmp/$current/click2.txt"
-    if grep -qF "╭─ $keyname" "$tmp/$current/click2.txt"; then
-      assert_has "$tmp/$current/click2.txt" "╭─ $keyname" "第二次点击打开该行的编辑器（compose 托盘，标题点名原始键）"
-    elif grep -qF " · $keyname" "$tmp/$current/click2.txt"; then
-      assert_has "$tmp/$current/click2.txt" " · $keyname" "第二次点击打开该行的编辑器（选择器，标题点名原始键）"
-    else
-      bad "第二次点击没有打开该行的编辑器"
-    fi
-    # M59: state-checked cleanup — whichever widget is on a settled frame gets the esc (at most one
-    # sends; a widget that is not there gets no key, so the view can never be the esc's casualty).
-    leave_editor "$keyname"
-    leave_picker "$keyname"
-  else
-    cap | tail -5 >&2
-    bad "窗口里没有找到可点击的 apply 行"
-  fi
-  # A refuse row opens no editor: the route is surfaced and the contract is untouched.
-  local before; before="$(sha "$(cfg)")"
-  filter_to TEAM_SESSION
-  sleep 0.3
-  if focus_row '会话名 +.*不可改'; then
-    keys Enter
-  else
-    bad "没能把焦点移到 refuse 行"
-  fi
-  if wait_cap refuse-route "只能改项目配置文件"; then ok "refuse 行的回执点名普通路线（不是命令行黑话）"; else bad "refuse 行的回执没出现"; fi
-  assert_eq "refuse 行没有写契约" "$(sha "$(cfg)")" "$before"
-  # P144：磁盘底线的两行 —— 行主文本是标签（不是裸键），类徽章照旧。P266：夹具缝行已经**不在视图里**
-  # （上面刚证过），它的读面与命令面由那里的断言守住。
-  filter_to 临时根空间底线
-  cap_to p144-mb
-  assert_match "$tmp/$current/p144-mb.txt" '› 临时根空间底线 +未设 · 默认 1024 · 立即生效' \
-  assert_not "$tmp/$current/p144-mb.txt" '临时根空间底线 +TEAM_' "P144：字节底线行主文本不是裸键"
-  filter_to inode 底线
-  if focus_row '临时根 inode 底线 +未设 · 默认 100000'; then :; else bad "P144：没能把焦点移到 inode 底线行"; fi
-  cap_to p144-ino
-  assert_match "$tmp/$current/p144-ino.txt" '› 临时根 inode 底线 +未设 · 默认 100000 · 立即生效' \
-  # M59: the navigation esc is state-checked too — it fires only while the settings view is on a
-  # settled frame, so a drifted scene gets a named red instead of a blind key.
-  pty_key_when "esc 回浮层" '╭─ 项目设置' Escape || bad "esc 前设置视图已经不在屏幕上"
-  # The origin is remembered (esc back to the overlay's navigation row). P68：等那一行本身在稳定帧上。
-  wait_row overlay-back "esc 回到浮层且仍选中「项目设置」" '› 项目设置' \
-    || bad "esc 之后浮层没有回到「项目设置」这一行"
-  assert_has "$tmp/$current/overlay-back.txt" "项目设置" "esc 回到设置浮层"
-  assert_match "$tmp/$current/overlay-back.txt" '› 项目设置' "回到浮层时仍选中那一行"
-  # The current frame minus its last line (the status/receipt row, which may quote the key the user
-  # just tried to edit): the overlay itself must list no contract key.
-  cap_now | sed '$d' > "$tmp/$current/overlay-now.txt"
-  assert_not "$tmp/$current/overlay-now.txt" "TEAM_" "当前这一帧的浮层没有契约的 TEAM_* 键"
-  keys Enter
-  pty_wait_frame - "q 用例的设置视图" '╭─ 项目设置' || bad "q 用例的设置视图没有打开"
-  # `q` keeps its global meaning: the collapse path runs (the argv log is the observable).
-  local q0; q0="$(wc -l < "$(argv_log)" 2>/dev/null || echo 0)"
-  keys q
-  if wait_argv q-collapse 'pulse collapse'; then ok "q 仍然触发全局的收起动作"; else bad "q 的收起动作没有进 argv 日志"; fi
-  # The bundle carries no second key table (P22/B2): a scratch CLI whose schema gains TEAM_ZZZ_TEST
-  # and whose TEAM_GATES class is refuse shows both through the same committed panel.js.
-  local scratch="$tmp/$current/scratch"
-  mkdir -p "$scratch/skills/teamsmith"
-  cp -a "$skill/scripts" "$scratch/skills/teamsmith/scripts"
-  cp -a "$skill/templates" "$skill/references" "$scratch/skills/teamsmith/"
-  python3 - "$scratch/skills/teamsmith/scripts/lib/cmd-config.sh" <<'PYFIX'
-import sys
-p = sys.argv[1]
-s = open(p, encoding='utf-8').read()
-s = s.replace('TEAM_GATES|apply|cmd||plain||-|', 'TEAM_GATES|refuse|cmd||plain||-|改门禁要改项目配置文件（scratch 夹具）')
-anchor = 'TEAM_INSTALL_CMD|apply|cmd||plain||-|||workflow'
-assert anchor in s, '找不到 TEAM_INSTALL_CMD 的 schema 行'
-s = s.replace(anchor, 'TEAM_ZZZ_TEST|apply|text||plain|zzz-default|-|||workflow\nTEAM_ZZZ_FIXTURE|refuse|path|file,opt|plain||-|fixture-only: 只在 scratch 夹具里用||policy\n' + anchor, 1)
-open(p, 'w', encoding='utf-8').write(s)
-PYFIX
-  cat > "$tmp/$current-scratch-wrapper.sh" <<EOF2
-#!/usr/bin/env bash
-printf '%s\n' "\$*" >> "$tmp/$current-scratch-argv.log"
-exec bash "$scratch/skills/teamsmith/scripts/team" "\$@"
-EOF2
-  chmod +x "$tmp/$current-scratch-wrapper.sh"
-  P21_CLI="$tmp/$current-scratch-wrapper.sh" start_panel
-  # The view opens on the overview: reach the overlay again (the panel was restarted).
-  open_view
-  filter_to TEAM_ZZZ_TEST
-  # P68：等那一行（值也在）出现在稳定帧上，不用固定 sleep 采样。
-  wait_row scratch-key "scratch 视图里的 TEAM_ZZZ_TEST 行" 'TEAM_ZZZ_TEST' '未设 · 默认 zzz-default' \
-    || bad "scratch CLI 新增的键行没等到（超过等待上限）"
-  assert_match "$tmp/$current/scratch-key.txt" 'TEAM_ZZZ_TEST +未设 · 默认 zzz-default' "scratch CLI 新增的键出现在视图里（不重建 panel.js；无标签→回退裸键）"
-  # P266（设计表 248）：同一张 scratch schema 里再添一行**带标记**的新键 → 它不进渲染（隐藏规则读标记，
-  # 不是 bundle 里写死的四个键名；这一行是 fixture 里从没出现过的名字）。
-  filter_to TEAM_ZZZ_FIXTURE
-  cap_to scratch-marked
-  assert_not "$tmp/$current/scratch-marked.txt" "TEAM_ZZZ_FIXTURE" "P266：带 fixture-only 标记的新键被隐藏（规则是数据，不是名单）"
-  filter_clear
-  filter_to TEAM_GATES
-  wait_row scratch-class "scratch 视图里的 TEAM_GATES 行（类改成不可改）" '门禁命令' 'true · 不可改' \
-    || bad "scratch CLI 改过的类行没等到（超过等待上限）"
-  assert_match "$tmp/$current/scratch-class.txt" '门禁命令 +true · 不可改' "scratch CLI 改过的类跟着变（bundle 没有第二张键表）"
-  assert_has "$tmp/$current/scratch-class.txt" "这个值要改项目配置文件 .pi/team/config.sh" "scratch CLI 的 refuse 提示行仍是那句普通路线"
-  if focus_row '门禁命令 +true · 不可改'; then keys Enter; else bad "P266：没能把焦点移到 scratch 的 refuse 行"; fi
-  if wait_cap scratch-route "改门禁要改项目配置文件（scratch 夹具）"; then
-    ok "P266：scratch CLI 自己写的备注原样上屏（路线不是写死的）"
-  else
-    bad "P266：scratch CLI 的备注没有上屏"
-  fi
-  # P266 红侧（数据驱动）：把 scratch 树里夹具键的声明标记删掉 → 那一行回到视图；还原 → 又消失。
-  local marker_red_cfg
-  marker_red_cfg="$scratch/skills/teamsmith/scripts/lib/cmd-config.sh"
-  python3 - "$marker_red_cfg" <<'PYFIX'
-import sys
-p = sys.argv[1]
-s = open(p, encoding='utf-8').read()
-mark = 'fixture-only: 只在测试套件里用（磁盘读数夹具）'
-assert mark in s, '找不到夹具键的声明标记'
-s = s.replace('|' + mark + '||policy', '|||policy', 1)
-open(p, 'w', encoding='utf-8').write(s)
-PYFIX
-  P21_CLI="$tmp/$current-scratch-wrapper.sh" start_panel
-  open_view
-  filter_to 磁盘读数夹具
-  wait_row p266-marker-red "标记删掉后夹具键回到视图" '磁盘读数夹具' '不可改' \
-    || bad "P266 红侧：删掉声明标记后那一行没有回到视图"
-  assert_match "$tmp/$current/p266-marker-red.txt" '磁盘读数夹具 +.*不可改' "P266 红侧：行回来了（隐藏跟着读侧的数据走）"
-  cp -a "$skill/scripts/lib/cmd-config.sh" "$marker_red_cfg"
-  P21_CLI="$tmp/$current-scratch-wrapper.sh" start_panel
-  open_view
-  filter_to 磁盘读数夹具
-  cap_to p266-marker-green
-  assert_not "$tmp/$current/p266-marker-green.txt" "磁盘读数夹具" "P266 还原：标记加回后那一行再次消失"
-  # M49：另一种语言的人话标签（同一张表切换，标签不是渲染时的硬编码）。
-  conf_set "lang=en" "page=1" "activity=1" "mouse=1" "density=comfortable" "theme=auto"
-  start_panel
-  open_view 'Identity & ledger layout'
-  filter_to TEAM_PULSE_INTERVAL
-  cap_to en
-  assert_match "$tmp/$current/en.txt" '› Patrol interval' "en 行的人话标签（行不是裸键）"
-  assert_has "$tmp/$current/en.txt" "CLI: team config set TEAM_PULSE_INTERVAL <value>" "en 的 CLI 提示行同样点名原始键"
-  # P266：两种语言的样张都要能给评审直接读（报告里贴的就是这些帧）：走到尾部，两个块标题 + 席位原因。
-  filter_clear
-  sleep 0.4
-  walk_to_tail en-tail
-  assert_has "$tmp/$current/en-tail.txt" "The model the next task will use" "en 的类别块标题（下一次派任务会用的模型）"
-  assert_has "$tmp/$current/en-tail.txt" "The model running tasks actually use" "en 的席位块标题（正在运行的任务实际使用的模型）"
-  assert_has "$tmp/$current/en-tail.txt" "this seat has not been given a task yet" "en 的「这个席位还没有派过任务」（席位没有记录）"
-
-  # ── P32：视图用满窗口高度（用户实测 45 行里 16 行空白）+ 行数记账诚实 ──
-  # 同一条契约、同一个面板，只改 pane 行高：① 内容结尾（卡片下边框）到键栏的空白 ≤1 行；
-  # ② 画出的行数随行高长（45 vs 30 的差 ≥8）；③ rows + ↑N + ↓N 恰好等于命令报的键+席位总数
-  # （窗口的计数行必须与窗口实际画出的行数一致 —— P30/D5 的成本模型曾经按「带注释的行占两行」
-  # 记账，虚报了 15 行，那 15 行就是用户看到的空白）。
-  conf_set "lang=zh" "page=1" "activity=1" "mouse=1" "density=comfortable" "theme=auto"
-  unset P21_CLI
-  start_panel
-  open_view
-  local want_count
-  # P266：视图里的行 = schema 键（减去被声明为 fixture-only 的键）+ 类别 + 席位 + PM 启动记录。
-  want_count="$( (cd "$ROOT" && bash "$skill/scripts/team" config list --json) \
-    | python3 -c 'import json,sys; d=json.load(sys.stdin); m=d.get("models",{}); keys=[k for k in d["keys"] if not str(k.get("route","")).startswith("fixture-only: ")]; print(len(keys) + len(m.get("policy",{}).get("categories",[])) + len(m.get("assignments",[])) + (1 if m.get("pm_launch") else 0))' )"
-  [ "${want_count:-0}" -gt 0 ] || bad "读数拿不到键数（前提不成立）"
-  local h s rows up down gap prev_rows=""
-  for h in 45 33 30 25; do
-    if resize_panel 120 "$h"; then
-      if wait_settings_frame "$h" "height$h"; then
-        s="$(settings_window_stats "$tmp/$current/height$h.txt")"
-        IFS=' ' read -r rows up down gap <<<"$s"
-        # ① 内容结束到键栏的空白 ≤1 行（P32 前：45 行里 16 行）
-        if [ "$gap" -le 1 ]; then ok "${h} 行：内容结尾到键栏只剩 $gap 行空白（≤1）"; else bad "${h} 行：内容结尾到键栏还有 $gap 行空白"; fi
-        # ③ 记账诚实：窗口画出的行 + 两条计数 = 命令报的总行数
-        assert_eq "${h} 行：rows($rows) + ↑($up) + ↓($down) = 命令报的键+类别+派单记录（$want_count）" \
-          "$((rows + up + down))" "$want_count"
-        case "$h" in
-          45) prev_rows="$rows" ;;
-          30) if [ -n "$prev_rows" ] && [ "$((prev_rows - rows))" -ge 8 ]; then
-                ok "窗口随行高长：45 行 $prev_rows → 30 行 $rows（差 $((prev_rows - rows)) ≥ 8）"
-              else
-                bad "窗口没有随行高长：45 行 $prev_rows → 30 行 $rows"
-              fi ;;
-        esac
-      else
-        cap_visible_to "height$h-fail"
-        bad "缩到 120×${h} 之后没有画出完整的设置视图帧（$(settings_window_stats "$tmp/$current/height$h-fail.txt")）"
-      fi
-    else
-      bad "pane 缩到 120×${h} 没有生效"
-    fi
+  # 隐藏值不因搜索而成为操作；完整CLI仍保留已有接口。
+  local k
+  for k in TEAM_PROJECT TEAM_TASK_MODELS TEAM_TMP_MIN_FREE_MB TEAM_TMP_MIN_FREE_INODES TEAM_DISK_STATS_FILE; do
+    filter_to "$k"; cap_to "excluded-$k"
+    assert_no_match "$tmp/$current/excluded-$k.txt" '^│ [› ] [^│]*[^[:space:]│]' "退出的键不会成为操作行（$k）"
   done
-  resize_panel 160 40 || true
+  filter_clear
+  keys Escape
+  wait_row overlay-back "Esc返回原浮层入口" "› 项目设置" || bad "浮层焦点丢失"
+  keys Enter
+  pty_wait_frame - "再次打开设置" "╭─ 项目设置" || bad "设置未再打开"
+  keys q
+  wait_argv q-collapse "pulse collapse" && ok "q保留全局收起" || bad "q未收起"
+
+  # 真实未知键warning仍可达；不要求为该键造编辑行。
+  printf '\nTEAM_HAND_ADDED=hand\n' >> "$(cfg)"
+  start_panel
+  open_view
+  filter_to TEAM_HAND_ADDED
+  wait_row unknown-warning "退出行不隐藏真实warning" "不是已知的项目设置" || bad "未知键warning未显示"
+  cap_to unknown
+  assert_has "$tmp/$current/unknown.txt" "只能改项目配置文件" "未知键完整修复路线仍可达"
+  assert_no_match "$tmp/$current/unknown.txt" '^│ [› ] TEAM_HAND_ADDED +hand' "未知键不是配置行"
+  # 长列表用实际类别而非恢复全表；每个高度只观察同一列表。
+  local map='routine=example/one' i h want_count prev_rows
+  for i in $(seq 1 60); do map="$map cat$i=example/model$i"; done
+  policy_new "$map" 'example/pm' || bad "长类别准备失败"
+  python3 - "$(cfg)" <<'PYCFG'
+import sys
+p=sys.argv[1]; s=open(p).read(); s='\n'.join(l for l in s.split('\n') if not l.startswith('TEAM_HAND_ADDED='))
+open(p,'w').write(s)
+PYCFG
+  start_panel
+  open_view
+  want_count=68
+  for h in 45 33 30 25; do
+    resize_panel 120 "$h" || bad "resize失败"
+    if wait_settings_frame "$h" "height$h"; then
+      stats="$(settings_window_stats "$tmp/$current/height$h.txt")"; read -r r u d gap <<<"$stats"
+      assert_eq "$h行：可见+上下隐藏=当前68操作" "$((r+u+d))" "$want_count"
+      [ "$gap" -le 1 ] && ok "$h行卡片填高" || bad "$h行卡片未填高"
+      [ "$h" = 45 ] && prev_rows="$r"
+      if [ "$h" = 30 ]; then
+        [ "$((prev_rows-r))" -ge 8 ] && ok "45比30至少多8行" || bad "窗口没有随高度增长"
+      fi
+    else bad "$h行完整设置帧未落定"; fi
+  done
+  # 同批英文窄屏：只走入口与返回，不重复整套。
+  conf_set "lang=en" "page=1" "activity=1" "mouse=1" "density=comfortable"
+  start_panel
+  resize_panel 70 25 || bad "英文窄屏resize失败"
+  open_view Models
+  filter_to 'Project commands'; keys Enter
+  wait_row en-commands "英文命令入口" "╭─ Project commands" "Acceptance command" || bad "英文命令入口失败"
+  keys Escape
+  wait_row en-back "英文入口返回" "Project settings" "Project commands" || bad "英文返回失败"
+  filter_to 'Model records'; keys Enter
+  wait_row en-records "英文记录入口" "╭─ Model records" "No dispatch record" || bad "英文记录入口失败"
+  keys Escape
+  wait_row en-records-back "英文记录返回" "Project settings" "Model records" || bad "英文记录返回失败"
 }
 
 scn_choices() {
-  section "choices · 选择器（M55 的选项 + M65 的直写：一次 accept = 校验+写入 / 交互路径零读取 / 危险值一次确认 / 只有自由输入进编辑器）"
-  local agents="dev verify" i
-  for i in $(seq 2 28); do agents="$agents dev$i"; done
-  server_up choices "$agents"
-  python3 - "$(cfg)" <<'PY'
-import re, sys
-p = sys.argv[1]
-s = open(p, encoding='utf-8').read()
-# 未设的 bool（默认 1）/ seconds（默认 300）/ 数值（默认 900）：删掉模板里的行，让前提真的成立。
-s = re.sub(r'^TEAM_NOTIFY_TMUX=.*\n?', '', s, flags=re.M)
-s = re.sub(r'^TEAM_DEFER_TTL=.*\n?', '', s, flags=re.M)
-s = re.sub(r'^TEAM_PULSE_INTERVAL=.*\n?', '', s, flags=re.M)
-# path exec,opt 指向一个不存在的文件：存在性标记要看得见。
-s = re.sub(r'^TEAM_AGENT_BIN=.*$', 'TEAM_AGENT_BIN="/nonexistent/m55-agent"', s, count=1, flags=re.M)
-# 危险值当「当前」选项：M65 的危险例外必须对来自选项的值同样生效（第一次 accept 只警告、不写）。
-s = re.sub(r'^TEAM_MIN_FREE_SWAP_MB=.*$', 'TEAM_MIN_FREE_SWAP_MB="0"', s, count=1, flags=re.M)
-open(p, 'w', encoding='utf-8').write(s)
-PY
-  # 长词表：28 个类别（每类别一个模型）+ 独立 PM → known 变长，滚轮用例的条目列表会超出可视预算
-  # （不需要改 pane 几何）。P232：词汇表现在来自项目自己的类别策略，席位记录是**已提交派单**、
-  # 不完整的记录不贡献任何模型。
-  local map="routine=provider/m0 analysis=provider/m1"
-  for i in $(seq 2 27); do map="$map cat$i=provider/m$i"; done
-  policy_new "$map" 'provider/pm' || bad "策略升级事务没有跑通（见 $tmp/$current-upgrade.log）"
-  conf_set "lang=zh" "page=1" "activity=1" "mouse=1" "density=comfortable" "theme=auto"
-  # R2 的机器目录夹具：scratch HOME 里放一个含 sub2api（已下线的 provider）与 openrouter 的 Pi 模型
-  # 目录 —— 读与选择器都不许出现它们（真实的 models-store.json 是活缓存，绝不能被当成选项来源）。
+  section "choices · 原选择保存/取消/范围/危险/响应性与模型数量字段草稿"
+  server_up choices
+  local map='routine=example/m0 analysis=example/m1' i
+  for i in $(seq 2 28); do map="$map cat$i=example/m$i"; done
+  policy_new "$map" 'example/pm' || bad "策略准备失败"
+  python3 - "$(cfg)" <<'PYCFG'
+import re,sys
+p=sys.argv[1]; s=open(p).read()
+s=re.sub(r'^TEAM_UPDATE_CHECK=.*\n?', '', s, flags=re.M)
+s=re.sub(r'^TEAM_PULSE_INTERVAL=.*\n?', '', s, flags=re.M)
+s=re.sub(r'^TEAM_REVIEW_TIMEOUT=.*$', 'TEAM_REVIEW_TIMEOUT=30', s, flags=re.M)
+s=re.sub(r'^TEAM_MODEL_LIMITS=.*$', "TEAM_MODEL_LIMITS='example/m0=2  example/*=1 example/m0=4'", s, flags=re.M)
+open(p,'w').write(s)
+PYCFG
   local home="$tmp/$current-home"
   mkdir -p "$home/.pi/agent"
-  cat > "$home/.pi/agent/models-store.json" <<'JSON'
-{ "sub2api": { "models": { "gpt-5.6-luna": { "name": "gpt-5.6-luna", "baseUrl": "http://127.0.0.1:8080/v1" } } },
-  "openrouter": { "models": { "anthropic/claude-x": { "name": "claude-x" } } } }
-JSON
-  # M65/D11：读取窗口的判据是「按键与帧之间没有读取」。后台节拍（activity 块 3s TTL）会无关地
-  # spawn `__panel-data` —— 本段的面板跑在 P21_REFRESH=3600 下（`--refresh` 才是 panel 自己的刷新
-  # 区间；`--interval` 是 `team monitor` 的旗标，panel 忽略它），窗口里出现的任何子进程都是这次
-  # 交互因果产生的。
+  printf '%s\n' '{"machine-only":{"models":{"unrelated":{}}}}' > "$home/.pi/agent/models-store.json"
   P21_REFRESH=3600 P21_HOME="$home" start_panel
   open_view
-  local gap0 acc0
-
-  # ── (1) bool：两个带标签的条目；一次 accept = 校验 + 直写（无确认帧、无编辑器） ──
-  filter_to TEAM_NOTIFY_TMUX
-  # P68：断言那一行本身之前先等数据态（未设 bool 行 + 它的默认值）落定。
-  wait_row bool-row "未设 bool 行显示「未设 · 默认 1」" '走 tmux 投递' '未设 · 默认 1' \
-    || bad "未设的 bool 行没等到显示默认值"
-  assert_match "$tmp/$current/bool-row.txt" '走 tmux 投递 +未设 · 默认 1' "未设的 bool 行显示 未设 · 默认 1"
-  gap0="$(argv_count)"
+  filter_to TEAM_UPDATE_CHECK
+  wait_row bool-row "bool默认有效值" "启动时检查新版本" "开" || bad "bool未落定"
+  local gap0 before audit0
+  before="$(sha "$(cfg)")"; audit0="$(audit_lines)"; gap0="$(argv_count)"
   keys Enter
-  wait_picker TEAM_NOTIFY_TMUX '› 保持未设' || bad "bool 的选择器没有打开"
-  argv_since "$gap0" "$tmp/$current/gap-open.log"
-  local gap_reads gap_total
-  gap_reads="$(argv_reads "$tmp/$current/gap-open.log")"; [ -n "$gap_reads" ] || gap_reads=0
-  gap_total="$(wc -l < "$tmp/$current/gap-open.log")"
-  if [ "$gap_reads" = "0" ] && [ "$gap_total" = "0" ]; then
-    ok "打开选择器：按键→帧之间零读取、零子进程（编辑器只用屏幕上的 settings 块）"
-  else
-    bad "打开选择器：按键→帧之间零读取、零子进程（读=$gap_reads 总=$gap_total）：$(head -3 "$tmp/$current/gap-open.log" 2>/dev/null | tr '\n' ';')"
-  fi
+  wait_picker TEAM_UPDATE_CHECK "› 保持默认值" || bad "bool选择器未打开"
+  argv_since "$gap0" "$tmp/$current/open.log"
+  assert_eq "打开选择器零读取零子进程" "$(wc -l < "$tmp/$current/open.log")" "0"
   cap_to bool
-  assert_match "$tmp/$current/bool.txt" '› 保持未设' "未设键的首个条目是保持未设（并且是焦点）"
-  assert_has "$tmp/$current/bool.txt" "（1） · 默认" "1 是默认条目，带表里的 on 词"
-  assert_has "$tmp/$current/bool.txt" "（0）" "0 是另一个条目，带表里的 off 词"
-  assert_not "$tmp/$current/bool.txt" "…（自由输入）" "bool 是封闭域：没有自由输入项"
-  local bool_sha bool_audit
-  bool_sha="$(sha "$(cfg)")"; bool_audit="$(audit_lines)"
-  acc0="$(argv_count)"
-  pick_option '关（0）' || bad "bool 选择器里没有 关（0）"
-  if wait_cap bool-written "已写入 TEAM_NOTIFY_TMUX = 0"; then ok "bool 选项在一次 accept 上写入（直写）"; else bad "bool 的直写回执没出现"; fi
-  cap_to bool-written
-  assert_not "$tmp/$current/bool-written.txt" "确认：" "直写没有确认帧"
-  assert_not "$tmp/$current/bool-written.txt" "╭─ TEAM_NOTIFY_TMUX" "直写没有打开编辑器"
-  assert_not "$tmp/$current/bool-written.txt" " · TEAM_NOTIFY_TMUX" "直写之后选择器已关闭"
-  assert_match "$(cfg)" "^TEAM_NOTIFY_TMUX=.0.\$" "契约里落了规范值 0"
-  assert_eq "直写让审计长一行" "$(audit_lines)" "$((bool_audit + 1))"
-  argv_since "$acc0" "$tmp/$current/bool-argv.log"
-  assert_eq "accept 的第 1 个子进程是 --dry-run（校验）" "$(sed -n '1p' "$tmp/$current/bool-argv.log" | grep -c -- '--dry-run')" "1"
-  assert_eq "accept 的第 2 个子进程是 --yes 写入" "$(sed -n '2p' "$tmp/$current/bool-argv.log" | grep -c -- '--yes')" "1"
-  assert_eq "accept 之前没有读子进程（第 1 行不是 config list/__panel-data）" "$(sed -n '1p' "$tmp/$current/bool-argv.log" | grep -cE 'config list|__panel-data' || true)" "0"
-  local accept_tail
-  accept_tail="$(tail -n +3 "$tmp/$current/bool-argv.log" 2>/dev/null | grep -v -- '__panel-data --block settings' || true)"
-  if [ -z "$accept_tail" ]; then
-    ok "accept 之后只剩 settings 块的 settle 重读（没有别的块、没有第二次写）"
-  else
-    bad "accept 之后还有别的子进程：$(printf '%s' "$accept_tail" | head -3 | tr '\n' ';')"
-  fi
-  filter_to TEAM_NOTIFY_TMUX
-  # P68：等那一行真的显示刚写下的规范值（accept 后的 settle 重读落定），再按 Enter ——
-  # 选择器是一次成形的快照（D43），不等读就会从旧块开（CI 那三条红就是这个形状）。
-  wait_row bool-set-row "写入后的 bool 行显示新值 0" '走 tmux 投递' '0 · 立即生效' \
-    || bad "写入后的设置行没等到显示新值"
+  assert_has "$tmp/$current/bool.txt" "开 · 默认" "bool默认标记"
+  assert_has "$tmp/$current/bool.txt" "关" "bool另一规范值"
+  assert_not "$tmp/$current/bool.txt" "输入其它值" "bool不提供自由输入"
   keys Enter
-  wait_picker TEAM_NOTIFY_TMUX '关（0） · 当前' || bad "bool 选择器第二次没有打开"
-  cap_to bool-set
-  assert_has "$tmp/$current/bool-set.txt" "关（0） · 当前" "已设的 bool 把文件里的值标成当前"
-  assert_has "$tmp/$current/bool-set.txt" "开（1） · 默认" "默认标记移到 1 上"
-  assert_not "$tmp/$current/bool-set.txt" "保持未设" "已设的键没有保持未设条目"
-  leave_picker TEAM_NOTIFY_TMUX
-  # 非规范拼写（手改出来的 true）：当前条目原样显示，不许被贴成「关（0）」（命令写入时才 canonical 化）。
-  python3 - "$(cfg)" <<'PY2'
-import re, sys
-p = sys.argv[1]
-s = open(p, encoding='utf-8').read()
-s = re.sub(r'^TEAM_NOTIFY_TMUX=.*$', 'TEAM_NOTIFY_TMUX=true', s, count=1, flags=re.M)
-open(p, 'w', encoding='utf-8').write(s)
-PY2
-  # 手改之后要用视图自己的读取把它读进来（M65/D11：进入视图是视图自己的读取；交互路径没有读取）
-  reopen_view
-  filter_to TEAM_NOTIFY_TMUX
-  # P68（本变更的主目标）：等那一行**本身**显示手改后的值（视图打开时那次强制读落定）再按 Enter。
-  # 等待名把被等的状态写清楚；耗尽时引擎打一行 `等待超时：数据态：…（缺 [走 tmux 投递 true · 立即生效]）`，
-  # 骨架标记（分组标题）与固定 sleep 都不再是证据。
-  wait_row bool-spelling-row "设置行显示手改后的值 true" '走 tmux 投递' 'true · 立即生效' \
-    || bad "手改后的设置行没等到显示新值"
+  wait_row keep-default "保持默认只取消" "╭─ 项目设置" "启动时检查新版本" || bad "保持默认未返回"
+  assert_eq "保持默认配置不变" "$(sha "$(cfg)")" "$before"
+  assert_eq "保持默认不增审计" "$(audit_lines)" "$audit0"
+  assert_eq "保持默认没有临时文件" "$(find "$ROOT/.pi/team" -name 'config.sh.tmp.*' | wc -l)" "0"
   keys Enter
-  wait_picker TEAM_NOTIFY_TMUX 'true · 当前' || bad "非规范 bool 的选择器没有打开"
-  cap_to bool-spelling
-  assert_has "$tmp/$current/bool-spelling.txt" "true · 当前" "非规范拼写的手改值原样显示成当前条目"
-  assert_not "$tmp/$current/bool-spelling.txt" "关（0） · 当前" "非规范拼写不许被贴成规范值的标签"
-  assert_has "$tmp/$current/bool-spelling.txt" "开（1） · 默认" "规范默认值仍在"
-  leave_picker TEAM_NOTIFY_TMUX
-
-  # ── (2) enum：只给 constraints 里的取值，原序；接受即写（直写，restart 回执说明时机） ──
-  filter_to TEAM_MONITOR_UI
-  sleep 0.5
-  keys Enter
-  wait_picker TEAM_MONITOR_UI 'auto · 默认' || bad "enum 的选择器没有打开"
-  cap_to enum
-  assert_match "$tmp/$current/enum.txt" '› 保持未设' "未设的 enum 也以保持未设开头"
-  assert_has "$tmp/$current/enum.txt" "auto · 默认" "默认标记在 auto 上"
-  assert_has "$tmp/$current/enum.txt" "tui" "enum 给出 constraints 里的 tui"
-  assert_has "$tmp/$current/enum.txt" "text" "enum 给出 constraints 里的 text"
-  assert_not "$tmp/$current/enum.txt" "…（自由输入）" "enum 是封闭域：没有自由输入项"
-  local enum_sha enum_audit
-  enum_sha="$(sha "$(cfg)")"; enum_audit="$(audit_lines)"
-  pick_option 'tui' || bad "enum 选择器里没有 tui"
-  if wait_cap enum-written "已写入 TEAM_MONITOR_UI = tui"; then ok "enum 选项在一次 accept 上写入（直写）"; else bad "enum 的直写回执没出现"; fi
-  cap_to enum-written
-  assert_has "$tmp/$current/enum-written.txt" "需要重启才生效" "restart 类的回执说明重启时机"
-  assert_not "$tmp/$current/enum-written.txt" "确认：" "enum 直写没有确认帧"
-  assert_not "$tmp/$current/enum-written.txt" "╭─ TEAM_MONITOR_UI" "enum 直写没有编辑器"
-  assert_eq "enum 一次 accept 只审计一行" "$(audit_lines)" "$((enum_audit + 1))"
-  assert_match "$(argv_log)" 'config set TEAM_MONITOR_UI tui --actor panel --dry-run --fingerprint [0-9a-f]{64}' "wrapper 记录了 --dry-run"
-  assert_match "$(argv_log)" 'config set TEAM_MONITOR_UI tui --actor panel --yes --fingerprint [0-9a-f]{64}' "wrapper 记录了 --yes + 指纹"
-
-  # ── (3) 未设键：编辑器开在「保持未设」上，接受 = 取消（不写、不留审计、不留临时文件）；再接受 300 = 直写 ──
-  filter_to TEAM_DEFER_TTL
-  wait_row defer-row "未设 seconds 行显示「未设 · 默认 300」" '排队过期时间' '未设 · 默认 300' \
-    || bad "未设键的行没等到显示默认值"
-  assert_match "$tmp/$current/defer-row.txt" '排队过期时间 +未设 · 默认 300' "未设键的行显示 未设 · 默认 300"
-  local defer_sha defer_audit
-  defer_sha="$(sha "$(cfg)")"; defer_audit="$(audit_lines)"
-  keys Enter
-  wait_picker TEAM_DEFER_TTL '› 保持未设' || bad "未设键的选择器没有打开"
-  cap_to defer
-  assert_match "$tmp/$current/defer.txt" '› 保持未设' "未设键的编辑器开在保持未设上"
-  keys Enter
-  # M59: conditional — 保持未设 accepts = the picker closes with no editor; wait for BOTH the tray
-  # and the picker title to be absent on a settled frame, instead of a fixed sleep.
-  pty_wait_frame "$tmp/$current/defer-cancel.txt" "保持未设接受（无编辑器无选择器）" '!╭─ TEAM_DEFER_TTL' '! · TEAM_DEFER_TTL' \
-    || bad "保持未设没有干净地回到行列表"
-  assert_not "$tmp/$current/defer-cancel.txt" "╭─ TEAM_DEFER_TTL" "保持未设不打开写编辑器"
-  assert_not "$tmp/$current/defer-cancel.txt" " · TEAM_DEFER_TTL" "保持未设关掉了选择器（回到行列表）"
-  assert_eq "保持未设后契约不变" "$(sha "$(cfg)")" "$defer_sha"
-  assert_eq "保持未设后审计不增长" "$(audit_lines)" "$defer_audit"
-  assert_eq "保持未设后没有临时文件" "$(ls "$ROOT/.pi/team/"config.sh.tmp.* 2>/dev/null | wc -l)" "0"
-  # 再开一次：接受「300」这一项 → 一次 accept 直写（M65/D10；视图不说这是 unset）
-  filter_to TEAM_DEFER_TTL
-  sleep 0.5
-  keys Enter
-  wait_picker TEAM_DEFER_TTL '› 保持未设' || bad "未设键的选择器第二次没有打开"
-  pick_option '300' || bad "未设键的选择器里没有 300 项"
-  if wait_cap defer-written "已写入 TEAM_DEFER_TTL = 300"; then
-    ok "未设键选默认值 = 一次 accept 直写（视图没有把这次写入说成 unset）"
-  else
-    bad "未设键选默认值的直写回执没出现"
-  fi
-  cap_to defer-written
-  assert_not "$tmp/$current/defer-written.txt" "确认：" "未设键直写没有确认帧"
-  assert_not "$tmp/$current/defer-written.txt" "╭─ TEAM_DEFER_TTL" "未设键直写没有编辑器"
-  assert_match "$(cfg)" "^TEAM_DEFER_TTL=.300.\$" "契约里显式写上 300"
-  assert_eq "未设键直写审计长一行" "$(audit_lines)" "$((defer_audit + 1))"
-
-  # ── (4) 数值键：区间 + 建议值 + 自由输入（唯一进编辑器的路径）；非法值被拒且保留草稿；建议值直写 ──
-  filter_to TEAM_PULSE_INTERVAL
-  sleep 0.5
-  keys Enter
-  wait_picker TEAM_PULSE_INTERVAL '› 保持未设' || bad "数值键的选择器没有打开"
-  cap_to numeric
-  assert_has "$tmp/$current/numeric.txt" "60–∞" "数值键显示命令给的接受区间（上界空 = 无界）"
-  assert_match "$tmp/$current/numeric.txt" '› 保持未设' "未设的数值键也以保持未设开头"
-  assert_has "$tmp/$current/numeric.txt" "900 · 默认" "建议值里的默认值带默认标记"
-  assert_has "$tmp/$current/numeric.txt" "1800" "建议值原样给出"
-  assert_has "$tmp/$current/numeric.txt" "…（自由输入）" "数值键有自由输入项"
-  local num_sha num_audit
-  num_sha="$(sha "$(cfg)")"; num_audit="$(audit_lines)"
-  pick_option '自由输入' || bad "数值选择器里没有自由输入项"
-  wait_editor TEAM_PULSE_INTERVAL || bad "数值自由输入没有打开写编辑器"
-  keys C-u; sleep 0.3
-  type_text "30"; sleep 0.4
-  keys Enter
-  if wait_cap numeric-invalid "最小 60"; then ok "越界的数值被命令拒绝并点名最小 60"; else bad "越界数值的拒绝没出现"; fi
-  assert_eq "被拒后契约不变" "$(sha "$(cfg)")" "$num_sha"
-  cap_has "TEAM_PULSE_INTERVAL" numeric-draft
-  leave_editor TEAM_PULSE_INTERVAL
-  # 4b）建议值也是值条目：一次 accept 直写，不进编辑器（M65/D10）
-  filter_to TEAM_PULSE_INTERVAL
-  sleep 0.5
-  keys Enter
-  wait_picker TEAM_PULSE_INTERVAL '› 保持未设' || bad "数值键的选择器第二次没有打开"
-  pick_option '1800' || bad "数值选择器里没有 1800"
-  if wait_cap num-written "已写入 TEAM_PULSE_INTERVAL = 1800"; then ok "建议值条目一次 accept 直写"; else bad "建议值条目的直写回执没出现"; fi
-  cap_to num-written
-  assert_not "$tmp/$current/num-written.txt" "确认：" "建议值直写没有确认帧"
-  assert_not "$tmp/$current/num-written.txt" "╭─ TEAM_PULSE_INTERVAL" "建议值直写没有编辑器"
-  assert_eq "建议值直写审计长一行" "$(audit_lines)" "$((num_audit + 1))"
-
-  # ── (5) path：存在性标记 / 只有命令接受空值时才给清空项 / 清空也是直写 / 自由输入的确认行重复标记 ──
-  filter_to TEAM_AGENT_BIN
-  sleep 0.5
-  keys Enter
-  wait_picker TEAM_AGENT_BIN 'nonexistent/m55-agent' || bad "path 选择器没有打开"
-  cap_to path
-  assert_match "$tmp/$current/path.txt" '/nonexistent/m55-agent · 当前 · 不存在' "path 当前值带着缺失标记"
-  assert_has "$tmp/$current/path.txt" "清空（写入空值）" "exec,opt 的 path 给出清空项"
-  assert_has "$tmp/$current/path.txt" "…（自由输入）" "path 给出自由输入项"
-  local path_audit
-  path_audit="$(audit_lines)"
-  pick_option '清空（写入空值）' || bad "path 选择器里没有清空项"
-  if wait_cap path-cleared "已写入 TEAM_AGENT_BIN"; then ok "清空项也是一次 accept 直写"; else bad "清空项的直写回执没出现"; fi
-  cap_to path-cleared
-  assert_not "$tmp/$current/path-cleared.txt" "确认：" "清空直写没有确认帧"
-  assert_not "$(cfg)" "/nonexistent/m55-agent" "清空把文件里的当前值写掉"
-  assert_eq "清空直写审计长一行" "$(audit_lines)" "$((path_audit + 1))"
-  filter_to TEAM_PI_BIN
-  sleep 0.5
-  keys Enter
-  wait_picker TEAM_PI_BIN '· 当前' || bad "必填 path 的选择器没有打开"
-  cap_to path-required
-  assert_not "$tmp/$current/path-required.txt" "清空" "必填 path 不给清空项（命令不接受空值）"
-  pick_option '自由输入' || bad "必填 path 没有自由输入项"
-  wait_editor TEAM_PI_BIN || bad "必填 path 的自由输入没有打开写编辑器"
-  keys C-u; sleep 0.3
-  type_text "/nonexistent/m55-pi"; sleep 0.4
-  keys Enter
-  if wait_cap path-confirm "不存在"; then ok "确认行重复存在性标记（命令不拒写，视图也不谎称拒绝）"; else bad "确认行的存在性标记没出现"; fi
-  leave_editor TEAM_PI_BIN
-  wait_no_editor || bad "path 编辑器没有关干净"
-
-  # ── (6) 没有选项集的 kind：打开自由输入并写明原因，不渲染条目列表 ──
-  filter_to TEAM_GATES
-  sleep 0.5
+  wait_picker TEAM_UPDATE_CHECK "关" || bad "第二次bool未打开"
   gap0="$(argv_count)"
+  pick_option 关 || bad "找不到关"
+  wait_cap bool-written "已保存启动时检查新版本" || bad "bool直写没有回执"
+  assert_match "$(cfg)" "^TEAM_UPDATE_CHECK=.0.$" "bool落规范0"
+  assert_eq "一次accept审计一行" "$(audit_lines)" "$((audit0+1))"
+  argv_since "$gap0" "$tmp/$current/accept.log"
+  assert_match "$tmp/$current/accept.log" 'config set TEAM_UPDATE_CHECK 0 --actor panel --dry-run --fingerprint [0-9a-f]{64}' "dry-run带actor和原指纹"
+  assert_match "$tmp/$current/accept.log" 'config set TEAM_UPDATE_CHECK 0 --actor panel --yes --fingerprint [0-9a-f]{64}' "直写带actor和原指纹"
+  assert_not "$tmp/$current/bool-written.txt" "原值" "普通选择不多一轮确认"
+  wait_row bool-new "后台读回规范0" "启动时检查新版本" "关" || bad "bool没有读回"
   keys Enter
-  wait_editor TEAM_GATES "没有选项集" || bad "cmd 键没有打开自由输入"
-  argv_since "$gap0" "$tmp/$current/gap-editor.log"
-  local ed_reads
-  ed_reads="$(argv_reads "$tmp/$current/gap-editor.log")"; [ -n "$ed_reads" ] || ed_reads=0
-  assert_eq "打开自由输入：按键→帧之间零读取（现场：$(head -2 "$tmp/$current/gap-editor.log" 2>/dev/null | tr '\n' ';')）" "$ed_reads" "0"
-  cap_to no-choice
-  assert_has "$tmp/$current/no-choice.txt" "╭─ TEAM_GATES" "cmd 键直接打开自由输入"
-  assert_has "$tmp/$current/no-choice.txt" "没有选项集" "编辑器上方写明原因（kind 没有选项集，写入仍由命令校验）"
-  leave_editor TEAM_GATES
-  wait_no_editor || bad "cmd 编辑器没有关干净"
+  wait_picker TEAM_UPDATE_CHECK "关 · 当前" || bad "bool当前标记错误"
+  before="$(sha "$(cfg)")"; audit0="$(audit_lines)"
+  local y
+  y="$(cap_now | grep -n '开 · 默认' | head -1 | cut -d: -f1)"
+  [ -n "$y" ] && click_at 5 "$y"
+  wait_row click-first "单击选择" "› 开" || bad "单击未选择"
+  assert_eq "单击未写" "$(sha "$(cfg)")" "$before"
+  y="$(cap_now | grep -n '› 开' | head -1 | cut -d: -f1)"
+  [ -n "$y" ] && click_at 5 "$y"
+  wait_cap click-written "已保存启动时检查新版本" || bad "二击未直写"
+  assert_eq "二击只增一次审计" "$(audit_lines)" "$((audit0+1))"
+  wait_row bool-one "bool读回1" "启动时检查新版本" "开" || bad "bool读回失败"
+  keys Enter; wait_picker TEAM_UPDATE_CHECK "开 · 当前" || bad "取消picker未打开"
+  before="$(sha "$(cfg)")"; audit0="$(audit_lines)"; gap0="$(argv_count)"
+  leave_picker TEAM_UPDATE_CHECK || bad "picker取消失败"
+  assert_eq "取消不写" "$(sha "$(cfg)")" "$before"
+  assert_eq "取消不增审计" "$(audit_lines)" "$audit0"
+  argv_since "$gap0" "$tmp/$current/cancel.log"
+  assert_not "$tmp/$current/cancel.log" "config set" "取消不调用writer"
+  PTY_TRACE=1 pty_cleanup_esc "已关闭的选择器" "╭─ 启动时检查新版本" > "$tmp/$current/cleanup-trace.txt" 2>&1
+  assert_has "$tmp/$current/cleanup-trace.txt" "action=none" "已关闭选择器清理不发Esc"
+  assert_has "$tmp/$current/cleanup-trace.txt" "reason=not-settled" "清理依据稳定帧而非等待上限"
+  cap_to cleanup
+  assert_has "$tmp/$current/cleanup.txt" "╭─ 项目设置" "清理未穿透设置"
+  keys Enter
+  PTY_TRACE=1 wait_picker TEAM_UPDATE_CHECK '开 · 当前' > "$tmp/$current/wait-trace.txt" 2>&1 || bad "正常trace选择器未打开"
+  assert_match "$tmp/$current/wait-trace.txt" 'wait picker TEAM_UPDATE_CHECK rounds=[0-9]+ settled=1' "正常等待放行仍来自稳定帧"
+  leave_picker TEAM_UPDATE_CHECK || bad "正常trace选择器未关闭"
 
-  # ── (7) task-model-map：Enter 把焦点移到类别块，绝不在这里组合映射（不读、不开编辑器） ──
-  # P232：夹具契约是先 upgrade-models 过的（这一段上面已经升过），所以类别块里至少有一个 routine 行。
-  filter_to TEAM_TASK_MODELS
-  sleep 0.5
-  keys Enter
-  if wait_cap pairlist "类别块就是这一行的编辑器"; then ok "整映射行把焦点交给类别块"; else bad "类别块路由的说明行没出现"; fi
-  cap_to pairlist
-  assert_not "$tmp/$current/pairlist.txt" "╭─ TEAM_TASK_MODELS" "整映射行不开写编辑器"
-  assert_not "$tmp/$current/pairlist.txt" " · TEAM_TASK_MODELS" "整映射行不开选择器"
-  assert_match "$tmp/$current/pairlist.txt" '› 类别 routine' "焦点移到类别块的第一行"
-  assert_has "$tmp/$current/pairlist.txt" "team config set-task-model" "命令行点名 set-task-model（唯一写者）"
+  filter_to TEAM_PULSE_INTERVAL; keys Enter
+  wait_picker TEAM_PULSE_INTERVAL "保持默认值" || bad "数值未打开"
+  cap_to numeric
+  assert_has "$tmp/$current/numeric.txt" "60–" "原读的最小值可见"
+  assert_has "$tmp/$current/numeric.txt" "900 秒 · 默认" "原默认值及单位可见"
+  assert_has "$tmp/$current/numeric.txt" "1800" "原建议值可见"
+  pick_option 输入其它值 || bad "没有自由输入"
+  wait_editor TEAM_PULSE_INTERVAL "900" || bad "原有效值不可编辑"
+  keys C-u; sleep 0.3; type_text 30; sleep 0.3; keys Enter
+  wait_cap invalid "最小 60" || bad "真实范围错误消失"
+  assert_eq "非法值保留配置" "$(sha "$(cfg)")" "$before"
+  assert_eq "非法值没有审计" "$(audit_lines)" "$audit0"
+  leave_editor TEAM_PULSE_INTERVAL || bad "非法草稿取消失败"
+  filter_to TEAM_PULSE_INTERVAL; keys Enter
+  wait_picker TEAM_PULSE_INTERVAL "1800" || bad "数值重开失败"
+  pick_option 1800 || bad "建议值不可选择"
+  wait_cap suggestion "已保存检查间隔" || bad "建议值没有直写"
+  assert_has "$tmp/$current/suggestion.txt" "team pulse restart" "间隔保存提示真实重启条件"
+  assert_match "$(cfg)" "^TEAM_PULSE_INTERVAL=.1800.$" "建议值落盘"
 
-  # ── (8) 鼠标：第一次点击只移光标（不写）；第二次点击 = 接受并直写；esc 什么都不写 ──
-  wait_no_editor || bad "点击用例开始前还有编辑器开着"
-  filter_to TEAM_MONITOR_UI
-  sleep 0.5
-  keys Enter
-  wait_picker TEAM_MONITOR_UI 'tui · 当前' || bad "点击用例的选择器没有打开"
-  local click_sha click_audit target_line
-  click_sha="$(sha "$(cfg)")"; click_audit="$(audit_lines)"
-  target_line="$(cap | grep -n 'text' | grep -v '›' | head -1 | cut -d: -f1)"
-  [ -n "$target_line" ] || bad "选择器里找不到可点击的 text 条目"
-  [ -n "$target_line" ] && click_at 4 "$target_line"
-  # P68：等点击的光标移动在稳定帧上（原来是固定 sleep + 单次采样）。
-  wait_row click-move "第一次点击把光标移到该条目" '› text' \
-    || bad "第一次点击后光标没有落到该条目"
-  assert_match "$tmp/$current/click-move.txt" '› text' "第一次点击把光标移到该条目（D7 的规矩）"
-  assert_eq "第一次点击不写契约" "$(sha "$(cfg)")" "$click_sha"
-  assert_eq "第一次点击不增审计" "$(audit_lines)" "$click_audit"
-  click_at 4 "$target_line"
-  if wait_cap click-written "已写入 TEAM_MONITOR_UI = text"; then ok "第二次点击与 Enter 一样接受并直写"; else bad "第二次点击的直写回执没出现"; fi
-  assert_eq "第二次点击审计长一行" "$(audit_lines)" "$((click_audit + 1))"
-  assert_match "$(argv_log)" 'config set TEAM_MONITOR_UI text --actor panel --yes --fingerprint [0-9a-f]{64}' "第二次点击走了直写（--yes + 指纹）"
-  # esc：打开选择器 → esc → 什么都不写
-  filter_to TEAM_MONITOR_UI
-  sleep 0.5
-  local esc_audit esc0 esc_sha
-  esc_audit="$(audit_lines)"; esc0="$(argv_count)"; esc_sha="$(sha "$(cfg)")"
-  keys Enter
-  wait_picker TEAM_MONITOR_UI 'text · 当前' || bad "esc 用例的选择器没有打开"
-  # M59: the test-action esc is also state-checked — if the picker is not on a settled frame the
-  # key is not sent and the miss is named, instead of the esc closing whatever is underneath.
-  pty_key_when "esc 用例" " · TEAM_MONITOR_UI" Escape || bad "esc 用例：选择器不在稳定帧上，esc 没有发"
-  # P68：等 esc 的效果（选择器关掉、回到行列表）在稳定帧上，不用固定 sleep 采样。
-  wait_row picker-esc "esc 后选择器关掉、回到行列表那一行" '! · TEAM_MONITOR_UI' 'team config set TEAM_MONITOR_UI' \
-    || bad "esc 之后选择器没有关掉（或行列表没有回来）"
-  assert_not "$tmp/$current/picker-esc.txt" " · TEAM_MONITOR_UI" "esc 关掉选择器"
-  assert_has "$tmp/$current/picker-esc.txt" "team config set TEAM_MONITOR_UI" "回到行列表且焦点仍在原来那一行"
-  assert_eq "esc 后契约不变" "$(sha "$(cfg)")" "$esc_sha"
-  assert_eq "esc 后审计不增长" "$(audit_lines)" "$esc_audit"
-  argv_since "$esc0" "$tmp/$current/esc-argv.log"
-  assert_not "$tmp/$current/esc-argv.log" "config set" "esc 的窗口里没有 config set"
-  assert_not "$tmp/$current/esc-argv.log" "set-task-model" "esc 的窗口里没有类别写"
-  # M59 判据②（真实场景）：此刻选择器已被上面那条 esc 关掉 —— 清理点的 esc 必须先确认状态。
-  # 旧写法的裸 esc 在这里会把设置视图整个关掉，之后每段都在错的视图里跑（§38-b 的级联入口）。
-  PTY_TRACE=1 pty_cleanup_esc "回归钉：已关闭的选择器" " · TEAM_MONITOR_UI" > "$tmp/$current/cleanup-trace.txt" 2>&1
-  assert_has "$tmp/$current/cleanup-trace.txt" "action=none" "已关闭的选择器：清理守卫一个键都不发"
-  assert_has "$tmp/$current/cleanup-trace.txt" "reason=not-settled" "  守卫的理由是「标记不在稳定帧上」，不是预算"
-  cap_to cleanup-after
-  assert_has "$tmp/$current/cleanup-after.txt" "╭─ 项目设置" "设置视图还开着（没有裸 esc 打到它身上）"
-  # M59 判据①的 trace 面：一次正常等待的放行点在 trace 里可见（命中 + 稳定确认，轮数自适应）。
-  keys Enter
-  PTY_TRACE=1 wait_picker TEAM_MONITOR_UI 'text · 当前' > "$tmp/$current/wait-trace.txt" 2>&1 \
-    || bad "trace 探针的选择器没有打开"
-  assert_match "$tmp/$current/wait-trace.txt" 'wait picker TEAM_MONITOR_UI rounds=[0-9]+ settled=1' "正常等待放行在稳定帧上（trace 可见轮数）"
-  leave_picker TEAM_MONITOR_UI || bad "trace 探针的选择器没有关掉"
-
-  # ── (9) 滚轮：条目列表比可视预算长时滚得动（焦点走过的就是列表滚过的） ──
-  wait_no_editor || bad "滚轮用例开始前还有编辑器开着"
-  filter_to TEAM_PM_MODEL
-  sleep 0.5
-  keys Enter
-  wait_picker TEAM_PM_MODEL '↓' || bad "长列表选择器没有打开"
+  filter_to TEAM_PM_MODEL; keys Enter
+  wait_picker TEAM_PM_MODEL "↓" || bad "长模型词表未打开"
   cap_to wheel-before
-  local before_hidden
-  before_hidden="$(grep -oE '↓[0-9]+' "$tmp/$current/wheel-before.txt" | head -1 | tr -d '↓' || true)"
-  [ -n "$before_hidden" ] && ok "长列表在可视预算之外还有 $before_hidden 个条目（计数行）" \
-    || bad "长列表没有被窗口截断（滚轮用例前提不成立）"
-  assert_not "$tmp/$current/wheel-before.txt" "…（自由输入）" "滚动前看不到列表末尾的自由输入项"
-  local w
-  for w in $(seq 1 32); do
-    tmux -L "$sock" send-keys -t "$sess:panel" -l "$(printf '\033[<65;20;20M')" 2>/dev/null || true
-    sleep 0.1
-  done
-  # M59: conditional — wait for the wheel's repaint to settle AND the hidden count to drop.
-  local after_hidden=""
-  for w in $(seq 1 20); do
-    cap_to wheel-after
-    after_hidden="$(grep -oE '↓[0-9]+' "$tmp/$current/wheel-after.txt" | head -1 | tr -d '↓' || true)"
-    { [ -n "$after_hidden" ] && [ "$after_hidden" -lt "$before_hidden" ]; } && break
-    sleep 0.2
-  done
-  if [ -n "$before_hidden" ] && [ "${after_hidden:-0}" -lt "$before_hidden" ]; then
-    ok "滚轮把可见窗口往下推了（↓$before_hidden → ↓${after_hidden:-0}）"
-  else
-    bad "滚轮没有推动可见窗口（↓$before_hidden → ↓${after_hidden:-0}）"
-  fi
-  assert_has "$tmp/$current/wheel-after.txt" "…（自由输入）" "滚轮一直滚到列表末尾（自由输入项可见）"
-  assert_match "$tmp/$current/wheel-after.txt" "↑[0-9]+" "滚过之后列表上方也有被隐藏的条目"
-  # R2 的入口断言：scratch HOME 的目录（sub2api / openrouter）不在选择器里，也不在读里。
-  assert_not "$tmp/$current/wheel-before.txt" "sub2api" "选择器开屏不列机器目录里的 sub2api（词表只有项目数据）"
-  assert_not "$tmp/$current/wheel-after.txt" "sub2api" "滚到底也不列机器目录里的 sub2api"
-  assert_not "$tmp/$current/wheel-after.txt" "openrouter" "选择器不列机器目录里的 openrouter"
+  for i in $(seq 1 35); do wheel_at down 20 12; done
+  wait_row wheel-after "长模型词表末尾" "输入其它值" "↑" || bad "长词表不能滚到尾部"
+  assert_not "$tmp/$current/wheel-before.txt" "machine-only" "开屏词表不列机器目录模型"
+  assert_not "$tmp/$current/wheel-after.txt" "machine-only" "项目选项不读机器目录"
   ( cd "$ROOT" && HOME="$home" bash "$skill/scripts/team" config list --json ) > "$tmp/$current/read-json.json" 2>&1
-  assert_not "$tmp/$current/read-json.json" "sub2api" "同一 scratch HOME 下的读也不含目录 provider"
-  # 硬化自检（M55 第一次复验 FAIL 的回归钉 + M59 判据①/③）……
-  if wait_picker_quick TEAM_PM_MODEL '这条目不存在-硬线自检'; then
-    bad "wait_picker 只凭标题就放行了（条目标记/稳定帧没起作用）"
-  else
-    ok "wait_picker 要的条目不在稳定帧里时判负（标题命中不算，现场见上面的黄点场景）"
-  fi
-  # 清理守卫把 esc 只打在真开着的选择器上（这里选择器确实开着 → 恰好一个 esc）。
-  leave_picker TEAM_PM_MODEL || bad "回归钉之后的选择器没有关掉"
+  assert_not "$tmp/$current/read-json.json" "machine-only" "同一机器目录下的实际读也只含项目词表"
+  if wait_picker_quick TEAM_PM_MODEL "不存在的条目"; then bad "缺条目仍被当作已到达"; else ok "等待须命中实际条目"; fi
+  leave_picker TEAM_PM_MODEL || bad "长词表退出失败"
 
-  # ── (10) 危险值来自选项：第一次 accept 只给警告（不写、不审计），第二次才带 danger allowance 写入 ──
-  filter_to TEAM_MIN_FREE_SWAP_MB
-  sleep 0.5
+  open_secondary commands
+  filter_to TEAM_GATES; gap0="$(argv_count)"; keys Enter
+  wait_editor TEAM_GATES "true" || bad "命令原值未打开"
+  argv_since "$gap0" "$tmp/$current/command-open.log"
+  assert_eq "命令自由输入打开零读取" "$(argv_reads "$tmp/$current/command-open.log")" "0"
+  leave_editor TEAM_GATES || bad "命令取消失败"
+  filter_to TEAM_REVIEW_TIMEOUT; keys Enter
+  wait_picker TEAM_REVIEW_TIMEOUT "30 · 当前" || bad "危险选项未打开"
+  before="$(sha "$(cfg)")"; audit0="$(audit_lines)"; gap0="$(argv_count)"
+  pick_option "30 · 当前" || bad "危险当前值不存在"
+  wait_cap danger "危险：" || bad "危险未要求确认"
+  assert_eq "危险首次accept不写" "$(sha "$(cfg)")" "$before"
+  assert_eq "危险首次accept无审计" "$(audit_lines)" "$audit0"
+  argv_since "$gap0" "$tmp/$current/danger.log"
+  assert_not "$tmp/$current/danger.log" "--yes" "危险首次accept没有yes"
   keys Enter
-  wait_picker TEAM_MIN_FREE_SWAP_MB '0 · 当前' || bad "danger 用例的选择器没有打开"
-  cap_to danger
-  assert_has "$tmp/$current/danger.txt" "0 · 当前" "文件里的 0 在选项里就是「当前」（选项也可以是危险值）"
-  local d_sha d_audit d0
-  d_sha="$(sha "$(cfg)")"; d_audit="$(audit_lines)"; d0="$(argv_count)"
-  pick_option '0 · 当前' || bad "danger 用例里没有 0 条目"
-  if wait_cap danger-warn "危险："; then ok "选项里的危险值先要一次确认（第一次 accept 不写）"; else bad "危险值的警告没出现"; fi
-  assert_eq "警告后契约不变" "$(sha "$(cfg)")" "$d_sha"
-  assert_eq "警告后审计不增长" "$(audit_lines)" "$d_audit"
-  cap_to danger-warn
-  assert_has "$tmp/$current/danger-warn.txt" " · TEAM_MIN_FREE_SWAP_MB" "警告之后选择器还开着（第二次 accept 在同一处）"
-  argv_since "$d0" "$tmp/$current/danger-argv.log"
-  assert_not "$tmp/$current/danger-argv.log" "--yes" "警告这一次没有 --yes（什么都没写）"
+  wait_cap danger-saved "已保存验收最长时间" || bad "危险确认未保存"
+  assert_match "$(argv_log)" 'config set TEAM_REVIEW_TIMEOUT 30 --actor panel --yes --fingerprint [0-9a-f]{64} --allow-danger' "危险值仍带allow-danger"
+  filter_clear; keys Escape; sleep 0.4
+
+  # 所有字段修改只留草稿；完整旧/新确认后一次写回，重复、原序和其它token必须保留。
+  filter_to TEAM_MODEL_LIMITS; keys Enter
+  wait_row rules "规则字段入口" "模型同时运行任务数" "example/m0" "example/*" "添加限制" || bad "规则列表未打开"
+  before="$(sha "$(cfg)")"; audit0="$(audit_lines)"
   keys Enter
-  if wait_cap danger-written "已写入 TEAM_MIN_FREE_SWAP_MB = 0"; then ok "第二次 accept 带 danger allowance 写入"; else bad "危险值的第二次 accept 没有落盘"; fi
-  assert_match "$(argv_log)" 'config set TEAM_MIN_FREE_SWAP_MB 0 --actor panel --yes --fingerprint [0-9a-f]{64} --allow-danger' "写入带 --allow-danger（命令的 danger 例外）"
-  assert_eq "危险值第二次 accept 审计长一行" "$(audit_lines)" "$((d_audit + 1))"
+  wait_row fields "模型数量字段" "适用模型" "同时运行数量" "删除限制" || bad "未显示两个字段"
+  keys Down; sleep 0.3; keys Enter
+  wait_editor 同时运行数量 "2" || bad "数量字段没有原值"
+  keys C-u; sleep 0.3; type_text -1; sleep 0.3; keys Enter
+  wait_cap count-invalid "请输入非负整数" || bad "数量字段非法值未保留"
+  assert_eq "字段非法配置不变" "$(sha "$(cfg)")" "$before"
+  keys C-u; sleep 0.3; type_text 0; sleep 0.3; keys Enter
+  wait_row unlimited "0的业务标签" "此项不限制" || bad "0未显示此项不限制"
+  assert_eq "字段完成仍未写" "$(sha "$(cfg)")" "$before"
+  keys Escape; sleep 0.4
+  focus_row '› 保存' || bad "保存行不可达"
+  keys Enter
+  wait_row rules-confirm "完整旧新规则" "原值" "新值" "example/*" "此项不限制" || bad "完整规则确认未显示"
+  assert_eq "整组确认阶段不写" "$(sha "$(cfg)")" "$before"
+  keys Enter
+  wait_cap rules-written "已保存模型同时运行任务数" || bad "完整规则未保存"
+  assert_match "$(cfg)" "^TEAM_MODEL_LIMITS='example/m0=0 example/\*=1 example/m0=4'$" "只改一个token，重复及顺序保留"
+  assert_eq "完整规则只审计一行" "$(audit_lines)" "$((audit0+1))"
+  assert_match "$(argv_log)" 'config set TEAM_MODEL_LIMITS .* --actor panel --yes --fingerprint [0-9a-f]{64}' "完整键writer带CAS与actor"
+  # 添加/删除/取消与冲突：不另写每模型文件，也不碰原配置。
+  filter_to TEAM_MODEL_LIMITS; keys Enter
+  wait_row rules-again "规则重新打开" "添加限制" || bad "规则未重开"
+  before="$(sha "$(cfg)")"; audit0="$(audit_lines)"
+  focus_row '› 添加限制'; keys Enter
+  wait_row added "新增草稿字段" "适用模型" "同时运行数量" || bad "新增字段未打开"
+  keys Enter
+  wait_picker 适用模型 "example/m0" || bad "适用模型picker未打开"
+  for i in $(seq 1 35); do wheel_at down 20 12; done
+  wait_row model-other "长词表中的其它适用模型" "› 其它适用模型" || bad "其它适用模型不可达"
+  keys Enter
+  wait_editor 适用模型 || bad "表达式输入未打开"
+  type_text 'example/new*'; sleep 0.3; keys Enter
+  wait_row added-model "新增表达式只改草稿" "example/new*" || bad "表达式草稿未显示"
+  focus_row '› 删除限制'; keys Enter
+  wait_row deleted "删除返回列表" "添加限制" || bad "删除未返回列表"
+  keys Escape
+  wait_row rules-cancel "整组取消" "╭─ 项目设置" || bad "整组取消未返回"
+  assert_eq "新增删除取消保留字节" "$(sha "$(cfg)")" "$before"
+  assert_eq "新增删除取消无审计" "$(audit_lines)" "$audit0"
+  keys Enter
+  wait_row rules-stale "冲突规则列表" "添加限制" || bad "冲突规则未打开"
+  printf '# other writer\n' >> "$(cfg)"
+  local other; other="$(sha "$(cfg)")"
+  focus_row '› 保存'; keys Enter
+  wait_cap rules-stale-confirm "设置已被修改，未保存" || bad "规则旧指纹未提示冲突"
+  keys Enter
+  wait_cap rules-stale-result "设置已被修改，未保存" || bad "规则冲突未保留"
+  assert_eq "规则CAS保住另一个写者字节" "$(sha "$(cfg)")" "$other"
+  assert_match "$(audit_log)" 'result=conflict actor=panel key=TEAM_MODEL_LIMITS' "规则冲突有原审计"
+  assert_not "$(argv_log)" "pulse restart" "设置未执行重启命令"
+  # 同批英文窄屏只走字段/非法/返回，不重复完整保存场景。
+  conf_set "lang=en" "page=1" "activity=1" "mouse=1" "density=comfortable"
+  start_panel
+  resize_panel 70 25 || bad "英文表单resize失败"
+  open_view Models
+  filter_to TEAM_MODEL_LIMITS; keys Enter
+  wait_row en-rules "英文规则入口" "Add limit" || bad "英文规则未打开"
+  before="$(sha "$(cfg)")"
+  keys Enter
+  wait_row en-fields "英文规则字段" "Applicable model" "Simultaneous quantity" || bad "英文规则字段缺失"
+  keys Down; sleep 0.3; keys Enter
+  wait_editor "Simultaneous quantity" || bad "英文数量字段未打开"
+  keys C-u; sleep 0.3; type_text -1; sleep 0.3; keys Enter
+  wait_cap en-invalid "Enter a non-negative integer" || bad "英文真实字段错误未显示"
+  keys Escape
+  wait_row en-field-back "英文字段返回" "Applicable model" "Simultaneous quantity" || bad "英文字段未返回"
+  keys Escape; sleep 0.4; keys Escape
+  wait_row en-cancel "英文草稿取消" "╭─ Project settings" || bad "英文草稿未取消"
+  assert_eq "英文非法与取消保留原字节" "$(sha "$(cfg)")" "$before"
 }
 
 scn_choices_schema() {
-  section "choices-schema · 新增 enum 键零代码出现 / 去掉 constraints 可见降级（M55 的核心卖点）"
-  server_up choices-schema "dev verify"
-  conf_set "lang=zh" "page=1" "activity=1" "mouse=1" "density=comfortable" "theme=auto"
-  # scratch CLI：schema 里临时加一个 enum 键 TEAM_ZZZ_MODE —— bundle 就是提交的那份（不重建、不改一行 TS）。
+  section "choices-schema · 新键不自动显示；保留键选项/权限/异常整值仍来自真实CLI"
+  server_up choices-schema
+  policy_new 'routine=example/one' 'example/pm' || bad "策略准备失败"
   local scratch="$tmp/$current/scratch"
   mkdir -p "$scratch/skills/teamsmith"
   cp -a "$skill/scripts" "$scratch/skills/teamsmith/scripts"
   cp -a "$skill/templates" "$skill/references" "$scratch/skills/teamsmith/"
-  python3 - "$scratch/skills/teamsmith/scripts/lib/cmd-config.sh" <<'PY'
+  python3 - "$scratch/skills/teamsmith/scripts/lib/cmd-config.sh" <<'PYCFG'
 import sys
-p = sys.argv[1]
-s = open(p, encoding='utf-8').read()
-old = "TEAM_MEETING_ALLOW_USER_ID|"
-new = "TEAM_ZZZ_MODE|apply|enum|red,blue|plain|red|scratch 夹具：验证 schema 新增 enum 键零改动出现|||workflow\nTEAM_MEETING_ALLOW_USER_ID|"
-assert old in s, "找不到 schema 尾部锚"
-open(p, 'w', encoding='utf-8').write(s.replace(old, new, 1))
-PY
-  cat > "$tmp/$current-scratch-wrapper.sh" <<EOF2
+p=sys.argv[1]; s=open(p).read()
+anchor='TEAM_INSTALL_CMD|apply|cmd||plain||-|||workflow'
+assert anchor in s
+s=s.replace(anchor,'TEAM_ZZZ_MODE|apply|enum|red,blue|plain|red|-|||workflow\n'+anchor)
+old='TEAM_PULSE_INTERVAL|restart|seconds|60,|plain|900|低于 60 秒 = 巡检转成忙等||300,900,1800,3600|panel'
+assert old in s
+s=s.replace(old,old.replace('300,900,1800,3600','300,900,1800,3600,7200'))
+open(p,'w').write(s)
+PYCFG
+  cat > "$tmp/$current-scratch-wrapper.sh" <<EOF
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "$tmp/$current-scratch-argv.log"
 exec bash "$scratch/skills/teamsmith/scripts/team" "\$@"
-EOF2
+EOF
   chmod +x "$tmp/$current-scratch-wrapper.sh"
-  # 注意：`VAR=x func` 的赋值只活到函数返回 —— 本场景要起两次面板，所以先赋再调，末尾清掉。
-  P21_CLI="$tmp/$current-scratch-wrapper.sh"
-  start_panel
+  P21_CLI="$tmp/$current-scratch-wrapper.sh" start_panel
   open_view
-  filter_to TEAM_ZZZ_MODE
-  wait_row zzz-row "scratch 新增 enum 键的行（裸键 + red 默认）" 'TEAM_ZZZ_MODE' '未设 · 默认 red' \
-    || bad "scratch CLI 新增的 enum 键行没等到（超过等待上限）"
-  assert_has "$tmp/$current/zzz-row.txt" "TEAM_ZZZ_MODE" "scratch CLI 新增的 enum 键出现在视图里（无标签→回退裸键）"
-  assert_has "$tmp/$current/zzz-row.txt" "未设 · 默认 red" "新键的默认值来自 schema"
+  filter_to TEAM_ZZZ_MODE; cap_to excluded
+  assert_no_match "$tmp/$current/excluded.txt" '^│ [› ] [^│]*[^[:space:]│]' "新enum键不成为设置操作"
+  filter_to TEAM_PULSE_INTERVAL; keys Enter
+  wait_picker TEAM_PULSE_INTERVAL "7200" || bad "保留键新choice没有出现"
+  cap_to choices
+  assert_has "$tmp/$current/choices.txt" "7200" "保留键choices变更无需重建bundle"
+  leave_picker TEAM_PULSE_INTERVAL
+  # 源不能表示成字段时完整保留原值，交原writer校验；不丢弃坏token。
+  python3 - "$(cfg)" <<'PYCFG'
+import re,sys
+p=sys.argv[1]; s=open(p).read()
+s,n=re.subn(r'^TEAM_MODEL_LIMITS=.*$', "TEAM_MODEL_LIMITS='example/one=2 malformed example/*=1'", s, flags=re.M)
+assert n == 1, '异常样例必须替换唯一原配置行'
+open(p,'w').write(s)
+PYCFG
+  ( cd "$ROOT" && bash "$scratch/skills/teamsmith/scripts/team" config list --json ) > "$tmp/$current/malformed-read.json"
+  assert_eq "异常整值确实从原配置行读出" "$(python3 - "$tmp/$current/malformed-read.json" <<'PYVALUE'
+import json,sys
+j=json.load(open(sys.argv[1]))
+print(next(k['value'] for k in j['keys'] if k['name'] == 'TEAM_MODEL_LIMITS'))
+PYVALUE
+)" 'example/one=2 malformed example/*=1'
+  start_panel; open_view
+  filter_to TEAM_MODEL_LIMITS; keys Enter
+  wait_editor TEAM_MODEL_LIMITS "malformed" || bad "异常完整值没有进入原输入器"
+  local before; before="$(sha "$(cfg)")"
   keys Enter
-  wait_picker TEAM_ZZZ_MODE 'red · 默认' || bad "新增 enum 键的选择器没有打开（要重建 bundle = 反硬编码判据失败）"
-  cap_to zzz-picker
-  assert_match "$tmp/$current/zzz-picker.txt" '› 保持未设' "未设的新键也以保持未设开头"
-  assert_has "$tmp/$current/zzz-picker.txt" "red · 默认" "constraints 里的 red 是默认条目"
-  assert_has "$tmp/$current/zzz-picker.txt" "blue" "constraints 里的 blue 也在（原序，零代码改动）"
-  # 针是「…（自由输入）」条目形（不是裸词）：选择器的页脚帮助行本身就写着「『自由输入』才进编辑器」
-  # （M68 a36a7c0c 起），裸针会把页脚当命中 —— 这条断言关的是封闭域**没有那个条目**。
-  assert_not "$tmp/$current/zzz-picker.txt" "…（自由输入）" "enum 是封闭域：没有自由输入项"
-  leave_picker TEAM_ZZZ_MODE
-  # 去掉 constraints：同一个 bundle 必须可见地退回自由输入并写明原因（不是静默空白框）。
-  python3 - "$scratch/skills/teamsmith/scripts/lib/cmd-config.sh" <<'PY'
-import sys
-p = sys.argv[1]
-s = open(p, encoding='utf-8').read()
-old = "TEAM_ZZZ_MODE|apply|enum|red,blue|plain|red|scratch 夹具：验证 schema 新增 enum 键零改动出现"
-new = "TEAM_ZZZ_MODE|apply|enum||plain|red|scratch 夹具：验证 schema 新增 enum 键零改动出现"
-assert old in s, "找不到刚加的 scratch 行"
-open(p, 'w', encoding='utf-8').write(s.replace(old, new, 1))
-PY
-  start_panel
-  open_view
-  filter_to TEAM_ZZZ_MODE
-  wait_row zzz-row2 "第二次起的面板仍显示 scratch 新增键" 'TEAM_ZZZ_MODE' \
-    || bad "第二次起的面板没有用 scratch CLI（新键没等到（超过等待上限））"
-  assert_has "$tmp/$current/zzz-row2.txt" "TEAM_ZZZ_MODE" "第二次起的面板仍用 scratch CLI（新键还在）"
-  keys Enter
-  wait_editor TEAM_ZZZ_MODE "没有选项集" || bad "去掉 constraints 后没有打开自由输入"
-  cap_to zzz-noconstraints
-  assert_has "$tmp/$current/zzz-noconstraints.txt" "╭─ TEAM_ZZZ_MODE" "enum 没有选项集时打开自由输入"
-  assert_has "$tmp/$current/zzz-noconstraints.txt" "没有选项集" "降级是可见的并写明原因（kind 没有选项集）"
-  leave_editor TEAM_ZZZ_MODE
-  wait_no_editor || bad "降级用例的编辑器没有关干净"
-  P21_CLI=""
+  wait_cap malformed "malformed" || bad "整值校验错误消失"
+  assert_eq "异常原值非法提交保持字节" "$(sha "$(cfg)")" "$before"
+  leave_editor TEAM_MODEL_LIMITS
+  unset P21_CLI
 }
 
 scn_write() {
@@ -1267,52 +869,52 @@ scn_write() {
 import re, sys
 p = sys.argv[1]
 s = open(p, encoding='utf-8').read()
-s = re.sub(r'^TEAM_PULSE_NUDGE_GAP=.*$', 'TEAM_PULSE_NUDGE_GAP="900"  # 15min', s, count=1, flags=re.M)
+s = re.sub(r'^TEAM_PULSE_INTERVAL=.*$', 'TEAM_PULSE_INTERVAL="900"  # 15min', s, count=1, flags=re.M)
 open(p, 'w', encoding='utf-8').write(s)
 PY
   conf_set "lang=zh" "page=1" "activity=1" "mouse=1" "density=comfortable" "theme=auto"
   start_panel
   open_view
   cp "$(cfg)" "$tmp/$current/before.cfg"
-  filter_to TEAM_PULSE_NUDGE_GAP
+  filter_to TEAM_PULSE_INTERVAL
   sleep 0.5
   keys Enter
-  # M55：数值键现在先开选择器（建议值 + 自由输入），写路径本身没变 —— 走进自由输入那一项。
-  wait_picker TEAM_PULSE_NUDGE_GAP '· 当前' || bad "写用例的选择器没有打开"
-  pick_option '自由输入' || bad "写用例的选择器里没有自由输入项"
-  wait_editor TEAM_PULSE_NUDGE_GAP || bad "写用例的编辑器没有打开"
-  cap_has "TEAM_PULSE_NUDGE_GAP" editor
+  # M55：数值键现在先开选择器（建议值 + 输入其它值），写路径本身没变 —— 走进输入其它值那一项。
+  wait_picker TEAM_PULSE_INTERVAL '· 当前' || bad "写用例的选择器没有打开"
+  pick_option '输入其它值' || bad "写用例的选择器里没有输入其它值项"
+  wait_editor TEAM_PULSE_INTERVAL || bad "写用例的编辑器没有打开"
+  cap_has "检查间隔" editor
   keys BSpace BSpace BSpace
   sleep 0.3
   type_text "1200"
   sleep 0.4
   keys Enter
-  if wait_cap confirm "→ 1200"; then ok "第一次 Enter 只给确认行（没写）"; else bad "确认行没有出现（见 confirm.txt）"; fi
+  if wait_cap confirm "新值  1200"; then ok "第一次 Enter 只给确认行（没写）"; else bad "确认行没有出现（见 confirm.txt）"; fi
   assert_eq "确认阶段契约未变" "$(sha "$(cfg)")" "$(sha "$tmp/$current/before.cfg")"
   keys Enter
-  if wait_cap written "✓ 已写入 TEAM_PULSE_NUDGE_GAP = 1200"; then
+  if wait_cap written "已保存检查间隔"; then
     ok "第二次 Enter 的回执说已写入"
   else
     bad "第二次 Enter 的回执没有出现（见 written.txt）"
   fi
   assert_eq "只改了一行" "$(diff "$tmp/$current/before.cfg" "$(cfg)" | grep -c '^[<>]' || true)" "2"
-  assert_eq "注释原样保留" "$(grep -c "^TEAM_PULSE_NUDGE_GAP='1200'  # 15min\$" "$(cfg)" || true)" "1"
+  assert_eq "注释原样保留" "$(grep -c "^TEAM_PULSE_INTERVAL='1200'  # 15min\$" "$(cfg)" || true)" "1"
   ( cd "$ROOT" && bash -n .pi/team/config.sh ) && ok "写入后 bash -n 通过" || bad "写入后 bash -n 失败"
-  assert_match "$(argv_log)" 'config set TEAM_PULSE_NUDGE_GAP 1200 --actor panel --dry-run --fingerprint [0-9a-f]{64}' "wrapper 记录了 --dry-run 调用"
-  assert_match "$(argv_log)" 'config set TEAM_PULSE_NUDGE_GAP 1200 --actor panel --yes --fingerprint [0-9a-f]{64}' "wrapper 记录了写入调用"
+  assert_match "$(argv_log)" 'config set TEAM_PULSE_INTERVAL 1200 --actor panel --dry-run --fingerprint [0-9a-f]{64}' "wrapper 记录了 --dry-run 调用"
+  assert_match "$(argv_log)" 'config set TEAM_PULSE_INTERVAL 1200 --actor panel --yes --fingerprint [0-9a-f]{64}' "wrapper 记录了写入调用"
   # Cancel: esc writes nothing and audits nothing.
   local a0 b0
   a0="$(audit_lines)"
   b0="$(sha "$(cfg)")"
-  filter_to TEAM_PULSE_NUDGE_GAP
+  filter_to TEAM_PULSE_INTERVAL
   sleep 0.5
   keys Enter
-  wait_picker TEAM_PULSE_NUDGE_GAP '· 当前' || bad "取消用例的选择器没有打开"
-  pick_option '自由输入' || bad "取消用例的选择器里没有自由输入项"
-  wait_editor TEAM_PULSE_NUDGE_GAP || bad "取消用例的编辑器没有打开"
+  wait_picker TEAM_PULSE_INTERVAL '· 当前' || bad "取消用例的选择器没有打开"
+  pick_option '输入其它值' || bad "取消用例的选择器里没有输入其它值项"
+  wait_editor TEAM_PULSE_INTERVAL || bad "取消用例的编辑器没有打开"
   type_text "x"
   sleep 0.4
-  leave_editor TEAM_PULSE_NUDGE_GAP || bad "取消用例的 esc 发了但编辑器还在"
+  leave_editor TEAM_PULSE_INTERVAL || bad "取消用例的 esc 发了但编辑器还在"
   wait_no_editor || bad "取消用例的编辑器没有关干净"
   assert_eq "取消后契约不变" "$(sha "$(cfg)")" "$b0"
   assert_eq "取消后审计不增长" "$(audit_lines)" "$a0"
@@ -1322,7 +924,7 @@ PY
   sleep 0.5
   keys Enter
   wait_picker TEAM_PULSE_INTERVAL '· 当前' || bad "非法值用例的选择器没有打开"
-  pick_option '自由输入' || bad "非法值用例的选择器里没有自由输入项"
+  pick_option '输入其它值' || bad "非法值用例的选择器里没有输入其它值项"
   wait_editor TEAM_PULSE_INTERVAL || bad "非法值用例的编辑器没有打开"
   keys BSpace BSpace BSpace BSpace
   sleep 0.3
@@ -1332,54 +934,61 @@ PY
   keys Enter
   if wait_cap invalid "最小 60"; then ok "越界数值的拒绝点名最小 60"; else bad "越界数值的拒绝没出现"; fi
   assert_eq "非法值契约不变" "$(sha "$(cfg)")" "$b1"
-  cap_has "TEAM_PULSE_INTERVAL" draft-kept
+  cap_has "检查间隔" draft-kept
   leave_editor TEAM_PULSE_INTERVAL || bad "非法值用例的 esc 发了但编辑器还在"
   wait_no_editor || bad "非法值用例的编辑器没有关干净"
-  # Danger: TEAM_MIN_FREE_SWAP_MB=0 needs one more Enter.
-  filter_to TEAM_MIN_FREE_SWAP_MB
+  # Danger: TEAM_REVIEW_TIMEOUT=30 needs one more Enter.
+  open_secondary commands
+  filter_to TEAM_REVIEW_TIMEOUT
   sleep 0.5
   keys Enter
-  wait_picker TEAM_MIN_FREE_SWAP_MB '· 当前' || bad "danger 用例的选择器没有打开"
-  pick_option '自由输入' || bad "danger 用例的选择器里没有自由输入项"
-  wait_editor TEAM_MIN_FREE_SWAP_MB || bad "danger 用例的编辑器没有打开"
+  wait_picker TEAM_REVIEW_TIMEOUT '· 当前' || bad "danger 用例的选择器没有打开"
+  pick_option '输入其它值' || bad "danger 用例的选择器里没有输入其它值项"
+  wait_editor TEAM_REVIEW_TIMEOUT || bad "danger 用例的编辑器没有打开"
   keys BSpace BSpace BSpace BSpace
   sleep 0.3
-  type_text "0"
+  type_text "30"
   sleep 0.4
   local b2; b2="$(sha "$(cfg)")"
   keys Enter
   if wait_cap danger "危险："; then ok "危险值先要一个额外确认"; else bad "危险值的确认提示没出现"; fi
   assert_eq "危险确认前契约不变" "$(sha "$(cfg)")" "$b2"
   keys Enter
-  if wait_cap danger-written "已写入 TEAM_MIN_FREE_SWAP_MB = 0"; then
+  if wait_cap danger-written "已保存验收最长时间"; then
     ok "第二次 Enter 写入危险值"
   else
     bad "危险值的第二次 Enter 没有落盘（见 danger-written.txt）"
   fi
-  # Restart honesty: the running console keeps its argv while a fresh reader sees the new value.
+  # 保存间隔不重启Pulse；新读值可见。
+  filter_clear; keys Escape; sleep 0.4
   local pid_args_before
-  pid_args_before="$(tr '\0' ' ' < "/proc/$(panel_pid)/cmdline" 2>/dev/null || true)"
-  filter_to TEAM_MONITOR_REFRESH
-  sleep 0.5
+  pid_args_before="$(tr '\0' ' ' < "/proc/$(panel_pid)/cmdline")"
+  filter_to TEAM_PULSE_INTERVAL; keys Enter
+  wait_picker TEAM_PULSE_INTERVAL '· 当前' || bad "restart选择器未打开"
+  pick_option 输入其它值
+  wait_editor TEAM_PULSE_INTERVAL || bad "restart编辑器未打开"
+  keys C-u; sleep 0.3; type_text 1500; sleep 0.3; keys Enter
+  wait_cap restart-confirm "新值  1500" || bad "restart未确认"
   keys Enter
-  wait_picker TEAM_MONITOR_REFRESH '· 当前' || bad "restart 用例的选择器没有打开"
-  pick_option '自由输入' || bad "restart 用例的选择器里没有自由输入项"
-  wait_editor TEAM_MONITOR_REFRESH || bad "restart 用例的编辑器没有打开"
-  keys BSpace
-  sleep 0.3
-  type_text "7"
-  sleep 0.4
+  wait_cap restart "已保存检查间隔" || bad "restart未保存"
+  assert_has "$tmp/$current/restart.txt" "team pulse restart" "回执点名Pulse实际生效条件"
+  assert_eq "现有面板argv没有变化" "$(tr '\0' ' ' < "/proc/$(panel_pid)/cmdline")" "$pid_args_before"
+  assert_match "$(cfg)" "^TEAM_PULSE_INTERVAL=.1500." "新读者看见1500"
+  assert_not "$(argv_log)" "pulse restart" "设置没有自动重启"
+  # 真实文件故障，非伪造失败退出码：writer无法把目录作为配置文件。
+  filter_to TEAM_PULSE_INTERVAL; keys Enter
+  wait_picker TEAM_PULSE_INTERVAL '· 当前' || bad "失败用例未打开"
+  pick_option 输入其它值; wait_editor TEAM_PULSE_INTERVAL || bad "失败输入未打开"
+  keys C-u; sleep 0.3; type_text 1600; sleep 0.3; keys Enter
+  wait_cap failure-confirm "新值  1600" || bad "失败前确认缺失"
+  mv "$(cfg)" "$tmp/$current/saved.cfg"; mkdir "$(cfg)"
   keys Enter
-  if wait_cap restart-confirm "→ 7"; then ok "restart 值先给确认行"; else bad "restart 的确认行没出现"; fi
-  keys Enter
-  if wait_cap restart "已写入 TEAM_MONITOR_REFRESH = 7"; then
-    ok "restart 值已写入"
-  else
-    bad "restart 值没有写进去（见 restart.txt）"
-  fi
-  assert_eq "运行中的控制台仍拿着旧 argv" "$(tr '\0' ' ' < "/proc/$(panel_pid)/cmdline" 2>/dev/null || true)" "$pid_args_before"
-  ( cd "$ROOT" && bash "$skill/scripts/team" monitor --json ) > "$tmp/$current/monitor.json" 2>/dev/null
-  assert_has "$tmp/$current/monitor.json" '"refresh_s":7' "下一个读契约的进程看到 7（team monitor --json）"
+  wait_cap write-failed "保存失败：" || bad "真实writer失败未显示"
+  cap_to failure-draft
+  assert_has "$tmp/$current/failure-draft.txt" "1600" "失败仍保留草稿"
+  rmdir "$(cfg)"; mv "$tmp/$current/saved.cfg" "$(cfg)"
+  leave_editor TEAM_PULSE_INTERVAL
+
 }
 
 scn_conflict() {
@@ -1389,17 +998,17 @@ scn_conflict() {
 import re, sys
 p = sys.argv[1]
 s = open(p, encoding='utf-8').read()
-s = re.sub(r'^TEAM_PULSE_NUDGE_GAP=.*$', 'TEAM_PULSE_NUDGE_GAP="900"  # 15min', s, count=1, flags=re.M)
+s = re.sub(r'^TEAM_PULSE_INTERVAL=.*$', 'TEAM_PULSE_INTERVAL="900"  # 15min', s, count=1, flags=re.M)
 open(p, 'w', encoding='utf-8').write(s)
 PY
   start_panel
   open_view
-  filter_to TEAM_PULSE_NUDGE_GAP
+  filter_to TEAM_PULSE_INTERVAL
   sleep 0.5
   keys Enter
-  wait_picker TEAM_PULSE_NUDGE_GAP '· 当前' || bad "冲突用例的选择器没有打开"
-  pick_option '自由输入' || bad "冲突用例的选择器里没有自由输入项"
-  wait_editor TEAM_PULSE_NUDGE_GAP || bad "冲突用例的编辑器没有打开"
+  wait_picker TEAM_PULSE_INTERVAL '· 当前' || bad "冲突用例的选择器没有打开"
+  pick_option '输入其它值' || bad "冲突用例的选择器里没有输入其它值项"
+  wait_editor TEAM_PULSE_INTERVAL || bad "冲突用例的编辑器没有打开"
   keys BSpace BSpace BSpace
   sleep 0.3
   type_text "1200"
@@ -1411,16 +1020,15 @@ PY
   sleep 2
   keys Enter
   # M59: conditional — the conflict receipt must land on a settled frame (was: fixed 2.5s).
-  if wait_cap conflict "指纹不符"; then ok "回执点名指纹冲突"; else bad "冲突的回执没出现"; fi
+  if wait_cap conflict "设置已被修改，未保存"; then ok "回执点名指纹冲突"; else bad "冲突的回执没出现"; fi
   assert_eq "对方的字节被保住" "$(sha "$(cfg)")" "$other"
-  assert_match "$(audit_log)" 'result=conflict actor=panel key=TEAM_PULSE_NUDGE_GAP' "审计增了一行 conflict"
-  # The view reloaded and shows the other writer's value (1200 was never written). M49：行上是标签，
-  # 原始键在 CLI 提示行里（重读后仍与命令对齐）。M59: wait_cap 的字面针用「值 · 立即生效」，
-  # 行标签与值之间的留白宽度交给后面的 assert_match（ERE）去验。
-  if wait_cap reloaded "900 · 立即生效"; then ok "视图重读后显示对方的 900"; else bad "视图重读后没有显示对方的 900"; fi
-  assert_match "$tmp/$current/reloaded.txt" '重复提醒间隔 +900' "视图重读后显示对方的 900（标签 + 值）"
-  assert_not "$tmp/$current/reloaded.txt" "重复提醒间隔 +1200" "视图没有显示未写入的 1200"
-  assert_has "$tmp/$current/reloaded.txt" "team config set TEAM_PULSE_NUDGE_GAP" "视图仍点名原始键（照敲命令用）"
+  assert_match "$(audit_log)" 'result=conflict actor=panel key=TEAM_PULSE_INTERVAL' "审计增了一行 conflict"
+  # 后台读回另一个写者的900；必要生效信息仍在，未保存的1200不能变成行值。
+  leave_editor TEAM_PULSE_INTERVAL
+  if wait_cap reloaded "900"; then ok "视图重读后显示对方的 900"; else bad "视图重读后没有显示对方的 900"; fi
+  assert_match "$tmp/$current/reloaded.txt" '检查间隔 +900' "视图重读后显示对方的 900（标签 + 值）"
+  assert_not "$tmp/$current/reloaded.txt" "检查间隔 +1200" "视图没有显示未写入的 1200"
+  assert_has "$tmp/$current/reloaded.txt" "team pulse restart" "必要生效条件仍可见"
 }
 
 # ---------------------------------------------------------------- P232（类别策略 vs 已派记录）
@@ -1435,27 +1043,28 @@ scn_policy() {
   conf_set "lang=zh" "page=1" "activity=1" "mouse=1" "density=comfortable" "theme=auto"
   start_panel
   open_view
-  # ① 类别行：未来策略 + 「新任务」徽章 + 命令行点名 set-task-model
-  filter_to 类别
-  wait_row policy-cat "类别 routine 行（策略模型 + 新任务徽章）" '下一次派任务会用的模型' '类别 routine' 'kimi-coding/k3-256k' \
+  # ① 类别行：未来策略模型；选中后显示新任务生效。
+  filter_clear
+  wait_row policy-cat "routine 行（未来策略模型）" '模型' 'routine' 'kimi-coding/k3-256k' \
     || bad "类别行没等到（超过等待上限）"
   # 视图的快照行、命令行提示行都跟着**焦点**走：先把光标移到类别行，再看这一行的两半（M49）。
-  if focus_row '› 类别 routine'; then :; else bad "没能把焦点移到类别 routine 行"; fi
+  if focus_row '› routine'; then :; else bad "没能把焦点移到routine 行"; fi
   cap_to policy-cat
-  assert_match "$tmp/$current/policy-cat.txt" '› 类别 routine +kimi-coding/k3-256k · 新任务' "类别行 = 类别 + 策略模型 + 新任务徽章"
-  assert_has "$tmp/$current/policy-cat.txt" "team config set-task-model routine <model>" "命令行点名 set-task-model（唯一写者）"
+  assert_match "$tmp/$current/policy-cat.txt" '› routine +kimi-coding/k3-256k' "类别行 = 类别 + 策略模型"
+  assert_has "$tmp/$current/policy-cat.txt" "新任务生效" "类别选中显示实际生效时间"
   # ② 策略 ≠ 实际：dev 的只读行显示**记录**里的模型，行里不出现策略模型
+  open_secondary records
   filter_to dev
-  wait_row policy-dev "dev 的只读派单行" '正在运行的任务实际使用的模型' 'xai/grok-4.6' \
+  wait_row policy-dev "dev 的只读派单行" '模型记录' 'xai/grok-4.6' \
     || bad "dev 的派单行没等到（超过等待上限）"
   if focus_row '› dev '; then :; else bad "没能把焦点移到 dev 的派单行"; fi
   cap_to policy-dev
-  assert_match "$tmp/$current/policy-dev.txt" 'dev +xai/grok-4.6 · 不可改' "记录模型逐字显示（不是策略模型）"
+  assert_match "$tmp/$current/policy-dev.txt" 'dev +T232-x +xai/grok-4.6' "记录模型逐字显示（不是策略模型）"
   assert_not "$tmp/$current/policy-dev.txt" "kimi-coding/k3-256k" "派单行里不出现未来策略的模型"
-  assert_has "$tmp/$current/policy-dev.txt" "会话 sid-dev-232" "派单行带已提交的会话号"
+  assert_has "$tmp/$current/policy-dev.txt" "会话编号: sid-dev-232" "派单行带已提交的会话号"
   # ③ 没有记录的席位：不借策略模型
   filter_to verify
-  wait_row policy-verify "verify 的「还没有派过任务」行" 'verify' '这个席位还没有派过任务' \
+  wait_row policy-verify "verify 的「尚无派单记录」行" 'verify' '尚无派单记录' \
     || bad "无记录席位行没等到（超过等待上限）"
   assert_not "$tmp/$current/policy-verify.txt" "kimi-coding/k3-256k" "无记录席位行不借未来策略的模型"
   # ③b P266（设计表的红侧第二格）：同一个席位换成一份「存在、但读不出来」的记录（旧格式：版本不是 1）
@@ -1463,10 +1072,11 @@ scn_policy() {
   # 不解析诊断字符串。
   printf 'assignment_version=0\nseat=verify\nmodel=vendor/legacy\n' > "$state/verify.env"
   reopen_view
+  open_secondary records
   filter_to verify
-  wait_row policy-unreadable "record_present=true：有记录但读不出来" 'verify' '这个席位派过任务，但它的记录读不出来' \
+  wait_row policy-unreadable "record_present=true：有记录但读不出来" 'verify' '记录读取失败' \
     || bad "「读不出来」的席位行没等到（超过等待上限）"
-  assert_not "$tmp/$current/policy-unreadable.txt" "还没有派过任务" "P266：有记录但读不出来时不说「还没派过任务」（两个原因分得开）"
+  assert_not "$tmp/$current/policy-unreadable.txt" "尚无派单记录" "P266：有记录但读不出来时不说「还没派过任务」（两个原因分得开）"
   assert_not "$tmp/$current/policy-unreadable.txt" "legacy/unknown assignment_version" "P266：命令的诊断字符串不上屏"
   local pol_json_verify
   pol_json_verify="$( ( cd "$ROOT" && bash "$skill/scripts/team" config list --json ) \
@@ -1474,11 +1084,12 @@ scn_policy() {
   assert_eq "P266：读侧把这一行报成 assigned=false 且 record_present=true（诊断只留给机器）" \
     "$pol_json_verify" "assigned=False record_present=True diagnostic=legacy/unknown assignment_version"
   rm -f "$state/verify.env"
+  filter_clear; keys Escape; sleep 0.4
   # ④ 一次类别直写：picker 用项目自己的词表，写走 set-task-model 的 dry-run → --yes
-  filter_to 类别
+  filter_clear
   sleep 0.5
-  if focus_row '› 类别 routine'; then keys Enter; else bad "没能把焦点移到类别行"; fi
-  if pty_wait_frame "$tmp/$current/policy-picker.txt" "类别 picker" "选择类别 routine 的模型" "…（自由输入）"; then
+  if focus_row '› routine'; then keys Enter; else bad "没能把焦点移到类别行"; fi
+  if pty_wait_frame "$tmp/$current/policy-picker.txt" "类别 picker" "╭─ routine" "输入其它值"; then
     ok "类别 picker 打开（标题点名类别 + 自由输入项）"
   else
     bad "类别 picker 没有打开"
@@ -1493,14 +1104,14 @@ scn_policy() {
   pol_pid_args="$(tr '\0' ' ' < "/proc/$(panel_pid)/cmdline" 2>/dev/null || true)"
   cp "$(cfg)" "$tmp/$current/before-cat.cfg"
   pick_option 'xai/grok-4.6' || bad "picker 里没有 xai/grok-4.6"
-  if wait_cap policy-written "已写入类别 routine = xai/grok-4.6"; then
+  if wait_cap policy-written "已保存routine模型"; then
     ok "类别直写的回执"
   else
     bad "类别直写的回执没有出现"
   fi
   cap_to policy-written
   assert_not "$tmp/$current/policy-written.txt" "确认：" "值条目直写没有确认帧"
-  assert_has "$tmp/$current/policy-written.txt" "只影响以后派的新任务" "回执说明只影响以后派的新任务"
+  assert_has "$tmp/$current/policy-written.txt" "新任务生效" "回执说明只影响以后派的新任务"
   argv_since "$pol_argv" "$tmp/$current/policy-argv.log"
   assert_match "$tmp/$current/policy-argv.log" 'config set-task-model routine xai/grok-4.6 --actor panel --dry-run --fingerprint [0-9a-f]{64}' "argv 记录 set-task-model --dry-run"
   assert_match "$tmp/$current/policy-argv.log" 'config set-task-model routine xai/grok-4.6 --actor panel --yes --fingerprint [0-9a-f]{64}' "argv 记录 set-task-model 的写入"
@@ -1523,6 +1134,7 @@ scn_categories() {
   policy_new 'routine=kimi-coding/k3-256k analysis=openai-codex/gpt-5.6-terra:xhigh verify=deepseek/deepseek-flash' \
     'openai-codex/gpt-6.1-sol:high' || bad "策略升级事务没有跑通（见 $tmp/$current-upgrade.log）"
   record_fixture dev 'xai/grok-4.6' sid-dev-232 T232-x routine
+  printf 'metadata_version=1\nproject=%s\nwindow=pm\nmodel=example/last-pm\nnonce=p471-fixture\ntime=2026-11-17T00:00:00Z\nmode=fresh\nresume_key=default\nidentity_via=provider,model,session_id\n' "$ROOT" > "$state/pm-launch.env"
   conf_set "lang=zh" "page=1" "activity=1" "mouse=1" "density=comfortable" "theme=auto"
   local scn_argv scn_windows
   scn_argv="$(argv_count)"
@@ -1530,10 +1142,10 @@ scn_categories() {
   scn_windows="$(tmux -L "$sock" list-windows -t "$sess" -F '#{window_name}' 2>/dev/null | sort | tr '\n' ',')"
   open_view
   # ① 类别 picker 的条目顺序（当前 → 已知模型（去重）→ 自由输入），没有任何移除/整映射组合项
-  filter_to 类别
+  filter_clear
   sleep 0.5
-  if focus_row '› 类别 routine'; then keys Enter; else bad "没能把焦点移到类别 routine 行"; fi
-  if pty_wait_frame "$tmp/$current/cat-picker.txt" "类别 picker" "选择类别 routine 的模型" "…（自由输入）"; then
+  if focus_row '› routine'; then keys Enter; else bad "没能把焦点移到routine 行"; fi
+  if pty_wait_frame "$tmp/$current/cat-picker.txt" "类别 picker" "╭─ routine" "输入其它值"; then
     ok "类别 picker 打开"
   else
     bad "类别 picker 没有打开"
@@ -1544,10 +1156,10 @@ scn_categories() {
   local cat_sha cat_audit
   cat_sha="$(sha "$(cfg)")"; cat_audit="$(audit_lines)"
   # ② esc 取消：什么都不写、不留审计
-  pty_key_when "类别 picker 的 esc" "选择类别 routine 的模型" Escape || bad "类别 picker 不在稳定帧上，esc 没有发"
-  wait_row cat-picker-closed "一次 esc 关掉类别 picker" '!选择类别 routine 的模型' '╭─ 项目设置' \
+  pty_key_when "类别 picker 的 esc" "╭─ routine" Escape || bad "类别 picker 不在稳定帧上，esc 没有发"
+  wait_row cat-picker-closed "一次 esc 关掉类别 picker" '!╭─ routine' '╭─ 项目设置' \
     || bad "一次 esc 没有关掉类别 picker"
-  assert_not "$tmp/$current/cat-picker-closed.txt" "选择类别 routine 的模型" "一次 esc 关掉 picker"
+  assert_not "$tmp/$current/cat-picker-closed.txt" "╭─ routine" "一次 esc 关掉 picker"
   assert_eq "取消后契约不变" "$(sha "$(cfg)")" "$cat_sha"
   assert_eq "取消后审计不增长" "$(audit_lines)" "$cat_audit"
   # ③ PM 编辑：自由输入 + 两次确认；回执点名 team up / fresh；一行 diff；argv 走 config set
@@ -1557,46 +1169,62 @@ scn_categories() {
   sleep 0.5
   keys Enter
   wait_picker TEAM_PM_MODEL '· 当前' || bad "PM 行的选择器没有打开"
-  pick_option '自由输入' || bad "PM 行没有自由输入项"
+  pick_option '输入其它值' || bad "PM 行没有自由输入项"
   wait_editor TEAM_PM_MODEL || bad "PM 行的编辑器没有打开"
   keys C-u; sleep 0.3
   type_text "kimi-coding/k3-256k"; sleep 0.4
   keys Enter
-  if wait_cap pm-confirm "确认：TEAM_PM_MODEL"; then ok "PM 编辑先给确认行"; else bad "PM 的确认行没有出现"; fi
+  if wait_cap pm-confirm "新值  kimi-coding/k3-256k"; then ok "PM 编辑先给确认行"; else bad "PM 的确认行没有出现"; fi
   keys Enter
-  if wait_cap pm-written "已写入 PM 模型"; then ok "PM 编辑落盘"; else bad "PM 的写入回执没有出现"; fi
+  if wait_cap pm-written "已保存PM模型"; then ok "PM 编辑落盘"; else bad "PM 的写入回执没有出现"; fi
   cap_to pm-written
   assert_has "$tmp/$current/pm-written.txt" "fresh-pm" "PM 回执点名换模型的 fresh-pm 守卫"
   assert_match "$(argv_log)" 'config set TEAM_PM_MODEL kimi-coding/k3-256k --actor panel --dry-run --fingerprint [0-9a-f]{64}' "argv 记录 PM 的 --dry-run"
   assert_match "$(argv_log)" 'config set TEAM_PM_MODEL kimi-coding/k3-256k --actor panel --yes --fingerprint [0-9a-f]{64}' "argv 记录 PM 的写入"
   assert_eq "PM 写入审计长一行" "$(audit_lines)" "$((pm_audit + 1))"
-  assert_neq "PM 行确实变了" "$(grep '^TEAM_PM_MODEL=' "$(cfg)")" "$pm_before"
+  if [ "$(grep '^TEAM_PM_MODEL=' "$(cfg)")" != "$pm_before" ]; then
+    ok "PM 行确实变了"
+  else
+    bad "PM 行没有变"
+  fi
   assert_has "$(cfg)" "kimi-coding/k3-256k" "PM 的新模型在文件里"
   # ④ 陈旧指纹：picker 开着时另一个写者改契约 → accept 判冲突、对方字节保住、审计一行 conflict
-  filter_to 类别
+  filter_clear
   sleep 0.5
-  if focus_row '› 类别 analysis'; then keys Enter; else bad "没能把焦点移到类别 analysis 行"; fi
-  pty_wait_frame - "类别 picker（冲突用例）" "选择类别 analysis 的模型" || bad "冲突用例的 picker 没有打开"
+  if focus_row '› analysis'; then keys Enter; else bad "没能把焦点移到analysis 行"; fi
+  pty_wait_frame - "类别 picker（冲突用例）" "╭─ analysis" || bad "冲突用例的 picker 没有打开"
   printf '# other writer\n' >> "$(cfg)"
   local other_sha; other_sha="$(sha "$(cfg)")"
   pick_option 'deepseek/deepseek-flash' || bad "冲突用例的 picker 里没有 deepseek/deepseek-flash"
-  if wait_cap cat-conflict "指纹不符"; then ok "陈旧指纹被命令拒绝（回执点名冲突）"; else bad "陈旧指纹的冲突回执没有出现"; fi
+  if wait_cap cat-conflict "设置已被修改，未保存"; then ok "陈旧指纹被命令拒绝（回执点名冲突）"; else bad "陈旧指纹的冲突回执没有出现"; fi
   assert_eq "对方的字节被保住" "$(sha "$(cfg)")" "$other_sha"
   assert_match "$(audit_log)" 'result=conflict actor=panel key=TEAM_TASK_MODELS' "审计增了一行 conflict（actor=panel）"
   # ⑤ 删掉未来类别：策略行消失，已提交记录的模型/SID 原样保留（恢复不看映射成员）
   ( cd "$ROOT" && bash "$skill/scripts/team" config set TEAM_TASK_MODELS 'analysis=openai-codex/gpt-5.6-terra:xhigh verify=deepseek/deepseek-flash' --yes ) >/dev/null 2>&1 \
     || bad "整映射删除 routine 失败"
   reopen_view
+  open_secondary records
   filter_to dev
-  wait_row cat-kept "删类别后 dev 的派单行仍在" 'xai/grok-4.6' '会话 sid-dev-232' \
+  wait_row cat-kept "删类别后 dev 的派单行仍在" 'xai/grok-4.6' '会话编号: sid-dev-232' \
     || bad "删类别后派单行没等到（超过等待上限）"
-  assert_match "$tmp/$current/cat-kept.txt" 'dev +xai/grok-4.6 · 不可改' "删类别后记录模型仍是记录里的值"
-  assert_has "$tmp/$current/cat-kept.txt" "会话 sid-dev-232" "删类别后会话号原样"
-  filter_to 类别
+  assert_match "$tmp/$current/cat-kept.txt" 'dev +T232-x +xai/grok-4.6' "删类别后记录模型仍是记录里的值"
+  assert_has "$tmp/$current/cat-kept.txt" "会话编号: sid-dev-232" "删类别后会话号原样"
+  filter_clear
+  pty_key_when "删类别后返回主设置" '╭─ 模型记录' Escape || bad "删类别后记录页不在屏幕上"
+  pty_wait_frame - "删类别后主设置" '╭─ 项目设置' || bad "删类别后未回主设置"
+  filter_clear
   cap_to cat-deleted
-  assert_not "$tmp/$current/cat-deleted.txt" "类别 routine" "被删的类别不再有策略行"
-  assert_match "$tmp/$current/cat-deleted.txt" '类别 (analysis|verify)' "其余类别照旧在策略块里"
-  assert_match "$tmp/$current/cat-deleted.txt" '^│ ── 下一次派任务会用的模型 ─+' "类别块本身还在（只删了 routine）"
+  assert_not "$tmp/$current/cat-deleted.txt" "routine" "被删的类别不再有策略行"
+  assert_match "$tmp/$current/cat-deleted.txt" '(analysis|verify)' "其余类别照旧在策略块里"
+  assert_match "$tmp/$current/cat-deleted.txt" '^│ ── 模型 ─+' "类别块本身还在（只删了 routine）"
+  # PM记录只报告上次启动，不把未来策略当成运行模型。
+  open_secondary records
+  filter_to PM上次启动
+  wait_row pm-record "上次PM记录与未来策略分离" "PM上次启动" "example/last-pm" || bad "PM上次启动记录缺失"
+  keys Enter
+  wait_row pm-record-detail "原PM启动字段" "2026-11-17T00:00:00Z" "全新启动" || bad "PM启动详细字段缺失"
+  keys Escape; sleep 0.4
+  filter_clear; keys Escape; sleep 0.4
   # ⑥ 无 spawn/重启：整段没有任何 dispatch/resume/restart，窗口集合不变
   argv_since "$scn_argv" "$tmp/$current/categories-argv.log"
   assert_not "$tmp/$current/categories-argv.log" "dispatch" "整个场景没有 dispatch"
@@ -1605,33 +1233,20 @@ scn_categories() {
   assert_not "$tmp/$current/categories-argv.log" "set-agent-model" "整个场景没有退休的席位写入"
   assert_eq "tmux 窗口集合不变（没有 spawn 席位）" \
     "$(tmux -L "$sock" list-windows -t "$sess" -F '#{window_name}' 2>/dev/null | sort | tr '\n' ',')" "$scn_windows"
-  # ⑦ 遗留配置：退休键在文件里 → 可见的迁移诊断 + 命令行给 CLI 升级路线；没有席位编辑器
+  # 遗留配置保留完整诊断/修复路径，但退休键没有编辑行。
   server_up categories-legacy "dev verify"
-  start_panel
-  open_view
-  # 诊断行按 头…尾 换行（不截断路线）：命令原文可能跨两行，所以断言的是路线的**词**都在屏幕上
-  # （升级命令名 + 它的参数），而不是一整串连续子串。
-  wait_row legacy-diagnosis "遗留配置的迁移诊断" '旧设置需要升级' '含退休键' 'upgrade-models' \
-    || bad "遗留配置的迁移诊断没等到（超过等待上限）"
-  assert_has "$tmp/$current/legacy-diagnosis.txt" "upgrade-models" "诊断给出 CLI 升级命令（命令名可见）"
-  assert_has "$tmp/$current/legacy-diagnosis.txt" "--task-models" "诊断给出升级命令的参数（不被截掉）"
-  assert_has "$tmp/$current/legacy-diagnosis.txt" "--dry-run" "诊断给出升级命令的预览步骤（不被截掉）"
-  assert_has "$tmp/$current/legacy-diagnosis.txt" "TEAM_DEFAULT_MODEL" "诊断点名退休键"
-  local legacy_cat_heading
-  legacy_cat_heading="$(cap_line_heading "$tmp/$current/legacy-diagnosis.txt" '下一次派任务会用的模型')"
-  assert_eq "遗留配置没有可编辑的类别块（没有假的可编辑策略）" "$legacy_cat_heading" "0"
-  filter_to TEAM_DEFAULT_MODEL
-  # 筛选也匹配行内注释（M49 的既有口径），而 TEAM_PM_MODEL 的初始化注释里就写着 TEAM_DEFAULT_MODEL ——
-  # 所以这里必须先把光标走到退休键那一行，否则回车打到的是 PM 行（第一遍就是这么红的）。
-  if focus_row '› TEAM_DEFAULT_MODEL'; then :; else bad "没能把焦点移到退休键行"; fi
-  cap_to legacy-key
-  assert_match "$tmp/$current/legacy-key.txt" 'TEAM_DEFAULT_MODEL +.*不认识' "退休键变成只读的未知键行（没有席位默认编辑器）"
+  printf "\nTEAM_DEFAULT_MODEL=example/legacy\n" >> "$(cfg)"
+  start_panel; open_view
+  wait_row legacy "真实迁移诊断" "配置需要更新" "含退休键" || bad "迁移诊断未显示"
+  focus_row '› .*upgrade-models' || bad "迁移命令行不可达"
   keys Enter
-  if wait_cap legacy-route "不是已知的项目设置"; then ok "退休键的回执点名它不在 schema 里（不给编辑）"; else bad "退休键的回执没有出现"; fi
-  cap_to legacy-route
-  assert_not "$tmp/$current/legacy-route.txt" " · TEAM_DEFAULT_MODEL" "退休键不开选择器"
-  assert_not "$tmp/$current/legacy-route.txt" "╭─ TEAM_DEFAULT_MODEL" "退休键不开写编辑器"
-  assert_not "$tmp/$current/legacy-route.txt" "set-agent-model" "遗留视图里没有席位写入路线"
+  wait_row legacy-detail "完整迁移路线" "upgrade-models" "--task-models" "--dry-run" || bad "迁移路线不可达"
+  cap_to legacy-detail
+  keys Escape; sleep 0.4
+  filter_to TEAM_DEFAULT_MODEL; cap_to legacy-key
+  assert_has "$tmp/$current/legacy-key.txt" "TEAM_DEFAULT_MODEL" "诊断保留原退休键事实"
+  assert_no_match "$tmp/$current/legacy-key.txt" '^│ [› ] TEAM_DEFAULT_MODEL +' "退休键没有编辑行"
+  assert_not "$tmp/$current/legacy-key.txt" "set-agent-model" "没有退休写路线"
 }
 
 scn_flip() {
@@ -1648,9 +1263,9 @@ old = '"config","set-task-model"'
 assert old in s, "找不到面板的 set-task-model 路由字节"
 open(route, 'w', encoding='utf-8').write(s.replace(old, '"config","set-agent-model"', 1))
 a = open(actual, encoding='utf-8').read()
-old2 = 'B.assigned?B.model||J.dash:J.dash'
-assert old2 in a, "找不到派单行的显示规则字节"
-open(actual, 'w', encoding='utf-8').write(a.replace(old2, 'Q.blocks.settings.models.policy.categories[0].model', 1))
+old2 = 'B.assigned?B.model||J.dash:B.record_present===!1?J.settingsAssignmentNone:J.settingsAssignmentUnreadable'
+assert a.count(old2) == 1, "找不到唯一派单行的显示规则字节"
+open(actual, 'w', encoding='utf-8').write(a.replace(old2, 'I.blocks.settings.models.policy.categories[0].model', 1))
 PYPATCH
   # 红侧 ①：面板的写入路由改成退休的席位写入 → 写路径的 argv 断言必须红
   TEAM_P21_PANEL="$ft/panel-route.js" bash "$here/panel-p21.sh" policy > "$tmp/flip-route-red.log" 2>&1
@@ -1692,15 +1307,25 @@ scn_readonly() {
   keys 3; sleep 0.5
   keys 1; sleep 0.5
   open_view
+  open_secondary records
+  local records_before; records_before="$(sha "$(cfg)")"
+  keys Enter; sleep 0.4; keys Escape; sleep 0.4
+  assert_eq "记录打开与返回不写配置" "$(sha "$(cfg)")" "$records_before"
+  keys Escape; sleep 0.4
+  open_secondary commands
   filter_to TEAM_GATES
   sleep 0.5
   keys Enter
-  wait_editor TEAM_GATES "没有选项集" || bad "readonly 用例的编辑器没有打开"
+  wait_editor TEAM_GATES "true" || bad "readonly 用例的编辑器没有打开"
   type_text "changed"
   sleep 0.3
   # The three unwind escs are the test action, but each is still state-checked (M59): a drifted
   # scene gets a named red instead of a blind key closing whatever happens to be on screen.
   leave_editor TEAM_GATES || bad "readonly：编辑器 esc 后还在"
+  filter_clear
+  pty_key_when "readonly 返回主设置" '╭─ 项目命令' Escape || bad "readonly：命令页不在屏幕上"
+  pty_wait_frame - "readonly 主设置" '╭─ 项目设置' || bad "readonly：未回主设置"
+  filter_clear
   pty_key_when "readonly 退回浮层" '╭─ 项目设置' Escape || bad "readonly：esc 前设置视图不在屏幕上"
   sleep 0.6
   pty_key_when "readonly 关闭浮层" '› 项目设置' Escape || bad "readonly：第二次 esc 前浮层不在屏幕上"
@@ -1822,38 +1447,24 @@ wait_settings_frame() { # <rows> <cap name> → 0 = 帧按新行高画完整
 # 键栏之间的空白行数。打印 "<rows> <hidden_up> <hidden_down> <gap>"（认不出来打印 "-1 -1 -1 -1"）。
 settings_window_stats() { # <capture file>
   python3 - "$1" <<'PY'
-import re, sys
-lines = open(sys.argv[1], encoding='utf-8', errors='replace').read().split('\n')
-top = next((i for i, l in enumerate(lines) if l.lstrip().startswith('\u256d\u2500 项目设置') or l.lstrip().startswith('\u256d\u2500 Project settings')), -1)
-bot = next((i for i, l in enumerate(lines) if i > top and l.lstrip().startswith('\u2570')), -1)
-foot = next((i for i, l in enumerate(lines) if i > bot and ('\u5199\u4fe1' in l or 'compose' in l)), -1)
-if top < 0 or bot < 0 or foot < 0:
-    print('-1 -1 -1 -1'); sys.exit(0)
-interior = lines[top + 1:bot]
-# P266：尾部只剩聚焦行的 CLI 提示行（有迁移诊断时还有它那一块）——不再有审计块。内容的最后一条
-# 非空行就是提示行（或诊断的最后一行）；诊断存在时，尾部从诊断标题那一行开始（提示行在它上面，也
-# 属于尾部）。
-content = [i for i, l in enumerate(interior) if l.strip('\u2502 ').rstrip()]
-if not content:
-    print('-1 -1 -1 -1'); sys.exit(0)
-diag = next((i for i, l in enumerate(interior) if '\u65e7\u8bbe\u7f6e\u9700\u8981\u5347\u7ea7' in l or 'need an upgrade' in l), -1)
-if diag >= 0:
-    above = [i for i in content if i < diag]
-    tail_start = above[-1] if above else diag
-else:
-    tail_start = content[-1]
-rows = up = down = 0
-for i, l in enumerate(interior):
-    b = l.strip('\u2502 ').rstrip()
-    m = re.fullmatch(r'([\u2191\u2193])(\d+)', b)
+import re,sys
+lines=open(sys.argv[1],encoding='utf-8',errors='replace').read().splitlines()
+titles=('项目设置','Project settings','项目命令','Project commands','模型记录','Model records','模型同时运行任务数','Concurrent tasks by model','编辑限制','Edit limit')
+top=next((i for i,l in enumerate(lines) if any(l.lstrip().startswith('╭─ '+t) for t in titles)),-1)
+bot=next((i for i,l in enumerate(lines) if i>top and l.lstrip().startswith('╰')),-1)
+foot=next((i for i,l in enumerate(lines) if i>bot and ('写信' in l or 'compose' in l)),-1)
+if min(top,bot,foot)<0:
+    print('-1 -1 -1 -1'); sys.exit()
+rows=up=down=0
+for l in lines[top+1:bot]:
+    text=l.strip('│ ').rstrip()
+    m=re.fullmatch(r'([↑↓])(\d+)',text)
     if m:
-        if m.group(1) == '\u2191': up = int(m.group(2))
-        else: down = int(m.group(2))
-        continue
-    if i >= tail_start or not b or '\u2500' in b:
-        continue
-    rows += 1
-print('%d %d %d %d' % (rows, up, down, foot - bot - 1))
+        if m[1]=='↑': up=int(m[2])
+        else: down=int(m[2])
+    elif re.match(r'^│ [› ] ',l) and text:
+        rows+=1
+print(rows,up,down,foot-bot-1)
 PY
 }
 
@@ -1884,231 +1495,66 @@ wait_line_gt() { # <name> <label> <needle> <threshold>
 
 # The same capture with SGR runs (`capture-pane -e`): tmux restores each cell's truecolor
 # sequence, which is what the tone assertion reads (without rebuilding the bundle by hand).
-cap_e_to() { tmux -L "$sock" capture-pane -p -e -t "$sess:panel" > "$tmp/$current/${1:-cap-e}.txt" 2>/dev/null; }
-
 assert_no_match() { # <file> <ere> <message>
   grep -qE -- "$2" "$1" 2>/dev/null && bad "$3（不该匹配 [$2]）" || ok "$3"
 }
 
-# P30/D4 tone: the badge's colour must be the class's tone **and** the value beside it must stay in
-# the palette's text tone. Colours come from the bundle's own `--palette` (nothing hardcoded; the
-# active theme is identified by which palette's text tone the value's colour is).
-assert_badge_tone() { # <capture-e file> <row label> <badge word> <tone key> <message>
-  local msg="$5" out rc
-  out="$(python3 - "$1" "$2" "$3" "$4" "$tmp/$current/palette.json" <<'PY'
-import json, re, sys
-cap_file, label, badge, tone_key, palette_file = sys.argv[1:6]
-SGR = re.compile(r'\x1b\[[0-9;]*m')
-
-def runs(line):
-    out, last, pos = [], '', 0
-    for m in SGR.finditer(line):
-        if line[pos:m.start()]:
-            out.append((last, line[pos:m.start()]))
-        last = m.group(0)
-        pos = m.end()
-    if line[pos:]:
-        out.append((last, line[pos:]))
-    return out
-
-def color(sgr):
-    m = re.search(r'38;2;(\d+);(\d+);(\d+)', sgr)
-    return '#%02x%02x%02x' % tuple(int(x) for x in m.groups()) if m else 'default'
-
-line = next((l for l in open(cap_file, encoding='utf-8', errors='replace') if label in l and badge in l), '')
-if not line:
-    print('找不到同时含 %r 与 %r 的行' % (label, badge)); sys.exit(1)
-rs = runs(line)
-li = next((i for i, (_, t) in enumerate(rs) if label in t), None)
-bi = next((i for i, (_, t) in enumerate(rs) if badge in t), None)
-if li is None or bi is None or bi <= li:
-    print('run 结构不对（label=%s badge=%s）' % (li, bi)); sys.exit(1)
-vi = next((i for i in range(li + 1, bi) if rs[i][1].strip()), bi)
-value_color, badge_color = color(rs[vi][0]), color(rs[bi][0])
-palettes = json.load(open(palette_file, encoding='utf-8'))['palettes']
-active = next((p for p in palettes.values() if p['tones']['text'].lower() == value_color), None)
-if active is None:
-    print('值的颜色 %s 不在任何调色板的 text tone 里' % value_color); sys.exit(1)
-want = active['tones'][tone_key].lower()
-if badge_color != want:
-    print('badge 颜色 %s ≠ %s tone %s（调色板 %s）' % (badge_color, tone_key, want, active['name'])); sys.exit(1)
-print('%s badge=%s value=%s（text）palette=%s' % (badge, badge_color, value_color, active['name']))
-PY
-)"
-  rc=$?
-  if [ "$rc" -eq 0 ]; then ok "$msg（$out）"; else bad "$msg：$out"; fi
-}
-
-# 把焦点走到列表末尾（窗口跟着焦点走），让尾部的「未分组」与类别块同一屏 —— 这两样都在
-# 「分组之后」，是场景要看的相对顺序。
-walk_to_tail() { # <capture name>
-  local i attempt name="${1:-tail}" hit=0
-  for attempt in $(seq 1 6); do
-    for i in $(seq 1 140); do keys Down; sleep 0.01; done
-    for i in $(seq 1 12); do
-      cap_to "$name"
-      # P266：类别块的标题改成普通话（两种语言各一条）——尾部的“到了”判据跟着标题走。
-      if { grep -q '下一次派任务会用的模型' "$tmp/$current/$name.txt" || grep -q 'The model the next task will use' "$tmp/$current/$name.txt"; } \
-         && grep -q '›' "$tmp/$current/$name.txt"; then hit=1; break; fi
-      sleep 0.4   # 块被 TTL 重读换成摘要行（已知现象）→ 等它回来，必要时再走一轮
-    done
-    [ "$hit" = 1 ] && break
-  done
-  return 0
-}
-
 scn_groups() {
-  section "groups · 记录带 group、视图按功能域分组（P30/D1-D3）：功能域标题/读取顺序/schema 序/未分组降级/无键→域表/徽章词+tone"
+  section "groups · 用途标题/源顺序类别/非交互标题/新键隐藏/保留键权限"
   server_up groups
-  # P232：尾部的相对顺序现在是「未分组 → 类别块」，类别块要有行才画得出标题。
-  policy_new 'routine=kimi-coding/k3-256k analysis=openai-codex/gpt-5.6-terra:xhigh' 'openai-codex/gpt-6.1-sol:high' \
-    || bad "策略升级事务没有跑通"
-  # 契约里手加一个 schema 不认识的键：它必须落在可见的「未分组」组里（和缺 token 的 schema 行同一条降级路径）。
-  printf 'TEAM_HAND_ADDED="hand"\n' >> "$(cfg)"
-  conf_set "lang=zh" "page=1" "activity=1" "mouse=1" "density=comfortable" "theme=auto"
-  start_panel
-  local bundle_sha; bundle_sha="$(sha "$panel")"
-  "$js" "$panel" --palette > "$tmp/$current/palette.json" 2>/dev/null
-  open_view
+  policy_new 'custom=example/custom routine=example/one verify=example/two' 'example/pm' || bad "策略准备失败"
+  start_panel; open_view
   cap_to view
-  # ① 标题 = 功能域、按读取顺序；类词只活在行徽章里（没有「只有类词」的行）。
-  assert_has "$tmp/$current/view.txt" "身份与账本布局" "第一组标题是 identity 的功能域名"
-  # P32（用户的第一条反馈）：标题与选项行必须在渲染上可区分。标题是分节线（── 标题 ────），
-  # 键行不带分节线；标题行同时把两组隔开（上一行=上一组最后一条，下一行=本组第一条）。
-  assert_no_match "$tmp/$current/view.txt" '^│ [› ] 项目名.*─' "键行不带分节线（标题/行在渲染上可区分）"
-  assert_heading_rule "$tmp/$current/view.txt" "分支与 forge" "契约文件" "分支命名模式" "组间可见分隔：标题是分节线且夹在两组之间"
-  # 读取顺序：identity 的 12 条走完，下一组标题就是 branch（窗口跟着焦点，标题只在它的行进窗时画）。
-  # 带注释的行是两行，窗口按**画出的行数**装（P30/D5 的账），所以这里一步一步走，不假设一屏能装两组。
-  local k
-  for k in $(seq 1 12); do keys Down; sleep 0.05; done
-  # P68：等那一行（下一组标题）在稳定帧上出现，不用固定 sleep + 单次采样。
-  wait_row group-order "第 13 行进窗时的下一组标题" '分支与 forge' \
-    || bad "第 13 行进窗后没有出现下一组标题"
-  assert_has "$tmp/$current/group-order.txt" "分支与 forge" "第 13 行进窗时出现下一组标题（读取顺序 identity → branch）"
-  for k in $(seq 1 12); do keys Up; sleep 0.05; done
-  sleep 0.4
+  assert_has "$tmp/$current/view.txt" "模型" "第一用途模型"
+  assert_heading_rule "$tmp/$current/view.txt" "自动检查" "模型同时运行任务数" "检查间隔" "两个用途用分节线隔开"
   assert_no_class_heading "$tmp/$current/view.txt"
-  # ② 组内保持 schema 顺序（identity：项目名 → 会话名 → PM 窗口）。
-  local n_proj n_sess n_pm
-  n_proj="$(cap_line_of "$tmp/$current/view.txt" '项目名')"
-  n_sess="$(cap_line_of "$tmp/$current/view.txt" '会话名')"
-  n_pm="$(cap_line_of "$tmp/$current/view.txt" 'PM 窗口')"
-  if [ "$n_proj" -gt 0 ] && [ "$n_proj" -lt "$n_sess" ] && [ "$n_sess" -lt "$n_pm" ]; then
-    ok "组内是 schema 顺序（项目名=$n_proj < 会话名=$n_sess < PM 窗口=$n_pm）"
-  else
-    bad "组内顺序不对（项目名=$n_proj 会话名=$n_sess PM 窗口=$n_pm）"
-  fi
-  # ③ 类徽章是词 + tone（D4）：三类各过滤一行；词在，tone = 调色板里该类的 tone，值必须是 text tone。
-  filter_to TEAM_MODEL_LIMITS
-  wait_row tone-apply "apply 徽章行" '模型并发上限' '立即生效' \
-    || bad "apply 行没等到（超过等待上限）"
-  cap_e_to tone-apply-e
-  assert_match "$tmp/$current/tone-apply.txt" '模型并发上限 +.*立即生效' "apply 行的徽章词仍在（颜色不是唯一通道）"
-  assert_badge_tone "$tmp/$current/tone-apply-e.txt" '模型并发上限' '立即生效' 'text' "apply 徽章 = 普通文本 tone"
-  filter_to TEAM_PULSE_INTERVAL
-  wait_row tone-restart "restart 徽章行" '巡检周期' '需重启' \
-    || bad "restart 行没等到（超过等待上限）"
-  cap_e_to tone-restart-e
-  assert_match "$tmp/$current/tone-restart.txt" '巡检周期 +.*需重启' "restart 行的徽章词仍在"
-  assert_badge_tone "$tmp/$current/tone-restart-e.txt" '巡检周期' '需重启' 'warn' "restart 徽章 = warn tone"
-  filter_to TEAM_PROJECT
-  wait_row tone-refuse "refuse 徽章行" '项目名' 'root · 不可改' \
-    || bad "refuse 行没等到（超过等待上限）"
-  cap_e_to tone-refuse-e
-  assert_match "$tmp/$current/tone-refuse.txt" '项目名 +root · 不可改' "refuse 行的徽章词仍在"
-  assert_badge_tone "$tmp/$current/tone-refuse-e.txt" '项目名' '不可改' 'dim' "refuse 徽章 = dim tone"
-  # ④ 可见降级：schema 不认识的键落在「未分组」，且「未分组」在席位块之前（走到列表末尾看）。
-  filter_to TEAM_HAND_ADDED
-  wait_row hand-added "未分组里的手加未知键行" 'TEAM_HAND_ADDED' 'hand · 不认识' \
-    || bad "未知键的行没等到（超过等待上限）"
-  assert_match "$tmp/$current/hand-added.txt" 'TEAM_HAND_ADDED +hand · 不认识' "未知键的行仍在（没有消失）"
-  assert_has "$tmp/$current/hand-added.txt" "TEAM_HAND_ADDED：这个设置在文件里" "未知键仍按原始键点名"
-  [ "$(cap_line_heading "$tmp/$current/hand-added.txt" '未分组')" -gt 0 ] \
-    && ok "未知键落在可见的「未分组」标题下" || bad "未知键没有落在「未分组」标题下"
-  filter_clear
-  sleep 0.4
-  walk_to_tail tail
-  local n_ungrouped n_categories
-  n_ungrouped="$(cap_line_heading "$tmp/$current/tail.txt" '未分组')"
-  n_categories="$(cap_line_heading "$tmp/$current/tail.txt" '下一次派任务会用的模型')"
-  if [ "$n_ungrouped" -gt 0 ] && [ "$n_categories" -gt 0 ] && [ "$n_ungrouped" -lt "$n_categories" ]; then
-    ok "「未分组」在类别块之前（未分组=$n_ungrouped < 任务类别=$n_categories）"
-  else
-    bad "尾部顺序不对（未分组=$n_ungrouped 任务类别=$n_categories）"
-  fi
-  # ⑤ 无键→域表：scratch CLI 让 TEAM_ZZZ_TEST 带 workflow、把 TEAM_GATES 移到 meeting；
-  #    提交的那份 bundle 必须跟着两个标题走（bundle 里没有第二张键表/组表）。
+  assert_match "$tmp/$current/view.txt" '› custom +example/custom' "自定义类别按源顺序先显示"
+  keys Down
+  wait_row next-category "标题不是焦点停点" "› routine" || bad "类别焦点越过标题失败"
+  cap_to order
+  assert_match "$tmp/$current/order.txt" '› routine' "第二类别是实际源的routine"
+  local before y
+  before="$(sha "$(cfg)")"; y="$(cap_line_heading "$tmp/$current/view.txt" 模型)"
+  click_at 8 "$y"; sleep 0.4; cap_to heading-click
+  assert_match "$tmp/$current/heading-click.txt" '› routine' "标题不是点击目标"
+  assert_eq "标题点击不写" "$(sha "$(cfg)")" "$before"
   local scratch="$tmp/$current/scratch"
   mkdir -p "$scratch/skills/teamsmith"
   cp -a "$skill/scripts" "$scratch/skills/teamsmith/scripts"
   cp -a "$skill/templates" "$skill/references" "$scratch/skills/teamsmith/"
-  python3 - "$scratch/skills/teamsmith/scripts/lib/cmd-config.sh" <<'PY'
+  python3 - "$scratch/skills/teamsmith/scripts/lib/cmd-config.sh" <<'PYCFG'
 import sys
-p = sys.argv[1]
-s = open(p, encoding='utf-8').read()
-gates = 'TEAM_GATES|apply|cmd||plain||-|||workflow'
-assert gates in s, '找不到 TEAM_GATES 的 10 列 schema 行'
-s = s.replace(gates, gates.replace('|workflow', '|meeting'), 1)
-anchor = 'TEAM_INSTALL_CMD|apply|cmd||plain||-|||workflow'
-assert anchor in s, '找不到 TEAM_INSTALL_CMD 的 schema 行'
-s = s.replace(anchor, 'TEAM_ZZZ_TEST|apply|text||plain|zzz-default|-|||workflow\n' + anchor, 1)
-open(p, 'w', encoding='utf-8').write(s)
-PY
-  cat > "$tmp/$current-scratch-wrapper.sh" <<EOF2
+p=sys.argv[1]; s=open(p).read()
+gates='TEAM_GATES|apply|cmd||plain||-|||workflow'; assert gates in s
+s=s.replace(gates,'TEAM_GATES|refuse|cmd||plain||-|change acceptance in config||meeting')
+anchor='TEAM_INSTALL_CMD|apply|cmd||plain||-|||workflow'; assert anchor in s
+s=s.replace(anchor,'TEAM_ZZZ_TEST|apply|text||plain|zzz|-|||meeting\n'+anchor)
+# 取消fixture标记也不能使未精选键变成操作。
+s=s.replace('fixture-only: 只在测试套件里用（磁盘读数夹具）','')
+open(p,'w').write(s)
+PYCFG
+  cat > "$tmp/$current-scratch-wrapper.sh" <<EOF
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "$tmp/$current-scratch-argv.log"
 exec bash "$scratch/skills/teamsmith/scripts/team" "\$@"
-EOF2
+EOF
   chmod +x "$tmp/$current-scratch-wrapper.sh"
-  # `VAR=x func` 的赋值只活到函数返回 —— 本段要起两次面板（同 scn_choices_schema 的教训）。
-  P21_CLI="$tmp/$current-scratch-wrapper.sh"
-  start_panel
+  P21_CLI="$tmp/$current-scratch-wrapper.sh" start_panel
   open_view
-  filter_to TEAM_ZZZ_TEST
-  wait_row zzz-group "scratch 新增键落在 workflow 域标题下" '工作流与门禁' 'TEAM_ZZZ_TEST' \
-    || bad "新键的域标题/行没等到（超过等待上限）"
-  assert_has "$tmp/$current/zzz-group.txt" "工作流与门禁" "schema 新增键落在它声明的 workflow 域下（bundle 未重建）"
-  assert_match "$tmp/$current/zzz-group.txt" 'TEAM_ZZZ_TEST +未设 · 默认 zzz-default' "新键的行完整（值/默认来自 schema）"
+  for k in TEAM_ZZZ_TEST TEAM_DISK_STATS_FILE; do
+    filter_to "$k"; cap_to "$k"
+    assert_no_match "$tmp/$current/$k.txt" '^│ [› ] [^│]*[^[:space:]│]' "新键或取消标记不会自动显示（$k）"
+  done
+  open_secondary commands
   filter_to TEAM_GATES
-  wait_row gates-moved "TEAM_GATES 跟到 meeting 域标题下" '跨项目会议' '门禁命令' \
-    || bad "TEAM_GATES 的新域标题/行没等到（超过等待上限）"
-  assert_has "$tmp/$current/gates-moved.txt" "跨项目会议" "TEAM_GATES 的 token 改成 meeting 后跟到新标题下（bundle 里没有键→域表）"
-  assert_match "$tmp/$current/gates-moved.txt" '门禁命令 +true · 立即生效' "同一行仍按 schema 渲染（标签/值/徽章）"
-  assert_eq "三次运行之间 bundle 逐字节不变" "$(sha "$panel")" "$bundle_sha"
-  # ⑥ 第 10 列缺失 = 畸形行：走查那边判红（config-cli.sh 的 groups 段），视图这边可见降级到「未分组」，
-  #    行本身（标签/值/徽章/命令行）一个字不少。
-  python3 - "$scratch/skills/teamsmith/scripts/lib/cmd-config.sh" <<'PY'
-import sys
-p = sys.argv[1]
-s = open(p, encoding='utf-8').read()
-row = 'TEAM_GATES|apply|cmd||plain||-|||meeting'
-assert row in s, '找不到移动后的 TEAM_GATES 行'
-s = s.replace(row, 'TEAM_GATES|apply|cmd||plain||-|', 1)
-open(p, 'w', encoding='utf-8').write(s)
-PY
-  start_panel
-  open_view
-  filter_to TEAM_GATES
-  wait_row gates-fallback "畸形 schema 行落在「未分组」里" '未分组' '门禁命令' \
-    || bad "降级组的行没等到（超过等待上限）"
+  wait_row permission "保留键仍跟源权限/route" "验收命令" "change acceptance in config" || bad "原权限/route未显示"
+  local h; h="$(sha "$(cfg)")"
+  keys Enter
+  wait_cap refused "change acceptance in config" || bad "refuse没有真实route"
+  assert_eq "refuse没有写" "$(sha "$(cfg)")" "$h"
+  cap_to refusal
+  assert_not "$tmp/$current/refusal.txt" "Enter 继续" "refuse没有可写输入"
   unset P21_CLI
-  assert_has "$tmp/$current/gates-fallback.txt" "未分组" "第 10 列缺失的 schema 行落在可见的降级组里（不消失）"
-  assert_match "$tmp/$current/gates-fallback.txt" '门禁命令 +true · 立即生效' "降级组里的行仍完整（标签/值/徽章）"
-  assert_has "$tmp/$current/gates-fallback.txt" "命令行：team config set TEAM_GATES <新值>" "降级组里的行仍给出命令行"
-  # 同一个 scratch 树里，「未分组」现在同时装着手加的未知键与畸形行：走到末尾，两者同屏且在席位之前。
-  filter_clear
-  sleep 0.4
-  walk_to_tail tail-scratch
-  assert_has "$tmp/$current/tail-scratch.txt" "TEAM_HAND_ADDED" "降级组里未知键与畸形行同屏（未知键可见）"
-  assert_has "$tmp/$current/tail-scratch.txt" "门禁命令" "降级组里畸形行同屏（schema 行可见）"
-  local n_u n_s
-  n_u="$(cap_line_heading "$tmp/$current/tail-scratch.txt" '未分组')"
-  n_s="$(cap_line_heading "$tmp/$current/tail-scratch.txt" '下一次派任务会用的模型')"
-  if [ "$n_u" -gt 0 ] && [ "$n_s" -gt 0 ] && [ "$n_u" -lt "$n_s" ]; then
-    ok "scratch 尾部：「未分组」仍在类别块之前（$n_u < $n_s）"
-  else
-    bad "scratch 尾部顺序不对（未分组=$n_u 任务类别=$n_s）"
-  fi
 }
 
 scn_wheel_settings() {
@@ -2117,6 +1563,9 @@ scn_wheel_settings() {
   # P232：类别 picker 用例要有类别可开。
   policy_new 'routine=kimi-coding/k3-256k analysis=openai-codex/gpt-5.6-terra:xhigh' 'openai-codex/gpt-6.1-sol:high' \
     || bad "策略升级事务没有跑通"
+  local map='routine=kimi-coding/k3-256k analysis=openai-codex/gpt-5.6-terra:xhigh' k
+  for k in $(seq 1 60); do map="$map cat$k=example/model$k"; done
+  policy_new "$map" 'openai-codex/gpt-6.1-sol:high' || bad "长列表准备失败"
   # 页面（page 3 的巡检块）要真的滚得动，「页面没被穿透」才有可观察的对照：写满 12 行巡检日志。
   mkdir -p "$state"
   python3 - "$state/watchdog.log" <<'PY'
@@ -2137,7 +1586,7 @@ PY
   # ② 视图里的滚轮：一格一行、焦点不动、顶部计数行跟随（先下滚 3 格，再上滚回顶部）。
   open_view
   cap_to wheel-before
-  assert_match "$tmp/$current/wheel-before.txt" '› 项目名 +.*不可改' "视图开屏焦点在第一行（identity 第一条）"
+  assert_match "$tmp/$current/wheel-before.txt" '› routine +kimi-coding/k3-256k' "视图开屏焦点在第一行（identity 第一条）"
   wheel_at down 20 10 3
   local i
   for i in $(seq 1 20); do
@@ -2146,17 +1595,17 @@ PY
     sleep 0.25
   done
   assert_match "$tmp/$current/wheel-down.txt" '↑3' "下滚 3 格：顶部计数行读出 ↑3（窗口正好移 3 行）"
-  assert_not "$tmp/$current/wheel-down.txt" "项目名" "下滚 3 格：原本第一行（项目名）已出窗"
-  assert_has "$tmp/$current/wheel-down.txt" "名册" "下滚 3 格：后面的行进窗（窗口第一行 = 第 4 条）"
-  assert_no_match "$tmp/$current/wheel-down.txt" '›' "下滚 3 格：焦点没动（光标落在已出窗的项目名上，窗口里没有光标行）"
-  assert_has "$tmp/$current/wheel-down.txt" "这个值要改项目配置文件 .pi/team/config.sh，界面不能改" "下滚 3 格：命令行提示仍在"
+  assert_not "$tmp/$current/wheel-down.txt" "routine" "下滚 3 格：原本第一行（routine）已出窗"
+  assert_has "$tmp/$current/wheel-down.txt" "cat2" "下滚 3 格：后面的行进窗（窗口第一行 = 第 4 条）"
+  assert_no_match "$tmp/$current/wheel-down.txt" '›' "下滚 3 格：焦点没动（光标落在已出窗的routine上，窗口里没有光标行）"
+  assert_has "$tmp/$current/wheel-down.txt" "新任务生效" "下滚 3 格：命令行提示仍在"
   wheel_at up 20 10 3
   for i in $(seq 1 20); do
     cap_to wheel-up
     grep -qE '↑[0-9]+' "$tmp/$current/wheel-up.txt" || break
     sleep 0.25
   done
-  assert_match "$tmp/$current/wheel-up.txt" '› 项目名' "上滚 3 格：窗口回到顶部，第一行回来"
+  assert_match "$tmp/$current/wheel-up.txt" '› routine' "上滚 3 格：窗口回到顶部，第一行回来"
   assert_no_match "$tmp/$current/wheel-up.txt" '↑[0-9]+' "上滚 3 格：顶部计数行消失"
   # ③ 焦点键把窗口推到聚焦行（滚开之后 enter 打开的就是命令行点名的那一行）。
   wheel_at down 20 10 3
@@ -2166,25 +1615,22 @@ PY
     sleep 0.25
   done
   keys Down
-  # P68：等窗口被推到聚焦行（↑1 + 光标在会话名）在稳定帧上，不用固定 sleep 采样。
-  wait_row wheel-push "↓ 之后窗口被推到聚焦行（↑1 + › 会话名）" '↑1' '› 会话名' \
+  # P68：等窗口被推到聚焦行（↑1 + 光标在analysis）在稳定帧上，不用固定 sleep 采样。
+  wait_row wheel-push "↓ 之后窗口被推到聚焦行（↑1 + › analysis）" '↑1' '› analysis' \
     || bad "↓ 之后窗口没有被推到聚焦行上"
   assert_match "$tmp/$current/wheel-push.txt" '↑1' "↓ 之后窗口被推到聚焦行上（顶部计数行 = ↑1）"
-  assert_match "$tmp/$current/wheel-push.txt" '› 会话名' "光标落在下一条（会话名）"
-  assert_has "$tmp/$current/wheel-push.txt" "这个值要改项目配置文件 .pi/team/config.sh，界面不能改" "命令行提示与光标同一屏（焦点在会话名上）"
+  assert_match "$tmp/$current/wheel-push.txt" '› analysis' "光标落在下一条（analysis）"
+  assert_has "$tmp/$current/wheel-push.txt" "新任务生效" "命令行提示与光标同一屏（焦点在analysis上）"
   keys Up
   # `↑` 计数行消失（字面 needle：`!↑1` = 刚才那条 ↑1 不再在屏幕上；pty-wait 是 grep -F，不吃正则，
   # 所以不能用原断言的 `↑[0-9]+`；下面的 assert_no_match 仍守住正则面）。
-  wait_row wheel-push-back "↑ 之后窗口回到顶部（↑1 计数行消失）" '› 项目名' '!↑1' \
+  wait_row wheel-push-back "↑ 之后窗口回到顶部（↑1 计数行消失）" '› routine' '!↑1' \
     || bad "↑ 之后窗口没有回到顶部"
-  assert_match "$tmp/$current/wheel-push-back.txt" '› 项目名' "↑ 之后光标回到第一条"
+  assert_match "$tmp/$current/wheel-push-back.txt" '› routine' "↑ 之后光标回到第一条"
   assert_no_match "$tmp/$current/wheel-push-back.txt" '↑[0-9]+' "窗口跟着回到顶部（计数行消失）"
   keys Enter
-  if wait_cap wheel-enter "只能改项目配置文件 .pi/team/config.sh 里的这一行"; then
-    ok "enter 打开的行 = 回执点名的那一行（项目名的只读路线）"
-  else
-    bad "enter 之后没有出现聚焦行的路线回执"
-  fi
+  wait_picker routine "kimi-coding/k3-256k" || bad "Enter没有打开聚焦类别"
+  leave_picker routine || bad "类别picker未返回"
   # ④ 选择器开着时滚轮走条目、页面不动；esc 之后选择器是关着的（一次 esc 就够）。
   filter_to TEAM_PULSE_INTERVAL
   sleep 0.5
@@ -2203,25 +1649,23 @@ PY
   else
     bad "选择器里的滚轮没有走条目（选中行 $sel_before → $sel_after）"
   fi
-  pty_key_when "选选择器的 esc" ' · TEAM_PULSE_INTERVAL' Escape || bad "选择器不在稳定帧上，esc 没有发"
+  pty_key_when "选选择器的 esc" '╭─ 检查间隔' Escape || bad "选择器不在稳定帧上，esc 没有发"
   # P68：等 esc 的效果（选择器关掉、仍在设置视图里）在稳定帧上。
-  wait_row picker-closed "一次 esc 关掉选择器且仍在设置视图里" '! · TEAM_PULSE_INTERVAL' '╭─ 项目设置' \
+  wait_row picker-closed "一次 esc 关掉选择器且仍在设置视图里" '!╭─ 检查间隔' '╭─ 项目设置' \
     || bad "一次 esc 没有关掉选择器（或不在设置视图里了）"
-  assert_not "$tmp/$current/picker-closed.txt" " · TEAM_PULSE_INTERVAL" "一次 esc 就把选择器关掉（不穿透）"
+  assert_not "$tmp/$current/picker-closed.txt" "╭─ 检查间隔" "一次 esc 就把选择器关掉（不穿透）"
   assert_has "$tmp/$current/picker-closed.txt" "╭─ 项目设置" "关闭后仍在设置视图里"
   # ⑤ 类别 picker 走同一套 widget（条目滚动已在 ④ 证过）。P232：席位 picker 随席位模型一起退休，
   #    类别 picker 是它的接任者 —— 这里守两件事：它自己的条目列表在滚轮下会走，且页面不因此滚动
   #    （⑥ 关掉视图后仍断言页面停在这一屏）。
-  filter_clear
-  filter_to 类别
-  sleep 0.5
-  if focus_row '› 类别 routine'; then
+  filter_to routine
+  if focus_row '› routine'; then
     keys Enter
   else
-    bad "没能把焦点移到类别 routine 行"
+    bad "没能把焦点移到routine 行"
   fi
   # 类别 picker 的标题是「选择类别 <category> 的模型」（没有 ` · KEY` 后缀），用 pty_wait_frame 等它。
-  if pty_wait_frame "$tmp/$current/cat-picker.txt" "类别 picker" "选择类别 routine 的模型" "…（自由输入）"; then
+  if pty_wait_frame "$tmp/$current/cat-picker.txt" "类别 picker" "╭─ routine" "· 当前"; then
     ok "类别 picker 打开（标题 + 自由输入项）"
   else
     bad "类别 picker 没有打开"
@@ -2231,13 +1675,14 @@ PY
   wheel_at down 20 12 2
   sleep 0.6
   cap_to cat-wheel-after
-  assert_has "$tmp/$current/cat-wheel-after.txt" "选择类别 routine 的模型" "滚轮之后类别 picker 还开着（没穿透）"
-  pty_key_when "类别 picker 的 esc" '选择类别 routine 的模型' Escape || bad "类别 picker 不在稳定帧上，esc 没有发"
+  assert_has "$tmp/$current/cat-wheel-after.txt" "╭─ routine" "滚轮之后类别 picker 还开着（没穿透）"
+  pty_key_when "类别 picker 的 esc" '╭─ routine' Escape || bad "类别 picker 不在稳定帧上，esc 没有发"
   # P68：等类别 picker 关掉（仍在设置视图里）在稳定帧上。
-  wait_row cat-picker-closed "一次 esc 关掉类别 picker" '!选择类别 routine 的模型' '╭─ 项目设置' \
+  wait_row cat-picker-closed "一次 esc 关掉类别 picker" '!╭─ routine' '╭─ 项目设置' \
     || bad "一次 esc 没有关掉类别 picker"
-  assert_not "$tmp/$current/cat-picker-closed.txt" "选择类别 routine 的模型" "一次 esc 关掉类别 picker"
+  assert_not "$tmp/$current/cat-picker-closed.txt" "╭─ routine" "一次 esc 关掉类别 picker"
   # ⑥ 回到页面：视图把滚轮吃掉了 —— 页面还是进视图前的那一屏（P-01 出屏、P-04 可见）。
+  filter_clear
   pty_key_when "关设置视图" '╭─ 项目设置' Escape || bad "关闭视图前它不在稳定帧上"
   # P68：等浮层自己回到稳定帧上再发第二个 esc（原来是两个固定 sleep 给按键让路）。
   pty_wait_frame - "关设置视图后的浮层" '› 项目设置' '!╭─ 项目设置' \

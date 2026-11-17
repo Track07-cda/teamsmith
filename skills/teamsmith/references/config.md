@@ -325,8 +325,10 @@ arbitrary file reader. Text is capped at 128 KiB (`TEAM_PANEL_DETAIL_CAP` overri
 console spawns no `detail` child at all.
 
 `--block settings` is the project-settings view's reader (P22/B2): its payload is exactly `team config list
---json` (the contract's schema, its effect classes, each key's functional `group`, the per-seat models and the
-audit tail). Like `detail` it is
+--json` (complete key metadata, effect classes and functional `group`, future category/PM policy and committed
+model records). The selected console lists model and automatic-check operations; project commands and model
+records are separate returnable views. Excluded keys remain in the full CLI, and genuine warnings and repair
+routes remain accessible in settings. The audit is not read by this console view. Like `detail` it is
 requested only while the view is open — a parked console spawns no `settings` child and `--print`/`--json` never
 see it.
 
@@ -390,11 +392,9 @@ parsed from the `# ---- … ----` section comments, which stay documentation: a 
 a row between headings. The fields are positional, so the ninth column (`suggest`) is written empty for a row
 that has no suggestions when the group follows; a row whose tenth field is missing or malformed is a schema
 defect, and `tests/config-cli.sh`'s `groups` section names the key and fails — the read never invents a default
-group or hides the row (the console shows such a row under its visible ungrouped fallback heading,
-`settingsGroupUngrouped` in the string tables).
+group or hides the row from the complete CLI. The selected console's purpose groups do not follow this metadata.
 
-The vocabulary is exactly these twelve tokens; the visible heading is the table entry `group_<token>` in
-**both** languages (the zh and en tables are the only place a heading's words live):
+The complete CLI vocabulary is these twelve tokens; it is not the console's purpose-heading list:
 
 | token | domain | example keys |
 |---|---|---|
@@ -411,12 +411,11 @@ The vocabulary is exactly these twelve tokens; the visible heading is the table 
 | `session` | live sessions | the `TEAM_INBOX_WATCH_*` family |
 | `meeting` | cross-project meetings | `TEAM_MEETING_TTL_HOURS`, `TEAM_MEETING_KNOCK` |
 
-The token is the **only** declaration of the vocabulary: `team config list --json` reports each key record's
-`group` verbatim (empty string for a key the file carries and the schema does not know), the console looks its
-heading up by the token (`group_<token>`, falling back to the raw token when the table has none), and
-`tests/panel-strings.mjs` asserts the two sets equal **in both directions** — a token no row uses has no label
-(stale label) and a row's token without a label is a missing label. A key added to the schema therefore lands
-under its domain with the committed console bundle, and no group list exists anywhere else.
+The token is the **only** declaration of this CLI vocabulary: `team config list --json` reports each key's
+`group` verbatim, or empty for an unknown file key. New schema keys/groups remain in that complete read; they
+do not automatically create console operations or headings. `tests/panel-strings.mjs` checks only displayed
+references and selected-operation labels in both languages; complete schema/group validation remains in the
+existing CLI fixture.
 
 ### The written form
 

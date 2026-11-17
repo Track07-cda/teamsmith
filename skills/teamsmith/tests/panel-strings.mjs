@@ -3,31 +3,19 @@
 //
 //   node skills/teamsmith/tests/panel-strings.mjs [tree]
 //
-// Checks, in order:
-//   2. every value is a non-empty string and the `{placeholder}` sets match per key;
-//   3. no CJK ideograph survives in the panel sources outside `src/strings/**` (comments are
-//      stripped first) — visible text comes from the tables, not from literals;
-//   4. the contract-key labels (M49): every key of the owning command's schema
-//      (`skills/teamsmith/scripts/lib/cmd-config.sh`) has a non-empty `label_<KEY>` in **both**
-//      tables, no label names a key the schema does not carry (no stale half), the label is not
-//      the key spelled differently, and it fits the row's label column.
-//   5. the contract-group labels (P30): the same schema rows' tenth column (`group`) is a closed
-//      ASCII token, and every token one of them uses has a non-empty `group_<token>` in **both**
-//      tables while no `group_` label names a token no row uses (both directions).
-//   6. the fixture marker is data (P266): the schema rows that carry the declared `fixture-only: `
-//      marker in their free-text column are read here (the fixture side may read the schema, the
-//      panel body must not) and the panel sources outside `src/strings/**` must name none of those
-//      keys and must not mention the owning command's schema at all — the view learns what to hide
-//      from the read's own `route` payload and never from a baked-in key list (§4.3).
+// Checks: non-empty values and matching placeholders; selected-operation key labels and
+// displayed settings/source references in both languages. Complete CLI schema/group/fixture
+// metadata stays in config-cli.sh; adding an excluded key/group requires no UI label.
+// The inherited source-literal walk below is unchanged by this settings-only change.
 //
 // The tables are plain ESM, so they are copied to a temp dir as `.mjs` and imported with the plain
 // JS runtime this script runs on; no TypeScript loader (or bundler) is involved.
 //
 // Exit: 0 all three checks pass, 1 at least one failed (the message names the key/file).
 
-import { copyFileSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { copyFileSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join, relative } from 'node:path'
+import { join, relative } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 const tree = process.argv[2] || process.cwd()
@@ -100,104 +88,24 @@ try {
   if (hits.length) {
   }
 
-  // 4. The contract-key labels: the schema is the single source of the row set (the view reads it
-  // at render time), the labels are the row's human identity — so the two must line up exactly,
-  // in both directions. The assertion is falsifiable by deleting one label (a missing key) or by
-  // leaving one behind after the schema drops a key (a stale label).
-  const schemaFile = join(tree, 'skills/teamsmith/scripts/lib/cmd-config.sh')
-  if (!existsSync(schemaFile)) {
-    console.log(`skip: ${relative(tree, schemaFile)} is not in this tree (schema-label check not run)`)
-  } else {
-    const schemaBody = /^team_config_schema\(\)\s*\{[\s\S]*?\nEOF\n/m.exec(readFileSync(schemaFile, 'utf8'))
-    const schemaKeys = schemaBody ? [...schemaBody[0].matchAll(/^(TEAM_[A-Z0-9_]+)\|/gm)].map((m) => m[1]) : []
-    if (!schemaKeys.length) fail(`${relative(tree, schemaFile)}: no schema key parsed from team_config_schema()`)
-    const LABEL_PREFIX = 'label_'
-    const labelled = (table) => Object.keys(table).filter((k) => k.startsWith(LABEL_PREFIX)).map((k) => k.slice(LABEL_PREFIX.length))
-    // The row's label column (`layout.ts` SETTINGS_LABEL_W); a longer label is cut mid-word there.
-    const cells = (value) => [...String(value)].reduce((n, ch) => n + (/[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef]/.test(ch) ? 2 : 1), 0)
-    for (const [name, table] of [
-      ['zh', zh],
-      ['en', en],
-    ]) {
-      const have = new Set(labelled(table))
-      const missing = schemaKeys.filter((k) => !have.has(k))
-      if (missing.length) fail(`${name}: no label for schema key(s) [ ${missing.join(', ')} ]`)
+  // Selected presentation references replace the retired full-schema/group-label bijection.
+  const presentation = readFileSync(join(srcDir, 'project-settings.ts'), 'utf8')
+  const keys = [...new Set(presentation.match(/TEAM_[A-Z0-9_]+/g))]
+  const body = walk(srcDir).map((file) => stripComments(readFileSync(file, 'utf8'))).join('\n')
+  const references = [...new Set([...body.matchAll(/\b(?:s|strings|stringsRef\.current|ctx\.s)\.((?:settings|setting|seatSource)[A-Z]\w*)/g)].map((m) => m[1]))]
+  for (const [name, table] of [['zh', zh], ['en', en]]) {
+    for (const key of keys) {
+      if (!table['label_' + key]) fail(`${name}: missing selected-operation label_${key}`)
     }
-    for (const [name, table] of [
-      ['zh', zh],
-      ['en', en],
-    ]) {
-      for (const key of labelled(table)) {
-        const label = table[LABEL_PREFIX + key]
-        if (!schemaKeys.includes(key)) fail(`${name}.${LABEL_PREFIX}${key} names no schema key (stale label)`)
-      }
-    }
-    if (schemaKeys.length) console.log(`ok: contract-key labels — ${schemaKeys.length} schema keys covered in zh and en`)
-
-    // P30/D2: the functional-group bijection. The schema row's tenth column is the only place a
-    // group token is declared; the visible heading is `group_<token>` in the tables. Both
-    // directions are failures: a row token with no label (the tables lag the schema) and a label
-    // no row uses (a stale group). The token's shape is asserted here too, so a malformed tenth
-    // field is red in the fast gate as well as in config-cli.sh's groups walk.
-    const GROUP_PREFIX = 'group_'
-    const GROUP_SHAPE = /^[a-z][a-z0-9-]*$/
-    const rows = [...(schemaBody ? schemaBody[0].matchAll(/^(TEAM_[A-Z0-9_]+)\|(.+)$/gm) : [])].map((m) => ({
-      key: m[1],
-      // Everything after the key: class|kind|spec|form|default|danger|route|suggest|group — the
-      // tenth column is this array's ninth element (index 8).
-      fields: m[2].split('|'),
-    }))
-    const tokens = new Set()
-    for (const row of rows) {
-      const token = String(row.fields[8] ?? '')
-      if (!token) {
-        fail(`${row.key}: schema row declares no group (its tenth field is missing) — the tables' group labels cannot line up`)
-        continue
-      }
-      if (!GROUP_SHAPE.test(token)) fail(`${row.key}: group token ${JSON.stringify(token)} does not match ^[a-z][a-z0-9-]*$`)
-      tokens.add(token)
-    }
-    for (const [name, table] of [
-      ['zh', zh],
-      ['en', en],
-    ]) {
-      for (const token of [...tokens].sort()) {
-        const value = table[GROUP_PREFIX + token]
-        if (typeof value !== 'string' || value.length === 0) fail(`${name}: no ${GROUP_PREFIX}${token} label for the group the schema rows carry`)
-      }
-      for (const key of Object.keys(table).filter((k) => k.startsWith(GROUP_PREFIX))) {
-        if (!tokens.has(key.slice(GROUP_PREFIX.length))) fail(`${name}.${key} names no group any schema row uses (stale label)`)
-      }
-    }
-    if (rows.length) console.log(`ok: contract-group labels — ${tokens.size} schema group tokens covered in zh and en`)
-
-    // 6. P266 (panel-plain-language, tasks.md §4.3): the fixture marker is data. This script reads
-    // the schema (the fixture side may); the panel body — everything but the label tables — must
-    // not, and must name no marked key: the hiding rule reads the marker off the read's payload.
-    // Falsifiable by the mutation "hiding is a hardcoded name list" (a name shows up here) or by
-    // pointing the view at the schema.
-    const MARKER = 'fixture-only: '
-    const fixtureKeys = rows.filter((row) => String(row.fields[6] ?? '').startsWith(MARKER)).map((row) => row.key)
-    if (!fixtureKeys.length) {
-      fail(`no schema row carries the declared marker ${JSON.stringify(MARKER)} in its route column (memory-and-deps owns it)`)
-    }
-    if (!fixtureKeys.length) {
-      // nothing to cross-check
-    } else {
-      const bodyText = walk(srcDir)
-        .map((file) => stripComments(readFileSync(file, 'utf8')))
-        .join('\n')
-      const tokens = ['cmd-config.sh', 'team_config_schema', ...fixtureKeys]
-      const named = tokens.filter((token) => bodyText.includes(token))
-      if (named.length) {
-        fail(
-          `the panel body names [ ${named.join(', ')} ] — it must read fixture-only keys from the read's \`route\`, not from the schema or a key list`,
-        )
-      } else {
-        console.log(`ok: fixture marker is data — ${fixtureKeys.length} marked key(s), none named in the panel body`)
-      }
+    for (const ref of references) {
+      if (!table[ref]) fail(`${name}: missing displayed reference ${ref}`)
     }
   }
+  for (const key of new Set([...zhKeys, ...enKeys])) {
+    if (!(key in zh) || !(key in en)) fail(`${key}: language field missing`)
+  }
+  console.log(`ok: selected settings references — ${keys.length} key labels; ${references.length} displayed references`)
+
 } finally {
   rmSync(tmp, { recursive: true, force: true })
 }

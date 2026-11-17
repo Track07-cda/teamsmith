@@ -12,7 +12,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { writeSync } from 'node:fs'
 import { Box, Text, useApp, useCursor, useInput } from 'ink'
-import { layout, resolveFocus, focusRefOf, focusRow, rowKey, settingsRowFocusable, settingsViewRows, boardFocusRef, rowSourceOf } from './layout.js'
+import { effectiveSetting, settingLabel, isSecondsSetting, settingTiming, limitsTokens, limitFields, limitsValue, withLimitsTokens } from './project-settings.js'
+import type { SettingsPage, LimitsDraft } from './types.js'
+import { settingsRecordDetails, layout, resolveFocus, focusRefOf, focusRow, rowKey, settingsRowFocusable, settingsViewRows, boardFocusRef, rowSourceOf } from './layout.js'
 import type { LayoutInput, SettingsRow } from './layout.js'
 import { clockOf } from './format.js'
 import { fill, stringsFor, type Strings } from './strings/index.js'
@@ -47,7 +49,7 @@ const TRAY_H = '─'
 const TRAY_V = '│'
 
 /** The focusable row of the view as the App walks it (headings are skipped). */
-type SettingsFocusRow = Extract<SettingsRow, { kind: 'key' | 'category' | 'assignment' | 'pm-launch' }>
+type SettingsFocusRow = Exclude<SettingsRow, { kind: 'group' }>
 
 /**
  * The kinds whose editor is the choice picker (M55). `enum` joins only when the command reports
@@ -308,6 +310,14 @@ export function App({
   // its filter. The view is a view, not a page: the four-page composition and `state/panel-page`
   // keep their meaning, and `esc` lands back on the overlay row it was opened from.
   const [settingsView, setSettingsView] = useState(false)
+  const [settingsPage, setSettingsPage] = useState<SettingsPage>('main')
+  const settingsPageRef = useRef<SettingsPage>('main')
+  const [limitsDraft, setLimitsDraft] = useState<LimitsDraft | null>(null)
+  const limitsDraftRef = useRef<LimitsDraft | null>(null)
+  const ruleFieldRef = useRef<'model' | 'count' | null>(null)
+  const [settingsDetails, setSettingsDetails] = useState<string[] | null>(null)
+  const settingsDetailsRef = useRef<string[] | null>(null)
+  const settingsBackRef = useRef<{ page: SettingsPage; focus: number; filter: string; offset: number | null }[]>([])
   const [settingsOrigin, setSettingsOrigin] = useState(0)
   const [settingsFocus, setSettingsFocus] = useState(0)
   const [settingsFilter, setSettingsFilter] = useState('')
@@ -530,6 +540,7 @@ export function App({
     // A cancelled setting edit writes nothing and leaves no audit line (the two-step rule).
     settingRowRef.current = null
     settingConfirmRef.current = null
+    ruleFieldRef.current = null
     setSettingConfirm(null)
   }, [])
 
@@ -574,6 +585,28 @@ export function App({
       return
     }
     if (mode === 'setting') {
+      if (ruleFieldRef.current) {
+        const field = ruleFieldRef.current
+        const draft = limitsDraftRef.current
+        if (!draft) { closeCompose(); return }
+        if (field === 'count' && !/^\d+$/.test(text)) {
+          setStatus(stringsRef.current.settingsRuleCountInvalid)
+          return
+        }
+        if (field === 'model' && (!text || /\s|=/.test(text))) {
+          setStatus(stringsRef.current.settingInvalid.replace('{line}', stringsRef.current.settingsRuleModel))
+          return
+        }
+        const [model, count] = limitFields(draft.tokens[draft.rule])
+        const tokens = [...draft.tokens]
+        tokens[draft.rule] = field === 'model' ? text + '=' + count : model + '=' + text
+        const next = withLimitsTokens(draft, tokens)
+        limitsDraftRef.current = next
+        setLimitsDraft(next)
+        closeCompose()
+        setStatus(null)
+        return
+      }
       // The write is always the owning command's: the first Enter asks for a `--dry-run`
       // validation, the second performs the write with the fingerprint pinned when the editor
       // opened. The console never opens the contract itself.
@@ -587,8 +620,7 @@ export function App({
       setBusy(true)
       try {
         const conf = settingConfirmRef.current
-        const timing =
-          target.cls === 'restart' ? stringsRef.current.settingTimingRestart : stringsRef.current.settingTimingApply
+        const timing = settingTiming(stringsRef.current, target.key, target.category)
         // P232: a category row keeps the same editor, but its write is the CLI's per-category
         // command (`set-task-model`) — the console never composes the pair list.
         const call = (dryRun: boolean, allowDanger: boolean): Promise<{ code: number; line: string }> =>
@@ -600,7 +632,7 @@ export function App({
             ? fill(stringsRef.current.settingCategoryWritten, { category: target.category, value: text })
             : target.key === 'TEAM_PM_MODEL'
               ? fill(stringsRef.current.settingPmWritten, { value: text })
-              : fill(stringsRef.current.settingWritten, { key: target.key, value: text, timing })
+              : fill(stringsRef.current.settingWritten, { key: settingLabel(stringsRef.current, target.key), value: text, timing }).replace(/ · $/, '')
         if (!conf) {
           const r = await call(true, false)
           if (r.code === 0) {
@@ -615,7 +647,7 @@ export function App({
                     next: text,
                   })
                 : fill(stringsRef.current.settingConfirm, {
-                    key: target.key,
+                    key: settingLabel(stringsRef.current, target.key),
                     old: target.value || stringsRef.current.dash,
                     next: text,
                     timing,
@@ -993,7 +1025,7 @@ export function App({
 
   /** The view's focusable rows as the last assembly saw them (the walk must match the screen). */
   const settingsRowsNow = useCallback((): SettingsFocusRow[] => {
-    const rows = settingsViewRows(dataRef.current.blocks?.settings, settingsFilterRef.current, stringsRef.current)
+    const rows = settingsViewRows(dataRef.current.blocks?.settings, settingsFilterRef.current, stringsRef.current, settingsPageRef.current, limitsDraftRef.current, settingsDetailsRef.current, settingsWindowRef.current?.width)
     return rows.filter(settingsRowFocusable)
   }, [])
 
@@ -1081,12 +1113,6 @@ export function App({
         out.push({ value: '', kind: 'free', seed: base })
         return out
       }
-      if (kind === 'winlist' || kind === 'pattern') {
-        // The token vocabulary: choosing a model seeds the compose editor with `<model>=` at the
-        // insertion point (the current value's end); the number to the right stays free text.
-        const seeded = out.map((e) => (e.kind === 'value' ? { ...e, seed: `${base}${base !== '' && !/\s$/.test(base) ? ' ' : ''}${e.value}=` } : e))
-        return [...seeded, { value: '', kind: 'free', seed: base }]
-      }
       out.push({ value: '', kind: 'free', seed: base })
       return out
     },
@@ -1102,6 +1128,7 @@ export function App({
   const choiceTarget = useCallback(
     (picker: SettingsChoicePicker): NonNullable<typeof settingRowRef.current> => {
       const rows = settingsRowsNow()
+      if (picker.target) return picker.target
       const fingerprint = dataRef.current.blocks?.settings?.fingerprint ?? ''
       if (picker.category) {
         // P232: a category picker writes `set-task-model <category> <model>`; its "current" value is
@@ -1148,8 +1175,7 @@ export function App({
       if (sendingRef.current) return
       sendingRef.current = true
       setBusy(true)
-      const timing =
-        target.cls === 'restart' ? stringsRef.current.settingTimingRestart : stringsRef.current.settingTimingApply
+      const timing = settingTiming(stringsRef.current, target.key, target.category)
       // P232: a category accept writes through the CLI's per-category command; a key accept keeps
       // the contract-set path. Both are the owning command's subprocess — never a direct write.
       const call = (dryRun: boolean, allowDanger: boolean): Promise<{ code: number; line: string }> =>
@@ -1161,7 +1187,7 @@ export function App({
           ? fill(stringsRef.current.settingCategoryWritten, { category: target.category, value })
           : target.key === 'TEAM_PM_MODEL'
             ? fill(stringsRef.current.settingPmWritten, { value })
-            : fill(stringsRef.current.settingWritten, { key: target.key, value, timing })
+            : fill(stringsRef.current.settingWritten, { key: settingLabel(stringsRef.current, target.key), value, timing }).replace(/ · $/, '')
       try {
         const danger = choiceDangerRef.current
         const dangerAccept = Boolean(danger && danger.key === target.key && danger.value === value)
@@ -1227,37 +1253,75 @@ export function App({
     [api],
   )
 
-  /**
-   * The whole-map row's editor is the categories block (P232): `enter` moves the focus to the first
-   * category row — no compose editor, no option list, and the pair list is never composed here. A
-   * filter that hides the block is dropped, because otherwise "focus the categories block" would
-   * name a row that is not on screen. When the policy carries no category at all (a legacy or empty
-   * map) the block has nothing to focus: the CLI route is named instead, and nothing is written.
-   */
-  const routeCategories = useCallback(() => {
-    const rows = settingsRowsNow()
-    let at = rows.findIndex((r) => r.kind === 'category')
-    if (at < 0) {
-      settingsFilterRef.current = ''
-      setSettingsFilter('')
-      // The focus index counts focusable rows, not the group headings `settingsViewRows` also
-      // returns — counting those would land the cursor on the wrong row (or past the end).
-      const all = settingsRowsNow()
-      at = all.findIndex((r) => r.kind === 'category')
+  const enterSettingsPage = useCallback((next: SettingsPage, details: string[] | null = null) => {
+    settingsBackRef.current.push({ page: settingsPageRef.current, focus: settingsFocusRef.current,
+      filter: settingsFilterRef.current, offset: settingsOffsetRef.current })
+    settingsPageRef.current = next
+    setSettingsPage(next)
+    settingsDetailsRef.current = details
+    setSettingsDetails(details)
+    settingsFocusRef.current = 0
+    setSettingsFocus(0)
+    settingsOffsetRef.current = null
+    setSettingsOffset(null)
+    settingsFilterRef.current = ''
+    setSettingsFilter('')
+    setStatus(null)
+  }, [])
+
+  const saveLimits = useCallback(async () => {
+    const draft = limitsDraftRef.current
+    if (!draft || sendingRef.current) return
+    sendingRef.current = true
+    setBusy(true)
+    const value = limitsValue(draft)
+    const opts = { fingerprint: draft.target.fingerprint, allowDanger: Boolean(draft.confirm?.danger) }
+    try {
+      const result = await api.setSetting('TEAM_MODEL_LIMITS', value, { ...opts, dryRun: !draft.confirm })
+      if (!draft.confirm && (result.code === 0 || result.code === 3 || result.code === 7)) {
+        const next = { ...draft, confirm: { danger: result.code === 7 } }
+        limitsDraftRef.current = next
+        setLimitsDraft(next)
+        settingsFocusRef.current = 0
+        setSettingsFocus(0)
+        settingsOffsetRef.current = null
+        setSettingsOffset(null)
+        setStatus(result.code === 7 ? fill(stringsRef.current.settingDanger, { reason: result.line })
+          : result.code === 3 ? stringsRef.current.settingConflict : stringsRef.current.settingsConfirmHint)
+      } else if (result.code === 0) {
+        limitsDraftRef.current = null
+        setLimitsDraft(null)
+        const back = settingsBackRef.current.pop()
+        settingsPageRef.current = back?.page ?? 'main'
+        setSettingsPage(settingsPageRef.current)
+        settingsFocusRef.current = back?.focus ?? 0
+        setSettingsFocus(settingsFocusRef.current)
+        settingsFilterRef.current = back?.filter ?? ''
+        setSettingsFilter(settingsFilterRef.current)
+        settingsOffsetRef.current = back?.offset ?? null
+        setSettingsOffset(settingsOffsetRef.current)
+        setStatus(fill(stringsRef.current.settingWritten, { key: stringsRef.current.label_TEAM_MODEL_LIMITS, value, timing: '' }).replace(/ · $/, ''))
+        api.refreshSettingsSoon()
+      } else {
+        setStatus(result.code === 3 ? stringsRef.current.settingConflict
+          : fill(result.code === 4 ? stringsRef.current.settingInvalid : result.code === 5 ? stringsRef.current.settingRefused : stringsRef.current.settingWriteError, { line: result.line }))
+        if (result.code === 3) {
+          const next = { ...draft, confirm: undefined }
+          limitsDraftRef.current = next
+          setLimitsDraft(next)
+          api.refreshSettingsSoon()
+        }
+      }
+    } finally {
+      sendingRef.current = false
+      setBusy(false)
     }
-    setChoicePicker(null)
-    choicePickerRef.current = null
-    if (at >= 0) setSettingsFocus(at)
-    setReceipt(null)
-    setStatus(
-      at >= 0 ? stringsRef.current.settingsCategoryMapHint : stringsRef.current.settingsCategoryMapEmpty,
-    )
-  }, [settingsRowsNow])
+  }, [api])
 
   /**
-   * One picker choice (M65/D10): a value entry validates and writes on this accept; a seeded entry
-   * (`winlist`/`pattern`'s `<model>=`) and the free-text entry open the compose editor, which keeps
-   * its validation and confirmation; keep-unset cancels. A click on an entry that does not carry
+   * One picker choice (M65/D10): a value entry validates and writes on this accept; free text
+   * opens the compose editor with its validation and confirmation; a rule field changes only
+   * the unsaved whole-value draft. Keep-unset cancels. A click on an entry that does not carry
    * the cursor only moves it — a click on the cursor's entry accepts it like `enter` does.
    */
   const chooseChoiceOption = useCallback(
@@ -1279,6 +1343,24 @@ export function App({
         choiceDangerRef.current = null
         setChoicePicker(null)
         choicePickerRef.current = null
+        return
+      }
+      if (picker.ruleField) {
+        setChoicePicker(null)
+        choicePickerRef.current = null
+        if (entry.kind === 'free') {
+          ruleFieldRef.current = 'model'
+          openCompose('setting', entry.seed ?? '')
+        } else {
+          const draft = limitsDraftRef.current
+          if (draft) {
+            const tokens = [...draft.tokens]
+            tokens[draft.rule] = entry.value + '=' + limitFields(tokens[draft.rule])[1]
+            const next = withLimitsTokens(draft, tokens)
+            limitsDraftRef.current = next
+            setLimitsDraft(next)
+          }
+        }
         return
       }
       const target = choiceTarget(picker)
@@ -1320,6 +1402,11 @@ export function App({
       overlayIndexRef.current = origin
       setSettingsView(true)
       settingsViewRef.current = true
+      settingsPageRef.current = 'main'
+      setSettingsPage('main')
+      settingsBackRef.current = []
+      settingsDetailsRef.current = null
+      setSettingsDetails(null)
       setSettingsFocus(0)
       settingsFocusRef.current = 0
       setSettingsFilter('')
@@ -1334,6 +1421,31 @@ export function App({
   )
 
   const closeSettingsView = useCallback(() => {
+    if (settingsFilterRef.current) {
+      settingsFilterRef.current = ''
+      setSettingsFilter('')
+      settingsFocusRef.current = 0
+      setSettingsFocus(0)
+      settingsOffsetRef.current = null
+      setSettingsOffset(null)
+      return
+    }
+    const back = settingsBackRef.current.pop()
+    if (back) {
+      if (settingsPageRef.current === 'limits') { limitsDraftRef.current = null; setLimitsDraft(null) }
+      settingsPageRef.current = back.page
+      setSettingsPage(back.page)
+      settingsFocusRef.current = back.focus
+      setSettingsFocus(back.focus)
+      settingsOffsetRef.current = back.offset
+      setSettingsOffset(back.offset)
+      settingsFilterRef.current = back.filter
+      setSettingsFilter(back.filter)
+      settingsDetailsRef.current = null
+      setSettingsDetails(null)
+      setStatus(null)
+      return
+    }
     setSettingsView(false)
     settingsViewRef.current = false
     // D5: the wheel's offset does not survive the view (reopening starts at the top).
@@ -1392,6 +1504,41 @@ export function App({
       const at = index < 0 ? settingsFocusRef.current : index
       const row = rows[at]
       if (!row) return
+      if (limitsDraftRef.current?.confirm) { void saveLimits(); return }
+      if (row.kind === 'nav') { enterSettingsPage(row.page); return }
+      if (row.kind === 'info') {
+        if (!settingsDetailsRef.current) enterSettingsPage(settingsPageRef.current, [row.text])
+        return
+      }
+      if (row.kind === 'rule') {
+        const draft = limitsDraftRef.current
+        if (!draft) return
+        if (row.action === 'save') { void saveLimits(); return }
+        if (row.action === 'select' || row.action === 'add') {
+          const next = row.action === 'add' ? { ...draft, tokens: [...draft.tokens, '=0'], changed: true, rule: draft.tokens.length }
+            : { ...draft, rule: row.index }
+          limitsDraftRef.current = next
+          setLimitsDraft(next)
+          enterSettingsPage('rule')
+        } else if (row.action === 'delete') {
+          const next = withLimitsTokens(draft, draft.tokens.filter((_, i) => i !== draft.rule))
+          limitsDraftRef.current = next
+          setLimitsDraft(next)
+          closeSettingsView()
+        } else if (row.action === 'count') {
+          ruleFieldRef.current = 'count'
+          openCompose('setting', limitFields(draft.tokens[draft.rule])[1])
+        } else {
+          const [model] = limitFields(draft.tokens[draft.rule])
+          const entries: SettingsChoiceEntry[] = [...new Set([model, ...(dataRef.current.blocks?.settings?.models?.known ?? [])])]
+            .filter(Boolean).map((value) => ({ kind: 'value', value }))
+          entries.push({ kind: 'free', value: '', seed: model })
+          const picker: SettingsChoicePicker = { row: at, key: 'TEAM_MODEL_LIMITS', kind: 'model', entries, index: 0, interval: null, ruleField: true }
+          choicePickerRef.current = picker
+          setChoicePicker(picker)
+        }
+        return
+      }
       if (row.kind === 'category') {
         const entries = buildCategoryEntries(row.category)
         const picker: SettingsChoicePicker = {
@@ -1402,6 +1549,7 @@ export function App({
           index: 0,
           interval: null,
           category: true,
+          target: { row: at, key: row.category.category, value: row.category.model, cls: 'apply', fingerprint: dataRef.current.blocks?.settings?.fingerprint ?? '', category: row.category.category, kind: 'model' },
         }
         choiceDangerRef.current = null
         setChoicePicker(picker)
@@ -1411,12 +1559,7 @@ export function App({
         return
       }
       if (row.kind === 'assignment' || row.kind === 'pm-launch') {
-        // Read-only: the actual model is the committed record's, decided by dispatch/resume. The
-        // console offers no editor for it (and never a "restart this seat" action).
-        setReceipt(null)
-        setChoicePicker(null)
-        choicePickerRef.current = null
-        setStatus(row.kind === 'assignment' ? stringsRef.current.settingsAssignmentHint : stringsRef.current.settingsPmLaunchHint)
+        enterSettingsPage('records', settingsRecordDetails(row, stringsRef.current))
         return
       }
       const key = row.key
@@ -1428,16 +1571,22 @@ export function App({
         setStatus(`${named}${key.route || key.warning || stringsRef.current.settingsRefusedRoute}`)
         return
       }
-      // The whole-map row's editor is the categories block, never a composed pair list (P232).
-      if (String(key.kind ?? '') === 'task-model-map') {
-        routeCategories()
-        return
+      if (key.name === 'TEAM_MODEL_LIMITS' && !key.warning) {
+        const original = effectiveSetting(key)
+        const tokens = limitsTokens(original)
+        if (tokens) {
+          const next: LimitsDraft = { original, tokens, changed: false, rule: 0, target: { row: at, key: key.name, value: original, cls: key.class, fingerprint: dataRef.current.blocks?.settings?.fingerprint ?? '', kind: key.kind, choices: key.choices } }
+          limitsDraftRef.current = next
+          setLimitsDraft(next)
+          enterSettingsPage('limits')
+          return
+        }
       }
       // M65/D11: the editor opens on the `settings` block already on screen — no `config list` or
       // `__panel-data` stands between the keystroke and the frame that answers it. The fingerprint
       // is that block's, so a contract changed underneath is the owning command's conflict verdict
       // (CAS), not a reason to re-read before every action.
-      if (hasChoiceEditor(key)) {
+      if (key.name !== 'TEAM_MODEL_LIMITS' && hasChoiceEditor(key)) {
         const entries = buildChoiceEntries(key)
         if (entries.length) {
           const kind = String(key.kind ?? '')
@@ -1445,6 +1594,7 @@ export function App({
             row: at,
             key: key.name,
             kind,
+            target: { row: at, key: key.name, value: effectiveSetting(key), cls: key.class, fingerprint: dataRef.current.blocks?.settings?.fingerprint ?? '', kind, choices: key.choices },
             entries,
             index: 0,
             interval: NUMERIC_KINDS.has(kind) ? { min: String(key.choices?.min ?? ''), max: String(key.choices?.max ?? '') } : null,
@@ -1460,7 +1610,7 @@ export function App({
       settingRowRef.current = {
         row: at,
         key: key.name,
-        value: key.value,
+        value: effectiveSetting(key),
         cls: key.class,
         fingerprint: dataRef.current.blocks?.settings?.fingerprint ?? '',
         kind: String(key.kind ?? ''),
@@ -1469,13 +1619,9 @@ export function App({
       settingConfirmRef.current = null
       setSettingConfirm(null)
       openCompose('setting', key.set || key.value !== '' ? key.value : key.default)
-      if (key.choices && !hasChoiceEditor(key)) {
-        // The visible fallback (R3): the kind defines no choice set and the command still validates
-        // the write. The line rides the editor's own hint row, so it stays on screen while typing.
-        setStatus(fill(stringsRef.current.settingsChoiceNoChoice, { kind: String(key.kind ?? '') }))
-      }
+
     },
-    [buildCategoryEntries, buildChoiceEntries, openCompose, routeCategories, settingsRowsNow],
+    [buildCategoryEntries, buildChoiceEntries, openCompose, enterSettingsPage, saveLimits, closeSettingsView, settingsRowsNow],
   )
 
   /** The detail view's file tabs: `←`/`→` clamp at the ends (no wrap — the row shows the order). */
@@ -1766,7 +1912,7 @@ export function App({
     const bottom: string[] = []
     if (!composing) {
       const notice = receipt ? receiptLine(receipt, strings) : status
-      if (notice) bottom.push(notice)
+      if (notice) bottom.push(...notice.split('\n'))
     }
     const boxed = composing && settings.density === 'comfortable'
     const inputWidth = boxed ? Math.max(1, size.columns - 2) : size.columns
@@ -1783,7 +1929,8 @@ export function App({
           ? strings.composeStandbyTitle
           : mode === 'filter'
             ? strings.settingFilterTitle
-            : settingRowRef.current?.key ?? strings.settingsViewTitle
+            : ruleFieldRef.current ? ruleFieldRef.current === 'model' ? strings.settingsRuleModel : strings.settingsRuleCount
+              : settingRowRef.current ? settingLabel(strings, settingRowRef.current.key) : strings.settingsViewTitle
     const input = boxed
       ? [composeTrayTop(trayTitle, size.columns), ...rawInput.map((line) => `${TRAY_V} ${line}`)]
       : rawInput
@@ -1792,7 +1939,7 @@ export function App({
           // The setting/filter editor's own receipt (the confirmation line, the danger warning, the
           // command's refusal) rides the hint row *above* the input so the input line stays last
           // (the IME cursor anchor rule) while the editor stays open with its draft.
-          ...(status && (mode === 'setting' || mode === 'filter') ? [status] : []),
+          ...(status && (mode === 'setting' || mode === 'filter') ? status.split('\n') : []),
           // P249: a message send that could not settle cleanly (the error class, or a draft file the
           // console could not empty) keeps the compose open, so its receipt rides the same row — the
           // words and the reason are visible together.
@@ -1801,7 +1948,8 @@ export function App({
             ? strings.composeHint
             : mode === 'reason'
               ? strings.composeReasonHint
-              : strings.settingsKeyHint,
+              : ruleFieldRef.current ? strings.settingsFieldHint : settingConfirm ? strings.settingsConfirmHint
+                : isSecondsSetting(settingRowRef.current?.key ?? '') ? strings.settingsSecondsEditHint : strings.settingsEditHint,
         ]
       : []
     // The in-flight-send row is part of the pane too: counting it keeps the rendered output at the
@@ -1828,6 +1976,10 @@ export function App({
       detailIndex,
       detailScroll,
       settings: settingsView,
+      settingsEditing: composing,
+      settingsPage,
+      limitsDraft,
+      settingsDetails,
       settingsFocus,
       settingsFilter,
       settingsOffset,
@@ -1881,6 +2033,9 @@ export function App({
     detailIndex,
     detailScroll,
     settingsView,
+    settingsPage,
+    limitsDraft,
+    settingsDetails,
     settingsFocus,
     settingsFilter,
     settingsOffset,

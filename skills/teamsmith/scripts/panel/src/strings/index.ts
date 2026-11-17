@@ -51,11 +51,9 @@ export function fill(template: string, vars: Record<string, string | number>): s
 const KEY_LABEL_PREFIX = 'label_'
 
 /**
- * The human label of a contract key (M49), looked up in the table by the key the **command**
- * reported — the panel carries no key list of its own, so a key added to the schema still shows up
- * (its row, class and default come from the command); a key the table has no label for (a key the
- * schema does not know, e.g. hand-added to the file) falls back to its **raw name**, which is
- * deliberate: a nameless row would be worse, and the raw name is what the file and the CLI carry.
+ * The human label of a selected operation, looked up by the command's key.
+ * Unknown labels fall back to the source name; selecting the visible operations belongs to
+ * project-settings.ts, not to the complete command schema.
  *
  * Static lookup, no file read: the render path stays inside the CPU contract.
  */
