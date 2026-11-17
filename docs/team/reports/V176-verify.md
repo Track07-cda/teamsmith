@@ -1,13 +1,15 @@
 # V176 · 提醒事件记录等待的独立验证
 
-agent: verify   status: CANDIDATE-PASS — merged identity check pending   time: 2026-11-17T04:24:50Z
+agent: verify   status: PASS — candidate behavior and merged identity verified   time: 2026-11-17T04:34:13Z
 branch: `task/V176-reminder-recorder-wait-verify`   PR/MR: -
 
 ## 结论
 
-**候选 PASS。** 同一个已有 `adversarial-event-after` 场景只执行三次：原候选正常 `1/0、rc=0`，受控旧检查 `0/1、rc=1`，恢复候选等待 `1/0、rc=0`。旧检查失败时，真实 Pi `message_start` 已经过未改的产品 watcher，状态已为 `observed`，但下游测试记录尚未追加；恢复后等待实际记录出现，原 G2 保护断言和最终 receipt 均通过。正式 `team review P473` 为 PASS，实际执行者 verify，绑定 `7bf07b46f`，排队 1 秒、批次执行 13 秒；后台作业总计 19.1 秒、exit=0。
+**最终 PASS。** 候选阶段同一个已有 `adversarial-event-after` 场景只执行三次：原候选正常 `1/0、rc=0`，受控旧检查 `0/1、rc=1`，恢复候选等待 `1/0、rc=0`。旧检查失败时，真实 Pi `message_start` 已经过未改的产品 watcher，状态已为 `observed`，但下游测试记录尚未追加；恢复后等待实际记录出现，原 G2 保护断言和最终 receipt 均通过。候选正式 `team review P473` 为 PASS，实际执行者 verify，绑定 `7bf07b46f`，排队 1 秒、批次执行 13 秒；后台作业总计 19.1 秒、exit=0。
 
-这证明旧即时检查**可以在这个顺序下错误失败**，不证明现场已失的 V174 当次必由此引起；历史 V174 FAIL 不改。当前只交候选证据，未合并、推送或发布；合并后的同一性/语法检查尚待 PM 提供固定 merged SHA，不再跑 Pi。
+PM 已合入 `cea2b7f20eef5c006add5cd1f18ad70ff9692624`，本人在新的独立固定源完成一次正式同一性/语法短核对，结果 PASS；产品、驱动和 fixture 所在的授权比较路径与候选无差异，沿用上述行为证据，**merged 没有再次运行 Pi**。本席位没有执行合并、推送或发布。
+
+这证明旧即时检查**可以在这个顺序下错误失败**，不证明现场已失的 V174 当次必由此引起；历史 V174 FAIL 不改。
 
 ## Deliverables
 
@@ -125,7 +127,7 @@ None — 三臂真实输出及状态均满足本次限定验收；不把此项�
 
 ## WARNING
 
-None — 本次范围内没有未解决问题。历史现场缺失与 merged 尚未执行分别限制历史归因和最终整合结论，已明确列出，不作为本次候选新增缺陷。
+None — 本次范围内没有未解决问题。历史现场缺失限制 V174 归因；merged 同一性/语法现已实际通过，具体记录见末节。
 
 ## SUGGESTION
 
@@ -133,9 +135,9 @@ None — 不新增永久控制、测试、开关或其它场景。
 
 ## Final assessment
 
-- Counts: CRITICAL 0 · WARNING 0 · SUGGESTION 0，仅指本次候选单场景。
-- Readiness: 候选 PASS，可交 PM 审阅证据；非合并、发布授权。正常/恢复均实际完成原 G2 保护断言和 receipt；旧红的原后续断言没有执行。
-- Unverified applicable checks and reasons: merged 同一性/语法待 PM 合并并准备固定源；其余提醒 cases、§69 其它内容、smoke/FAST/meta/61b、完整计时、构建、真实 PM 外部模型和其它项目预览均按 brief 排除，没有称其通过。没有重建 V174 已失历史现场。
+- Counts: CRITICAL 0 · WARNING 0 · SUGGESTION 0，仅指本次单场景和合并后短核对。
+- Readiness: PASS，候选行为与 merged 同一性/语法均交付，可供 PM 接受结案；非发布授权。正常/恢复均实际完成原 G2 保护断言和 receipt；旧红的原后续断言没有执行。
+- Unverified applicable checks and reasons: 本 brief 本次适用检查均已完成。其余提醒 cases、§69 其它内容、smoke/FAST/meta/61b、完整计时、构建、真实 PM 外部模型和其它项目预览均按 brief 排除，没有称其通过。merged 按授权只做同一性/语法，没有再跑 Pi；没有重建 V174 已失历史现场。
 
 ## Flip evidence
 
@@ -147,4 +149,27 @@ None — 不新增永久控制、测试、开关或其它场景。
 
 ## Suggested next steps
 
-PM 审阅本报告和原件后按授权办理整合；随后由同一 verifier 在新的固定 merged SHA 核提醒相关产品/driver/fixture 同一性。相同只做语法/差异短检查，引用本次行为，不再启动 Pi；不同先交 PM 按差异裁定范围。证据根 KEEP，待 PM 收存前不删。
+PM 接受本次 merged 短核对后办理结案。本席位不再运行检查或清理；23 MB 原件及两份固定源全部保留，等 PM 收存并另行明确授权。
+
+## 合并后短核对 · 2026-11-17
+
+- 实际固定 SHA：`cea2b7f20eef5c006add5cd1f18ad70ff9692624`；PM 准备的独立源为 `/var/tmp/p473-merged-cea2b7f2.IuHXl2`。
+- 正式 `team review P473` 本次实际执行者仍为 verify，记录时间 `2026-11-17T04:33:37Z`，绑定 `cea2b7f20`，判定 PASS。工具记录 checkout clean、ignored artifacts=0，排队 1 秒、命令运行 0 秒（按工具整秒计），保留原锁及 1800 秒 timeout。
+- 实际只执行以下一次正式短核对，经 `team_bg_run` job `v176-merged-short` 启动并结束回合；唤醒后 `team_bg_wait` 收取 exit=0、总计 10.9 秒，没有行为预跑或追加 Pi。
+
+```sh
+TMPDIR=/var/tmp \
+TEAM_GATES='git diff --exit-code 7bf07b46f855fa8d0d6765c4b19f68c1df41f374 HEAD -- skills/teamsmith extension ci package.json && node --check skills/teamsmith/tests/remind-tool-real.mjs' \
+  bash skills/teamsmith/scripts/team review P473 \
+  --dir /var/tmp/p473-merged-cea2b7f2.IuHXl2 \
+  --branch cea2b7f20eef5c006add5cd1f18ad70ff9692624
+```
+
+```text
+review checkout: /var/tmp/p473-merged-cea2b7f2.IuHXl2 @ cea2b7f20（干净）
+门禁输出：docs/team/reviews/P473-verify.log（PASS，0s）
+复验记录：docs/team/reviews/P473.md（PASS）
+job v176-merged-short finished exit=0 after 10.9s
+```
+
+组合命令无输出、rc=0，故授权路径 `skills/teamsmith extension ci package.json` 的 `git diff --exit-code` 和其后 `node --check` 均返回 0；`P473-verify.log` 为空是这两个安静命令的真实输出，不是未执行。候选行为证据及原始 SHA 保持前文原件，候选正式 record/log 已由 PM 在本次授权前保存在主根私有 `.pi/team/state/evidence/P473/candidate/`（保存位置来自 PM 任务书，本轮未重复扫描该包）。本轮只生成 merged 正式记录和追加本人报告，不重跑 ledger 或已有检查。本人报告暂存前 `git diff --check -- docs/team/reports/V176-verify.md` 无输出、rc=0；暂存后 `git diff --cached --check -- docs/team/reports/V176-verify.md` 无输出、rc=0。
