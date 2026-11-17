@@ -554,7 +554,7 @@ try {
         assert.equal(team(info, ['standby', 'on', '--reason', 'G2'], 'event-after-g2').status, 0)
         releaseBusy()
         await until(() => lastBatch(info)?.phase === 'observed', 'busy follow-up observed after G2')
-        assert(events(info).some(e => e.type === 'custom_start' && e.customType === 'team-reminder'))
+        await until(() => events(info).some(e => e.type === 'custom_start' && e.customType === 'team-reminder'), 'busy follow-up event recorded after G2')
         assert.equal(lastBatch(info).outcome.standby, 'generation-ambiguous')
         assert.equal(snapshot(info.state).standby.on, true); assert.equal(snapshot(info.state).standby.generation, 2)
         writeFileSync(join(info.dir, 'receipt.json'), JSON.stringify({ final: snapshot(info.state),
