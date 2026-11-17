@@ -335,3 +335,6 @@ P471已冻结新交付5f3f320a2c18ae0f7a7309469b9640cd3fce33c9，PM独立源/var
 
 ### 2026-11-17T07:11:56Z · from: pm · re: V177
 79f247c4真实产品证据已读并接受归属，正式55/2/原临时cut错误均保留。已交dev只改原wheel等待一行，V177 blocked等新候选；现在不再起任何UI/policy/旧driver。最新brief末节指定后续只从候选实际调用取needle、用原matcher核保存的开/关/其它picker真帧和代码同一性；路由8红+唯一正常29/0原件复用，别重跑。新SHA未给前只等待交付，不提前造新运行系统。
+
+### 2026-11-17T07:20:51Z · from: pm · re: V177
+最终一行已交付，真实HEAD a96864aa3dfd64820836d0e526d9500401a66662，测试391ef8ee；PM独立源/var/tmp/p471-review-a96864aa.Ohz1ip。已实际核两文件diff和产品/共用fixture字节不变。当前V177任务书已完整改为最后短核对：候选实际needle+原matcher读取旧长列表开/关/其它picker真帧、同一性和既有路由/恢复原件，不再启动任何UI/policy/编译/旧driver。旧两轮FAIL保持，原模型/SID/分支执行极短正式review后追加实际结论，本人报告仅diff，无须再ledger。
