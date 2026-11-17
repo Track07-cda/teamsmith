@@ -1,6 +1,6 @@
 # pulse-project-settings-simplify · PM proposal review
 
-verdict: **PENDING-INDEPENDENT-REVIEW** · reviewer: pm · 2026-11-17
+verdict: **NEEDS-CHANGES** · reviewer: pm · 2026-11-17
 
 P470冻结交付`26f5e08eb44e3648c4bd35546983bdb959ef8222`，工作树干净，pre-merge检查无未提交账本。PM已读六份原生规划文件、本人报告及对应设置布局/模型并发代码；尚未接受方案或授权Apply，不把作者strict通过当独立审阅。
 
@@ -13,7 +13,14 @@ V175交非作者dev3审阅，固定独立源`/var/tmp/p470-review-26f5e08e.eA48z
 ## 已有证据与当前边界
 
 - 作者原生status4/4规划齐、6文件与9未勾实施/验收项、strict/spec-refs/ledger/diff回执：`docs/team/reports/P470-dev2.md`（候选分支，尚未并入main）。首轮strict失败及之后显式退休的修订原样保留，PM未代跑检查。
-- 独立证据：待V175报告，不先记通过；未来UI行为/键鼠/窄屏/英文/真实保存均未发生。
+- 独立证据：V175报告1b0e8c80已由PM逐项读源码接受并原文收存至main 10a76598，结果REWORK；真实change strict=0、ledger hits=0、两diff=0。结构通过不代表方案无冲突，未来UI行为/键鼠/窄屏/英文/真实保存均未发生。
 - 只规划，未改产品/tests/正式spec/用户配置/版本/真实状态。V174固定532c8b47的一次后台计时与本案独立，不等待或重跑。
 
-下一步由PM接受V175真实审阅证据；有返修先回原作者、只复看差异，无问题才将本记录明确改为ACCEPTED并另派Apply。
+## Required changes · 首轮V175
+
+1. C1：verification正式覆盖保留条款与退休设置全表断言冲突。授权P470只在该change加verification delta，给`A gate that cannot judge says so`及相应场景加本次展示替换的窄例外，保留其它覆盖/旧例外，不改正式spec或新增检查。
+2. W1：既有snapshot只涉及偏好菜单而非项目设置，作者不跑其整轮；布局落在同一次非作者p21 settings/wheel，红侧用原scn_flip实际入口，并复用它的正常policy收尾，不额外重复policy。
+3. W2：标签用“模型同时运行任务数 / Concurrent tasks by model”，0用“此项不限制”；原模型范围内worker合计不冒称整个项目总数或解除其它规则。
+4. S1采纳：移除空白分隔字节必须不变的额外承诺。保留token/顺序/重复，实际改变并保存才拼接完整值；取消/非法/冲突仍不改原配置，不造无损解析框架。
+
+P470/任务头/delta授权已更新为三cap，默认计数及两个入口不重开。返修交原作者同任务/模型/SID/分支；V175等待新冻结源，仅复看四项差异及一次必要strict，不跑UI、业务、归档或完整套件。本记录仍未ACCEPTED，不派Apply。

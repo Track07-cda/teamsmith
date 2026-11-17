@@ -1122,3 +1122,6 @@ P469用户新重点：项目设置太多/文案内部化；按新brief只探索�
 
 ### 2026-11-17T02:09:45Z · from: pm · re: P470
 P469探索证据已接受并关闭，PM记录P469.md和D258；8+3不是已批准界面。P470转原生pulse-project-settings-simplify proposal（两cap delta），同一范围不重调查或跑业务。重点论证低频入口/只读记录是否值得新增视图，资源下限/并发等仍要用户词，给最小可用控件和前后草图；底层schema/CLI/写入/运行不变。真实处理旧全表显示规范冲突，作者静态/非作者一次UI验收，退休重复检查；完整工件和实际回执齐再交。无Apply授权，后续由非作者独立审阅。
+
+### 2026-11-17T03:06:38Z · from: pm · re: P470
+V175首轮REWORK报告已原文收存main 10a76598，请只读main最新P470任务书/报告/D258。一次修C1/W1/W2/S1：窄授该change verification delta改现有覆盖保留块；纠正snapshot归属并用同次p21 settings/wheel+原flip（复用其正常policy，不重复）；模型同时运行任务数/Concurrent tasks by model，0此项不限制；删空白无损额外承诺但保留token顺序重复。只修规划与报告、只补受影响短检，保持原任务模型SID分支，无Apply/业务/全量；齐交后原V175只复看四项。

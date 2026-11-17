@@ -5,8 +5,8 @@ agent: dev2
 category: analysis
 phase: opsx-propose
 change: pulse-project-settings-simplify
-specs: panel, memory-and-deps
-deltas: panel, memory-and-deps
+specs: panel, memory-and-deps, verification
+deltas: panel, memory-and-deps, verification
 branch: task/P470-project-settings-simplify-proposal
 ---
 
@@ -16,7 +16,7 @@ branch: task/P470-project-settings-simplify-proposal
 
 ## 本阶段
 
-1. 读自己线程、openspec-propose skill和本change相关正式spec，使用现有OpenSpec1.16及本仓root创建`pulse-project-settings-simplify`。按原生instructions生成完整proposal/design/tasks和`panel`、`memory-and-deps`两份delta；不安装/升级/初始化其它root，不复制一套规格到报告/任务书。记录原生root/status及真实结构检查，不把规划当实现或回归通过。
+1. 读自己线程、openspec-propose skill和本change相关正式spec，使用现有OpenSpec1.16及本仓root创建`pulse-project-settings-simplify`。按原生instructions生成完整proposal/design/tasks及`panel`、`memory-and-deps`、`verification`三份delta（第三份严格限下文C1授权）；不安装/升级/初始化其它root，不复制一套规格到报告/任务书。记录原生root/status及真实结构检查，不把规划当实现或回归通过。
 2. 首选方向为常用模型操作前置、精选默认设置、按用户目的分组、中文英文均短且可操作；不要仅改词或把123项全表原样放到“高级”。P469的C+5编辑项/三个入口是候选，不是已批准数字或项目数上限。逐项确认默认用途，证明每个低频入口的必要性；若已有合适入口则复用，不为保留旧内容增加子页面。最终只推荐一个首选方案，说明删/合/移去向、能力影响与真实前后数量；类别随项目数据，不硬编码示例的3类/8项。
 3. `资源下限`、`模型并发限制`等词仍需用用户理解的名称审视；并发规则若仍需用户记内部配置语法，应给最小可用的控件/标签安排，不借此建立第二套配置或改变pattern语义。只读派单/PM记录要如实表示记录事实，不冒称当前进程正在使用；它是否应继续出现在设置内也要有用户用途依据。没有现成后台能力的操作不要画成按钮。
 4. design给同输入的旧页/候选页草图，包含默认、低频入口/返回、选中、编辑/选择、取消/保存、生效提示、只读及失败。常态不重复原始key/默认标记/逐行徽章/CLI教学；真实错误/迁移问题不能因对应键退出而消失。保存不冒充已切换或已重启；没有删除键的writer就不伪造“恢复默认”能力。草图明确未实现，方便用户和审阅者直接比较。
@@ -37,4 +37,15 @@ git diff --check
 git diff --cached --check
 ```
 
-唯一写集：该change原生规划工件（metadata、proposal/design/tasks、panel及memory-and-deps两份delta）及`docs/team/reports/P470-dev2.md`。报告先答推荐界面是什么/真实前后数量/保留能力，再给实际检查回执；完整性按原生artifact图核对。工件与回执都提交齐再通知，不能仅有proposal或Suggested next steps就提前交付。无业务/pty/smoke/meta/61b/安装/构建/真实模型运行；不push/merge/archive/tag/npm，不改0.4.7或真实团队状态，不代PM接受或改看板。完整提案交非作者独立审阅前无Apply授权。
+唯一写集：该change原生规划工件（metadata、proposal/design/tasks、panel及memory-and-deps及verification三份delta）及`docs/team/reports/P470-dev2.md`。报告先答推荐界面是什么/真实前后数量/保留能力，再给实际检查回执；完整性按原生artifact图核对。工件与回执都提交齐再通知，不能仅有proposal或Suggested next steps就提前交付。无业务/pty/smoke/meta/61b/安装/构建/真实模型运行；不push/merge/archive/tag/npm，不改0.4.7或真实团队状态，不代PM接受或改看板。完整提案交非作者独立审阅前无Apply授权。
+
+## V175首轮后的定点返修授权（2026-11-17）
+
+正式报告`docs/team/reports/V175-dev3.md`已收进main（10a76598）；从main只读取得最新报告和本任务书，不使用自己旧分支的两cap授权。PM接受REWORK证据，D258补充裁定如下；保持本任务、模型/SID/分支，不重新探索或实现。
+
+- **C1**：只新增本change的`specs/verification/spec.md`，MODIFIED现有`A gate that cannot judge says so`及其相应覆盖场景，补本次panel明确退休/替换展示断言的窄例外。原完整块/场景身份及此前例外保留；不允许删其它覆盖要求、不普遍豁免UI、不恢复全表、不凑旧通过数、不新增检查或试跑FAST/全量。proposal/design/tasks同步第三cap落点；正式spec不写入。
+- **W1**：删除把`panel-snapshots.sh`称为已有项目设置短/长样例的文字及作者整轮snapshot执行；它实际检查偏好菜单等其它页面。项目设置短/长/计数/填高都交同一次非作者`panel-p21.sh settings/wheel`，作者只做真实存在的typecheck/字符串/build等静态步骤。红侧指向原有`scn_flip`，只调整其必要产品触点并纳入一次相关验收；它已有正常policy收尾，批次不要再另跑一次正常policy。不把schema输入见证冒称产品变异，不增脚本、矩阵或等待预算。
+- **W2**：主标签统一“模型同时运行任务数 / Concurrent tasks by model”，字段表明适用模型和同时运行数量；0用“此项不限制”，条目数用“2项”而不是“2条规则”。不在默认页追加解释；将通配范围内合计worker、PM不计入及其它规则仍可能限制的事实写给实现者，不计算最终上限/建立新匹配表。
+- **S1采纳**：删掉未动分隔空白必须字节保留的额外承诺。草稿只保留token内容、先后与重复；实际修改并保存后用空格连接完整值交原writer。取消、非法、冲突仍不改原配置字节，未改其它键/注释/writer；坏原值保留并走既有整值输入，不增无损解析器/错误分类系统。
+
+本次只修这四项及直接自洽处，不改已认可的C+7/C+8/110、两个入口和后台能力。保留首轮26f5e08e及回执来源；更新当前规划完整性/文件数和报告结论，不把初稿数冒充新回执。由于delta发生实际修改，本分支只补一次change strict和spec-refs；最终报告短检查按原约定。完整提交后由原V175作者仅复看四项差异，不重新审全案或运行UI/业务/套件。仍未获Apply授权。

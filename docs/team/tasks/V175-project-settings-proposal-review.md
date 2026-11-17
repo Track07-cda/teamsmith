@@ -5,7 +5,7 @@ agent: dev3
 category: verify
 phase: opsx-verify
 change: pulse-project-settings-simplify
-specs: panel, memory-and-deps
+specs: panel, memory-and-deps, verification
 deltas: -
 branch: task/V175-project-settings-proposal-review
 ---
