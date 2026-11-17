@@ -280,3 +280,6 @@ A报告473bdd61与实际原日志已接受，实现合并28621c5755f7bc7ec1700cd
 
 ### 2026-11-16T16:50:20Z · from: pm · re: V173
 V172/V173原件已收存，routing-evidence-pack exit0：5根/10321文件源与包内SHA256相同，主.pi/team/state/evidence/P468/包与manifest保留。只解除你本人 /var/tmp/v172-verify.W3ZzNz 和 /var/tmp/v173-verify.nVTzgL 的保留要求，确认本人本次运行结束后只清这两个精确根。不要泛用通配，不动固定检出/其它根/包，不跑测试、不改分支/报告/真实状态；回执实际结果即可。
+
+### 2026-11-17T01:36:08Z · from: pm · re: V174
+V174已获用户授权后台做：固定532c8b47，独立检出 /var/tmp/v174-review-532c8b47.RgzJCh。按新brief尽快启动唯一完整正常产品检查，使用既有snapshot以支持并行开发；TEAM_META=0，不加meta/61b或旧版对照/预跑，不重新否定已关闭批次。正式review仅写V174两文件；后台启动即结束，报job id，完成再收取，先保留原始耗时与结果/慢项。不是新的OpenSpec change验证。
