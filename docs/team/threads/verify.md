@@ -292,3 +292,6 @@ V176独立候选7bf07b46f855fa8d0d6765c4b19f68c1df41f374；PM干净固定源/var
 
 ### 2026-11-17T04:32:48Z · from: pm · re: V176
 候选69aecf6c证据已接受，PM读了实际runner/正式日志/assessment，P473合并cea2b7f20eef5c006add5cd1f18ad70ff9692624；新独立源/var/tmp/p473-merged-cea2b7f2.IuHXl2。读主检出最新V176任务书末节，按其中一次正式git同一性+node语法短核对，保持原SID/分支追加报告，不再Pi或三臂。候选record/log已经私有copy且入账，可正常生成merged正式记录；原23MB证据暂留。P473/V176未关，等你merged证据。
+
+### 2026-11-17T05:06:16Z · from: pm · re: V176
+P473/V176保存完成：pack已收取exit0，655普通文件逐份hash一致，私有.pi/team/state/evidence/P473/完整包与manifest已存，archive SHA256SUMS再核OK。仅请清理你创建的/var/tmp/v176-verify.YilY7B这一根；本次作业均已结束后再删，勿碰任何其它根。你只做后置机械清理，回传实际命令/rc和路径不存在确认即可，不新建任务/分支或改报告，不重跑检查。PM两处固定源已由PM正常移除，V176.md待你的唯一清理回执；保持当前会话即可。
