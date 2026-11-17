@@ -1128,3 +1128,6 @@ V175首轮REWORK报告已原文收存main 10a76598，请只读main最新P470任�
 
 ### 2026-11-17T03:08:13Z · from: pm · re: P470
 原P470续跑被JSONL全历史÷4估算318k阻止；只读最近三条模型usage，最新实际输入input+cacheRead+cacheWrite=189684，仍低于272000，stopReason=stop而非Context full。PM仅显式放行这次估算，保留原模型/SID续四项返修，不fresh/重做实现或测试。
+
+### 2026-11-17T03:30:55Z · from: pm · re: P470
+V175第二轮已关闭W1/W2/S1，只余C1-R1。main f5cdf248含最新报告，P470末节已给最后句级授权：只在verification显式退休清单补 mandatory schema-kind/no-choice explanatory text for retained editors 及本人报告，其余规划不动。不要再跑strict/refs/ledger/业务，只必要diff；原模型SID分支继续，新提交交PM，原V175仅核此句/其它字节未变，不重开方案。

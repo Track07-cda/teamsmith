@@ -49,3 +49,7 @@ P470规划修订`93b3bc2b`、完整交付`96750d494ff412e138b82156395ec3ab2fc1eb
 只读`git diff 26f5e08e..96750d49`和必要相邻原文，复看C1/W1/W2/S1及其直接自洽。C1有PM窄授权新增verification delta，仅既有覆盖保留块/对应场景，本轮要求及原23场景身份、旧例外保留；核显式退休清单未变成通用豁免或增加FAST/全量义务。W1改到同一次p21 settings/wheel，原flip纳入调用并用其正常policy收尾、不再单跑policy；作者不跑其它页面snapshot。W2模型范围和0此项不限制已成中英文命名，源表达式共享worker计数/PM排除事实不变。S1仅保留token/顺序/重复，实际改动保存才空格连接完整值，失败/取消/冲突原字节仍不动。
 
 不重审已认可的C+7/C+8/110、两入口、既有writer/模型身份或UI整体草图，不运行产品样本/构建/pty/计时/全套。delta实际变化，允许只在新固定源再跑一次本change strict并留真实rc；版本/root/首轮ledger及原有引用检查不再重复，自己的报告仅必要diff-check。若通过只表示本次规划可供PM接受，不是实现或归档已通过；若仍有问题点名具体差异及最小句级修复，不另开方案。
+
+### C1-R1最后一句（同日）
+
+第二轮64037777报告已原文收存main f5cdf248；PM核p21现有等待/断言，接受唯一遗漏。作者只在verification展示退休清单补 `mandatory schema-kind/no-choice explanatory text for retained editors` 及本人报告，其余规划不动。待PM给新提交ID，仅用固定Git对象的diff/show核这句话及其余字节相同，无需第三份整树检出或复跑结构/引用/ledger/任何测试；96750d49的strict证据保留原SHA，不伪称新提交执行。只追加本人最终结论和必要diff-check，W1/W2/S1及C1其余原23场景结论不重开，不改作者工件。当前仍不接受Apply或实现/归档声明。
