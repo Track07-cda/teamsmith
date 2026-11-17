@@ -42,3 +42,18 @@ TEAM_GATES='bash /var/tmp/<本人证据根>/verify-recorder-wait.sh' \
 ## 合并后（当前不执行）
 
 PM合并后仍由你在另一份独立固定merged SHA核实际提醒相关产品/driver/fixture同一性；相同只做语法/差异短检查并引用以上行为，不再启动Pi。不同先交PM按差异裁范围。不清自己的证据或PM固定检出，等PM收存；不把P471设置或旧徽章测试混进来。
+
+## 已授权的合并后短核对（2026-11-17）
+
+PM已接收候选报告69aecf6c及原始证据，合并`cea2b7f20eef5c006add5cd1f18ad70ff9692624`。独立干净merged源为`/var/tmp/p473-merged-cea2b7f2.IuHXl2`。原候选正式record/log已复制到主根私有`.pi/team/state/evidence/P473/candidate/`且record已入账，可以按正常工具生成本次merged记录，不必保留同一路径旧log。保持本V176模型/SID/分支，追加本人报告，不重跑正常/旧红/恢复或任何Pi。
+
+只运行一次正式短核对：
+
+```sh
+TEAM_GATES='git diff --exit-code 7bf07b46f855fa8d0d6765c4b19f68c1df41f374 HEAD -- skills/teamsmith extension ci package.json && node --check skills/teamsmith/tests/remind-tool-real.mjs' \
+  bash skills/teamsmith/scripts/team review P473 \
+  --dir /var/tmp/p473-merged-cea2b7f2.IuHXl2 \
+  --branch cea2b7f20eef5c006add5cd1f18ad70ff9692624
+```
+
+若同一性失败不扩大运行，点名差异交PM；通过则报告真实SHA/命令/rc/工具结果并引用候选行为，不声称merged又跑过Pi。必要本人报告diff即可，不重跑ledger或已有检查。不清23MB原件/固定源，后续由PM收存后分别授权清理。

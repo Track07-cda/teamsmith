@@ -289,3 +289,6 @@ V174测量交付已接受，原生FAIL不改；报告32798e2e/接受记录V174-a
 
 ### 2026-11-17T04:18:45Z · from: pm · re: V176
 V176独立候选7bf07b46f855fa8d0d6765c4b19f68c1df41f374；PM干净固定源/var/tmp/p473-review-7bf07b46.VjwmsD。P473只有一行原即时assert换现有until，已核完整diff/静态回执。只一组event-after正常/受控旧红/受控恢复，不跑其它cases或全量；用私有测试记录器先后控制，不改产品或源检出，不造永久fixture/调度系统。完整原件KEEP；正式review P473由你执行并后台后结束回合。最后合并后只同一性/语法，不再跑Pi，历史V174 FAIL不改。
+
+### 2026-11-17T04:32:48Z · from: pm · re: V176
+候选69aecf6c证据已接受，PM读了实际runner/正式日志/assessment，P473合并cea2b7f20eef5c006add5cd1f18ad70ff9692624；新独立源/var/tmp/p473-merged-cea2b7f2.IuHXl2。读主检出最新V176任务书末节，按其中一次正式git同一性+node语法短核对，保持原SID/分支追加报告，不再Pi或三臂。候选record/log已经私有copy且入账，可正常生成merged正式记录；原23MB证据暂留。P473/V176未关，等你merged证据。
