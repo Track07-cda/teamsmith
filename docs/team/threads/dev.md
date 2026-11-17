@@ -457,3 +457,6 @@ P472只读归因已接受：旧label=0/badge=0是同一SGR区间，不是缺字�
 
 ### 2026-11-17T04:13:33Z · from: pm · re: P471
 P471进度已核对，首个界面提交ee8d9e91在分支。PM核旧types257/旧queue布局2388及cmd-watch1406：outbox_list只给entries/queued/held，故不要直接补optional类型或as/ignore把4处错误藏掉，也不要改其它页面。继续原范围；保留完整原typecheck错误/版本/SHA，最终明确非0及1.6尚未全满足，其余实现静态先交候选。源相同不是已实跑基线编译；后续由非作者核归属再裁最小处理，本条不要求额外执行。任务书末节已落盘。
+
+### 2026-11-17T04:27:31Z · from: pm · re: P471
+收到实际基线回执，PM已读两个typecheck.log（相同4 TS2339/rc2，行号平移）；基线19份源码/config逐字节=66ab596d，node_modules同树；bun.lock未复制但不是tsc输入，锁/包/tsconfig未改。仍不授权补optional/as或改队列。现在收尾并冻结候选即可：bundle/其它实际rc0及report小步提交，准确STATIC-PARTIAL和1.6未解决，既有4错照留。不必等新增授权/修其它页才交候选，后续新UI独立验收可以先进行；PM据非作者结论再裁静态边界，不重新跑已完成静态/业务。末节已落盘。

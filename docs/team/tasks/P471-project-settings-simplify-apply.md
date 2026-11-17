@@ -52,3 +52,5 @@ git diff --cached --check
 ## 已见的原有typecheck问题（只记录，不扩大当前范围）
 
 首次静态检查报告OutboxListBlock的4处impediments/impeded错误。PM只读核对：既有types只声明entries/queued/held，queue布局却读另外两字段，而`team_panel_outbox_list_json`也没有输出它们；不能直接补两个可选类型或强转来掩盖问题。当前不授权改队列页面/读接口；继续本brief其余实现与静态，保留完整原错误及版本/源SHA，最终明确typecheck仍非0、1.6未全满足，不报全静态通过、不重跑业务。代码与声明相同只是源码归属证据，不等于已实际运行基线编译。待候选交付后，非作者确认归属并由PM裁定最小修复，不另起无关页面实现。
+
+实跑对照已到：`/var/tmp/P471-dev-static.FEHqfA/{typecheck,baseline-typecheck}.log`均4个同字段TS2339、rc2，行号随设置布局改动平移；PM已逐份读取。基线19份实际编译源码/配置与66ab596d逐字节相同，共享同一依赖树；没有复制的bun.lock不属于tsc输入，任务也未修改锁或包配置。这支持原有问题的归属，不等于全类型检查通过。不授权补optional类型或改队列；无需等进一步授权才交候选：收齐其它真实回执，提交bundle/报告并冻结，明确STATIC-PARTIAL及1.6待解决，随后可做设置的非作者独立验收。其余构建/字符串/本change严格结构/引用rc0，不追加已完成运行；最终是否接受该静态边界由PM据非作者结论裁定。
