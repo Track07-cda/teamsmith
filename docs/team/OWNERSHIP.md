@@ -5,7 +5,8 @@
 
 | 路径 | Owner | 说明 |
 |---|---|---|
-| `skills/teamsmith/tests/**` | agent:dev | 本轮P471仅现有panel-p21.sh/panel-strings.mjs的设置相关断言替换；其它范围未授，P472只读不写 |
+| `skills/teamsmith/tests/remind-tool-real.mjs` | agent:dev2（P473临时） | 只替换event-after即时事件检查为原until等待；其它场景/产品/永久fixture不改，静态交付后冻结 |
+| `skills/teamsmith/tests/**` | agent:dev | 本轮P471仅现有panel-p21.sh/panel-strings.mjs的设置相关断言替换；P473上述单文件除外，其它范围未授 |
 | `.github/workflows/gates.yml` | agent:dev（P326 临时） | 仅任务书明授的CI入口，不提高60分钟上限；冻结交付后归还PM |
 | `ci/collect-scene.sh` | PM | P324已合入，临时写权收回；当前无实现任务改此文件 |
 | `docs/team/reports/**`、`docs/team/threads/**` | agent:* | 报告与线程（只写自己的报告文件） |

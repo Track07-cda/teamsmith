@@ -1131,3 +1131,6 @@ V175首轮REWORK报告已原文收存main 10a76598，请只读main最新P470任�
 
 ### 2026-11-17T03:30:55Z · from: pm · re: P470
 V175第二轮已关闭W1/W2/S1，只余C1-R1。main f5cdf248含最新报告，P470末节已给最后句级授权：只在verification显式退休清单补 mandatory schema-kind/no-choice explanatory text for retained editors 及本人报告，其余规划不动。不要再跑strict/refs/ledger/业务，只必要diff；原模型SID分支继续，新提交交PM，原V175仅核此句/其它字节未变，不重开方案。
+
+### 2026-11-17T04:06:54Z · from: pm · re: P473
+P473为已接受P472指出的一处检查同步缺口：event-after读observed后立刻读下游events，源代码不保证已落盘。只将原即时assert改为原until等待相同条件，余下G2/receipt和90秒不动，净增检查/fixture为零；你只静态提交一文件和报告，非作者另统一单场景反例/恢复。历史V174原因仍缺现场，不能写已证明误报；不碰P471设置或提醒产品/真实状态。
