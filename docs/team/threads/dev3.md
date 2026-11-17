@@ -320,3 +320,6 @@ V175第二轮报告已接受并原文收存main f5cdf248。C1-R1交原作者只�
 
 ### 2026-11-17T04:43:08Z · from: pm · re: V177
 V177为P471实际操作验收，作者dev/交付0b33fe1f，独立固定源/var/tmp/p471-review-0b33fe1f.MdTZSf。保持设置工件既定范围，一次原十场景含flip正常policy收尾，不再加policy/CLI全量或作者静态重跑。逐页看真实帧，不只计数；原4个类型错误/1.6未勾独立评估、照实保留，不补类型或修其它页。详见新brief；只report和正式review中央例外写入。
+
+### 2026-11-17T04:57:02Z · from: pm · re: V177
+窄返修9c1adb1c已读实际diff，只有原keep=1 export同行追加TEAM_P21_KEEP=1及作者报告；源/bundle/规划/其它测试全未变。新独立源/var/tmp/p471-review-9c1adb1c.3bl6PT @9c1adb1c0f52ef8fa1aad3593ced2cdc2d874ef8。读主检出最新V177任务书：KEEP已放TEAM_GATES内，原SID/模型/分支只核一行后直接起未跑过的原十场景；不另试policy，不重查context/类型归属/版本/静态；报告追加保留首次BLOCKED。原四错和1.6边界不变。

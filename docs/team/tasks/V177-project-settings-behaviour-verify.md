@@ -12,7 +12,7 @@ branch: task/V177-project-settings-behaviour-verify
 
 # V177 · 一次受影响UI批次，逐页看真实画面
 
-P471实现者dev，最终交付`0b33fe1ff28c83d5cb47973564400ee8e3579eee`；产品/测试冻结`081bcdd50a6961936f2493fc14261435ccb94254`，之后只加报告。PM已准备独立干净源`/var/tmp/p471-review-0b33fe1f.MdTZSf`，只读。你做过V175规划审阅，未参与本change实现，具备非作者资格。规划接受记录`reviews/pulse-project-settings-simplify-proposal.md`已ACCEPTED；本单是实际操作和实现对照，不重开规划审阅。
+P471实现者dev，最新交付`9c1adb1c0f52ef8fa1aad3593ced2cdc2d874ef8`；测试修订`22f9ad47bd23b26dc75981299598812db6c9fbb1`，产品源/bundle保持首次`081bcdd50a6961936f2493fc14261435ccb94254`不变。相对首轮`0b33fe1f`只有原KEEP导出一行及报告追加。PM新独立干净源`/var/tmp/p471-review-9c1adb1c.3bl6PT`，只读；旧独立源及你的首轮BLOCKED报告保留。你做过V175规划审阅，未参与实现，具备非作者资格。规划接受记录`reviews/pulse-project-settings-simplify-proposal.md`已ACCEPTED；本单是实际操作和实现对照，不重开规划审阅。
 
 先读AGENTS、本人线程、OWNERSHIP及本brief；读openspec-verify-change skill，在固定源用现有OpenSpec1.16的status/instructions apply定位并读完整contextFiles和P471报告。原生任务当前5/9，1.6及未来验证/合并项未勾是实际状态，不能先声称归档就绪。命令读取是上下文，不是让你实施或同步正式spec。
 
@@ -30,10 +30,10 @@ bash skills/teamsmith/tests/panel-p21.sh settings groups wheel choices choices-s
 
 ```sh
 TMPDIR=/var/tmp \
-TEAM_GATES='bash skills/teamsmith/tests/panel-p21.sh settings groups wheel choices choices-schema write conflict categories readonly flip' \
+TEAM_GATES='TEAM_P21_KEEP=1 bash skills/teamsmith/tests/panel-p21.sh settings groups wheel choices choices-schema write conflict categories readonly flip' \
   bash skills/teamsmith/scripts/team review P471 \
-  --dir /var/tmp/p471-review-0b33fe1f.MdTZSf \
-  --branch 0b33fe1ff28c83d5cb47973564400ee8e3579eee
+  --dir /var/tmp/p471-review-9c1adb1c.3bl6PT \
+  --branch 9c1adb1c0f52ef8fa1aad3593ced2cdc2d874ef8
 ```
 
 先只读P21现有运行前提及保留证据参数，按既有方式指定本人唯一/var/tmp证据根、保留现场；不能为准备环境先跑正常policy/完整配置检查/全组。若原脚本保留条件不足以保住真实帧和config/argv/事件，先交具体缺口，不自行扩写框架或改固定源。一次批次内保留原flip两处真实产品破坏及正常policy收尾；不额外单跑正常policy、不增加第三项变异。两个红侧必须由原目标行为报错，不能把替换失败、启动失败或语法错误算检出。
@@ -63,3 +63,9 @@ P471的完整类型检查仍rc2、4个OutboxListBlock TS2339，1.6未勾。实�
 ## 合并后（当前不执行）
 
 同一你接PM新固定merged源，核本change实际UI源/bundle/相关测试/依赖读路径同一性；相同只做必要短接入，不重跑本批。main已合入P473的提醒测试一行，与你的UI路径无关，不把该已知差异当作重新跑UI的理由。任务/报告进度差异也不是产品字节变化；若相关行为真有差异先交PM裁范围。不提前声称最终merged或归档已通过。
+
+## 前置返修后同任务续跑（2026-11-17）
+
+首轮7f156d08真实前置BLOCKED已收存main，原批次0/10、子policy0/3，不抹历史。作者22f9ad47只把原keep=1行改为同时export TEAM_TMP_KEEP=1 TEAM_P21_KEEP=1；原参数/默认/身份清理/两破坏未变，仅bash语法及diff rc0，没有新增行为执行或重建bundle。
+
+保持V177原模型/SID/分支，仅核0b33fe1f..9c1adb1c的这一行及报告后，直接在上面新源启动尚未跑过的原批次。规划、UI源/bundle/除该行外原测试均未变，不重新核原生context/version/作者静态/既有类型归属或全份方案。报告追加而不抹前置结论；完整映射和真实画面仍须完成。外层KEEP请明确放在TEAM_GATES命令内，子现场实际保留路径随输出记录；不用为先验证继承另跑一批policy。四个原有类型错误与1.6保持原边界。
