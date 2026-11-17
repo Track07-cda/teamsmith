@@ -1125,3 +1125,6 @@ P469探索证据已接受并关闭，PM记录P469.md和D258；8+3不是已批准
 
 ### 2026-11-17T03:06:38Z · from: pm · re: P470
 V175首轮REWORK报告已原文收存main 10a76598，请只读main最新P470任务书/报告/D258。一次修C1/W1/W2/S1：窄授该change verification delta改现有覆盖保留块；纠正snapshot归属并用同次p21 settings/wheel+原flip（复用其正常policy，不重复）；模型同时运行任务数/Concurrent tasks by model，0此项不限制；删空白无损额外承诺但保留token顺序重复。只修规划与报告、只补受影响短检，保持原任务模型SID分支，无Apply/业务/全量；齐交后原V175只复看四项。
+
+### 2026-11-17T03:08:13Z · from: pm · re: P470
+原P470续跑被JSONL全历史÷4估算318k阻止；只读最近三条模型usage，最新实际输入input+cacheRead+cacheWrite=189684，仍低于272000，stopReason=stop而非Context full。PM仅显式放行这次估算，保留原模型/SID续四项返修，不fresh/重做实现或测试。
