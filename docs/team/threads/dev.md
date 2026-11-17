@@ -460,3 +460,6 @@ P471进度已核对，首个界面提交ee8d9e91在分支。PM核旧types257/旧
 
 ### 2026-11-17T04:27:31Z · from: pm · re: P471
 收到实际基线回执，PM已读两个typecheck.log（相同4 TS2339/rc2，行号平移）；基线19份源码/config逐字节=66ab596d，node_modules同树；bun.lock未复制但不是tsc输入，锁/包/tsconfig未改。仍不授权补optional/as或改队列。现在收尾并冻结候选即可：bundle/其它实际rc0及report小步提交，准确STATIC-PARTIAL和1.6未解决，既有4错照留。不必等新增授权/修其它页才交候选，后续新UI独立验收可以先进行；PM据非作者结论再裁静态边界，不重新跑已完成静态/业务。末节已落盘。
+
+### 2026-11-17T04:53:22Z · from: pm · re: P471
+V177前置报告7f156d08已接受，UI尚未跑0/10，flip子policy0/3。请同P471模型/SID/分支续一行窄修：原keep=1 export处同时恢复TEAM_P21_KEEP=1，让原三个子policy收到既有保留决定。主任务书末节是范围；不改产品/bundle/破坏/超时/任务勾选，不跑任何UI或已有静态，仅修改脚本bash -n和diff，冻结新SHA并追加报告。原四错/STATIC-PARTIAL照留，不重做实现。
