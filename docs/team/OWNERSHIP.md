@@ -15,8 +15,9 @@
 | `docs/team/reviews/P466.md`、`docs/team/reviews/P466-verify.log` | PM（V171已接受关闭） | 两阶段实际记录由verify执行，已接受merged证据；临时工具写权收回 |
 | `docs/team/reviews/P468.md`、`docs/team/reviews/P468-verify.log` | PM（V173已接受） | 实际两阶段由verify执行，merged28621c57通过；工具临时写权收回，不再授权新执行 |
 | `docs/team/reviews/V174.md`、`docs/team/reviews/V174-verify.log` | PM（计时交付接受；检查FAIL保留） | 原件已收存，P472已只读归因并关闭，历史结果不改 |
-| `docs/team/reviews/P473.md`、`docs/team/reviews/P473-verify.log` | agent:verify（V176临时） | 仅正式工具记录固定7bf07b46的单场景/旧红/恢复；合并后同人核同一性，不重跑Pi；PM不执行 |
-| `skills/teamsmith/scripts/panel/src/**`、`skills/teamsmith/scripts/panel/panel.js`及对应README/config/SKILL设置说明 | agent:dev（P471临时） | 按已接受方案仅设置UI/文案/生成bundle；准确写集见P471，静态交付后冻结，不改CLI或运行语义 |
+| `docs/team/reviews/P473.md`、`docs/team/reviews/P473-verify.log` | agent:verify（V176临时） | 候选单场景已接受，合并cea2b7f2后同人只核同一性，不重跑Pi；PM不执行 |
+| `docs/team/reviews/P471.md`、`docs/team/reviews/P471-verify.log` | agent:dev3（V177临时） | 正式工具仅在独立0b33fe1f检出运行既定十场景一次，原flip保留；不补全量或作者已完成静态，类型失败单列；其余主检出只读 |
+| `skills/teamsmith/scripts/panel/src/**`、`skills/teamsmith/scripts/panel/panel.js`及对应README/config/SKILL设置说明 | agent:dev（P471候选已冻结） | 产品/测试081bcdd5、完整交付0b33fe1f；V177在独立源只读验收，未交返修前不续写；静态旧4错单列，不改CLI或运行语义 |
 | `openspec/changes/pulse-project-settings-simplify/tasks.md` | agent:dev（P471临时） | 只勾已实施/静态完成的1.1–1.6；其余规划和正式spec只读，独立行为验收另派 |
 | `openspec/changes/archive/2026-11-16-routing-parameter-check-dedup/**` | PM（A12已接受） | 已验6/6的五工件原样归档，临时写权收回 |
 | `openspec/changes/archive/2026-11-16-config-check-execution-dedup/**` | PM（A9已接受） | 已验证7/7原样归档，不再授实现写入 |
