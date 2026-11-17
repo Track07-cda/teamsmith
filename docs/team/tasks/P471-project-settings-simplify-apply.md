@@ -48,3 +48,7 @@ git diff --cached --check
 ## 交付
 
 报告先给STATIC-READY/阻塞结论及实现范围；写真实命令/版本/rc/输出和bundle来源、退休断言到替代/保留行为的映射、候选产品/测试SHA与尚未执行的行为验收。UI10行仍是C3设计数，未有真实画面前不能写实测127→10。Conventional Commits含P471及`Agent: dev`，本地分步提交，不push/merge/archive/tag/npm；慢命令用team_bg_run后结束回合，完成唤醒再收，不轮询等待。自己的具体临时根用/var/tmp，原件留到PM收存；不碰别人的根或主检出。
+
+## 已见的原有typecheck问题（只记录，不扩大当前范围）
+
+首次静态检查报告OutboxListBlock的4处impediments/impeded错误。PM只读核对：既有types只声明entries/queued/held，queue布局却读另外两字段，而`team_panel_outbox_list_json`也没有输出它们；不能直接补两个可选类型或强转来掩盖问题。当前不授权改队列页面/读接口；继续本brief其余实现与静态，保留完整原错误及版本/源SHA，最终明确typecheck仍非0、1.6未全满足，不报全静态通过、不重跑业务。代码与声明相同只是源码归属证据，不等于已实际运行基线编译。待候选交付后，非作者确认归属并由PM裁定最小修复，不另起无关页面实现。
