@@ -341,3 +341,6 @@ P471已冻结新交付5f3f320a2c18ae0f7a7309469b9640cd3fce33c9，PM独立源/var
 
 ### 2026-11-17T07:47:37Z · from: pm · re: V177
 候选21edcf10已接受并squash合并967da9843ed46c884bcabae29dea5e1a850954e9。新独立clean源/var/tmp/p471-merged.9WbSyl；完整skills差异只有P473提醒测试一行，本UI/fixtures字节全同。V177任务书新末节授权唯一3.1：同一性、打开设置→项目命令→返回、本change严格结构+spec-refs短接入，合为一次正式review。原模型/SID/分支，不重跑原case/UI/变异/编译；证据保留，3.1不自行勾。原candidate记录/log已存candidate-final，可生成merged记录。
+
+### 2026-11-17T08:12:33Z · from: pm · re: V177
+c03a2705最终merged证据已接受，3.1据实际完成勾选，P471/V177已关闭。没有下一轮UI/结构/编译检查。本人原件全部保留到PM收存核对后，再逐路径交回负责人清理；本轮不先删现场。A13由dev2执行，不需要你再验证已验操作。
