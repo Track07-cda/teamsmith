@@ -41,3 +41,11 @@ git diff --cached --check
 报告先给ACCEPTED/REWORK及真正改变结论的证据/最小返修，再给CRITICAL/WARNING/SUGGESTION、实际命令/版本/stdout-stderr/rc及未验范围。源码判断不是行为实测，结构通过不是交互通过；若有具体未知必须运行才能裁定，点名交PM，不自行扩跑。可读既有测试/报告，不运行UI/pty/类型构建/bundle/smoke/FAST/meta/61b/CLI全量/安装/真实Pi模型/性能/计时。
 
 Conventional Commits含V175与`Agent: dev3`，分步本地提交报告后通知；不push/merge/archive/tag/npm，不改0.4.7、真实配置、队列或待命状态，不清其它人的临时根。较慢命令依后台规则启动后结束回合，不轮询等待。
+
+## 四项差异复看（2026-11-17）
+
+P470规划修订`93b3bc2b`、完整交付`96750d494ff412e138b82156395ec3ab2fc1eb3a`；新固定独立检出`/var/tmp/p470-review-96750d49.2Mtu5O`。旧26f5e08e检出和首轮REWORK报告1b0e8c80保留，首轮报告已原文收存main 10a76598。保持本V175模型/SID/任务分支，只追加本人报告最新结论，不抹首轮。
+
+只读`git diff 26f5e08e..96750d49`和必要相邻原文，复看C1/W1/W2/S1及其直接自洽。C1有PM窄授权新增verification delta，仅既有覆盖保留块/对应场景，本轮要求及原23场景身份、旧例外保留；核显式退休清单未变成通用豁免或增加FAST/全量义务。W1改到同一次p21 settings/wheel，原flip纳入调用并用其正常policy收尾、不再单跑policy；作者不跑其它页面snapshot。W2模型范围和0此项不限制已成中英文命名，源表达式共享worker计数/PM排除事实不变。S1仅保留token/顺序/重复，实际改动保存才空格连接完整值，失败/取消/冲突原字节仍不动。
+
+不重审已认可的C+7/C+8/110、两入口、既有writer/模型身份或UI整体草图，不运行产品样本/构建/pty/计时/全套。delta实际变化，允许只在新固定源再跑一次本change strict并留真实rc；版本/root/首轮ledger及原有引用检查不再重复，自己的报告仅必要diff-check。若通过只表示本次规划可供PM接受，不是实现或归档已通过；若仍有问题点名具体差异及最小句级修复，不另开方案。

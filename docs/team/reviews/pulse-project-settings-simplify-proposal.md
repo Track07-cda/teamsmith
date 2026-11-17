@@ -23,4 +23,6 @@ V175交非作者dev3审阅，固定独立源`/var/tmp/p470-review-26f5e08e.eA48z
 3. W2：标签用“模型同时运行任务数 / Concurrent tasks by model”，0用“此项不限制”；原模型范围内worker合计不冒称整个项目总数或解除其它规则。
 4. S1采纳：移除空白分隔字节必须不变的额外承诺。保留token/顺序/重复，实际改变并保存才拼接完整值；取消/非法/冲突仍不改原配置，不造无损解析框架。
 
-P470/任务头/delta授权已更新为三cap，默认计数及两个入口不重开。返修交原作者同任务/模型/SID/分支；V175等待新冻结源，仅复看四项差异及一次必要strict，不跑UI、业务、归档或完整套件。本记录仍未ACCEPTED，不派Apply。
+P470/任务头/delta授权已更新为三cap，默认计数及两个入口不重开。原作者同任务/模型/SID/分支已交规划93b3bc2b及最终报告96750d49，写集只有六个规划/报告差异文件；作者本轮strict/spec-refs/ledger/diff回执rc0，PM已看实际diff及verification完整原块对照，不代跑验证。
+
+原V175继续，仅复看C1/W1/W2/S1；新固定独立源`/var/tmp/p470-review-96750d49.2Mtu5O` @ `96750d494ff412e138b82156395ec3ab2fc1eb3a`，旧源和首次REWORK不动。本轮只补新源一次必要strict，不重跑首轮ledger/root/版本或UI、业务、归档、完整套件。本记录仍未ACCEPTED，不派Apply。
