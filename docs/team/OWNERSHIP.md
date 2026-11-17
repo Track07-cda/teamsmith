@@ -14,7 +14,8 @@
 | `docs/team/reviews/P465.md`、`docs/team/reviews/P465-verify.log` | PM（V170已接受关闭） | 两阶段实际记录由dev3执行，已接受merged证据；临时工具写权收回 |
 | `docs/team/reviews/P466.md`、`docs/team/reviews/P466-verify.log` | PM（V171已接受关闭） | 两阶段实际记录由verify执行，已接受merged证据；临时工具写权收回 |
 | `docs/team/reviews/P468.md`、`docs/team/reviews/P468-verify.log` | PM（V173已接受） | 实际两阶段由verify执行，merged28621c57通过；工具临时写权收回，不再授权新执行 |
-| `docs/team/reviews/V174.md`、`docs/team/reviews/V174-verify.log` | PM（计时交付接受；检查FAIL保留） | 唯一运行证据已收存，测量任务关闭不代表全绿；verify临时中央写权收回，P472只读归因 |
+| `docs/team/reviews/V174.md`、`docs/team/reviews/V174-verify.log` | PM（计时交付接受；检查FAIL保留） | 原件已收存，P472已只读归因并关闭，历史结果不改 |
+| `docs/team/reviews/P473.md`、`docs/team/reviews/P473-verify.log` | agent:verify（V176临时） | 仅正式工具记录固定7bf07b46的单场景/旧红/恢复；合并后同人核同一性，不重跑Pi；PM不执行 |
 | `skills/teamsmith/scripts/panel/src/**`、`skills/teamsmith/scripts/panel/panel.js`及对应README/config/SKILL设置说明 | agent:dev（P471临时） | 按已接受方案仅设置UI/文案/生成bundle；准确写集见P471，静态交付后冻结，不改CLI或运行语义 |
 | `openspec/changes/pulse-project-settings-simplify/tasks.md` | agent:dev（P471临时） | 只勾已实施/静态完成的1.1–1.6；其余规划和正式spec只读，独立行为验收另派 |
 | `openspec/changes/archive/2026-11-16-routing-parameter-check-dedup/**` | PM（A12已接受） | 已验6/6的五工件原样归档，临时写权收回 |
