@@ -1267,7 +1267,7 @@ The correctness gate SHALL distinguish a product-only checkout, which deliberate
 
 Only a check whose named prerequisite is one of those deliberately absent internal surfaces SHALL skip on a product-only checkout. Each such attribution MUST print `SKIP（条件不满足）`, the affected check and missing prerequisite, be counted as a skip rather than a pass, and reach the gate's output and per-section/run accounting. Missing product files, unavailable required tools, a failed executed assertion, and corruption of a present internal surface MUST retain their existing failure/degradation rules; the checkout classification MUST NOT swallow them. An executed check's verdict MUST rest on evidence the subject itself carries: when the call's command word is the wrapped command itself (`tmux`), an isolation wrapper defined in one file MUST NOT certify a mutation call made by another file, while a dedicated wrapper name defined alongside the caller MAY keep its directory-level meaning; a check MUST NOT be reported as satisfied on evidence the subject does not have. A run with prerequisite skips and no failures SHALL exit 0, without claiming the skipped checks passed; a real failure alongside skips MUST still exit non-zero.
 
-The same correctness command SHALL run on both shapes, with no second public suite. The product's static checks, skill loading, published-spec validation, container-build checks and every ledger-independent fixture MUST remain eligible exactly as before (including the existing FAST/full and tool-premise rules). A fixture that provisions its own ledger MUST still run in the product-only checkout. For an internal checkout, except for the three route-page control replacements, the reply-observer duplicate-execution retirement, the routing-argv repeat replacements and the routing-parameter replacements specified below, every pre-existing assertion MUST still execute with its original verdict and at least its pre-change per-section pass count under identical run settings; replacing an existing assertion with a new one MUST NOT satisfy that coverage comparison. CI's correctness step MUST retain its blocking failure semantics, and it SHALL run the product floor the way `verification#CI runs the two gates separately and performance does not block` states: a failing applicable product assertion in that step fails the job, and the selection it makes is disclosed in the output tail rather than presented as the full gate.
+The same correctness command SHALL run on both shapes, with no second public suite. The product's static checks, skill loading, published-spec validation, container-build checks and every ledger-independent fixture MUST remain eligible exactly as before (including the existing FAST/full and tool-premise rules). A fixture that provisions its own ledger MUST still run in the product-only checkout. For an internal checkout, except for the three route-page control replacements, the reply-observer duplicate-execution retirement, the routing-argv repeat replacements, the routing-parameter replacements and the selected-settings display replacements specified below, every pre-existing assertion MUST still execute with its original verdict and at least its pre-change per-section pass count under identical run settings; replacing an existing assertion with a new one MUST NOT satisfy that coverage comparison. CI's correctness step MUST retain its blocking failure semantics, and it SHALL run the product floor the way `verification#CI runs the two gates separately and performance does not block` states: a failing applicable product assertion in that step fails the job, and the selection it makes is disclosed in the output tail rather than presented as the full gate.
 
 The route-page replacement exception is the three complete nested walks in the route-page controls for a column-zero
 command line, an undeclared command-page usage and an unread group level, as specified by
@@ -1351,6 +1351,36 @@ already completed acceptance again. Post-merge verification SHALL check byte ide
 integration only, unless an evidence premise changed. Old child, new direct, real-call and parent totals SHALL
 remain separate; no fixed pass total, elapsed saving or whole-suite success follows from this replacement.
 
+The selected-settings display exception SHALL retire or replace only obsolete presentation assertions
+superseded by `panel#Project settings expose selected user operations rather than the complete configuration table`,
+`panel#Selected settings editors preserve owning-command choices and writes` and
+`panel#Settings groups follow user purposes and keep visible action state`. Its scope is the full-key/unknown-key
+and automatic new-key display, fixture-marker removal restoring a row, schema-group/order and full-schema label
+binding, raw-key-led prompts/confirmation and repetitive class/default badges, mandatory schema-kind/no-choice explanatory text for retained editors and its display-dependent waits, mandatory disk/inode setting rows,
+the duplicate whole-map jump, running-process claims from model records and UI-only editors for excluded
+enum/path keys. Their replacements SHALL observe selected operations, current-view row counts, two secondary
+entries/return routes, user labels, retained editors opening with the original value editable and original validation/confirmation intact, and accurately named records, using the existing
+settings/groups/wheel/choices/choices-schema/categories/policy fixtures and string checks.
+
+Only that explicit old-to-new display inventory SHALL leave the pre-change assertion/count comparison.
+Full CLI reads/group metadata, choices/validation, writer/CAS/actor/danger/cancel/conflict/failure, model/SID and
+provenance, missing-versus-unreadable records, real errors, and keyboard/mouse/navigation/window behavior SHALL
+retain coverage. No generic UI exemption, new prerequisite skip, fabricated old pass count or new policing
+check is permitted. Old source inventory, actually executed replacement assertions and unchanged-coverage
+evidence SHALL keep distinct provenance; replacing an obsolete display assertion does not prove the old
+assertion executed.
+
+For this selected-settings batch, the implementer SHALL provide static evidence only. A non-author SHALL run
+the affected existing project-settings scenarios once on a frozen independent checkout; short/long rows, counts
+and fill are observed in settings/wheel, not in the unrelated preference-overlay snapshot suite. The existing
+`scn_flip` SHALL retain its category-write-route and policy-as-record-model product mutations plus its normal
+policy finish; only product touchpoints required by the display change are adjusted. Its normal finish SHALL
+supply the ordinary policy result, with no separate normal policy invocation in that batch. Schema-input
+witnesses are not product mutations. Unchanged complete CLI coverage is cited with its original revision/scope,
+not rerun or claimed as new. No new FAST/full/61b run, screenshot matrix or wait budget is required to accept
+this narrow replacement; post-merge evidence uses same-verifier identity and necessary short integration unless
+the evidence premise changed. All unrelated coverage obligations and prior exceptions above remain intact.
+
 #### Scenario: The release export skips only unavailable internal checks
 
 - **GIVEN** a clean product-only tree exported from committed HEAD by `bash docs/team/tools/publish-public.sh`, with the gate's required tools available
@@ -1383,10 +1413,11 @@ remain separate; no fixed pass total, elapsed saving or whole-suite success foll
 
 - **GIVEN** pre-change and post-change independent internal checkouts with identical tools and FAST settings
 - **WHEN** `TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh </dev/null` runs in each
-- **THEN** every pre-existing assertion outside the three named route-page replacements, the identified reply-observer retired executions, the named routing-argv retired executions and the routing-parameter retired executions is present in the post-change executed assertion inventory with its original verdict, each unaffected section's pass count is at least its baseline, and no new checkout-prerequisite skip appears
+- **THEN** every pre-existing assertion outside the three named route-page replacements, the identified reply-observer retired executions, the named routing-argv retired executions, the routing-parameter retired executions and the explicit selected-settings display inventory is present in the post-change executed assertion inventory with its original verdict, each unaffected section's pass count is at least its baseline, and no new checkout-prerequisite skip appears
 - **AND** this FAST run does not produce the route-page replacement evidence; that separate source-attributed baseline, retained non-FAST record/manual undeclared-usage receipt and explicit non-FAST `routes.sh pages` inventory are judged by the named scenario below, without relaxing any retained assertion or count obligation
 - **AND** reply-observer replacement evidence comes from its focused absence sample and normal §62 run, with only the named duplicate executions retired and with parent/child counts kept separate
 - **AND** evidence for the preceding routing-argv replacement batch comes from its short actual-shell samples and its already accepted final complete 61b integration run, with only that batch's named repeats retired; its first CORE's normal real callers remain exercised and no first-order speedup is inferred. A later routing-parameter batch supplies its newly affected evidence under the scenarios below and cites that accepted record for unchanged coverage, not a new complete 61b run
+- **AND** the selected-settings batch excludes only its named obsolete display inventory, retains the required behavior through its mapped focused UI/flip evidence and unchanged-coverage sources, and does not pad replacement passes or require another FAST/full run as payment for that narrow exception
 - **AND** a scratch mutation that replaces any retained internal assertion with a prerequisite skip still fails the inventory/count comparison, even if new assertions keep the aggregate pass total unchanged
 
 #### Scenario: Partial internal trees and broken installs remain red
@@ -1442,7 +1473,7 @@ remain separate; no fixed pass total, elapsed saving or whole-suite success foll
   CLI claim, counts FAST/smoke output as the sample evidence, or labels a retired nested walk as an executed pass
 - **WHEN** that evidence is compared with the named replacement scope and executed assertion inventory
 - **THEN** it fails the coverage comparison even if the reported total equals or exceeds the baseline;
-  only the three specified route-page complete-walk replacements, the separately named reply-observer retirement, the routing-argv retirement and the routing-parameter retirement below are allowed
+  only the three specified route-page complete-walk replacements, the separately named reply-observer retirement, the routing-argv retirement, the routing-parameter retirement and the selected-settings display replacement inventory specified above are allowed
 
 #### Scenario: Routing argv replacements detect the original resplitting errors
 

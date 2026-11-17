@@ -499,7 +499,8 @@ file carries and the schema does not know, the empty string.
 
 - The group SHALL be the row's own data: the command MUST NOT carry a second group table, and it MUST NOT derive
   the group by parsing the schema's section comments (they are documentation, not a grammar). A key added to the
-  schema SHALL appear under its group with the console bundle unchanged.
+  schema SHALL be reported with its declared group in the complete CLI read. The console selects and groups
+  user operations under its own presentation requirement; a new key or group does not force a UI row.
 - Every schema row SHALL declare a group. A row whose tenth field is missing, or whose token does not match the
   shape above, SHALL fail the project's fixture gate naming the key (and the token where there is one) — the read
   MUST NOT invent a default group, drop the row, or filter the malformed token silently.

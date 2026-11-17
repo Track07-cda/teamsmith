@@ -18,10 +18,10 @@
 | `docs/team/reviews/P473.md`、`docs/team/reviews/P473-verify.log` | PM（V176最终证据已接受） | 候选三臂及merged cea2b7f2同一性/语法rc0已接受，临时中央写权收回；旧完整FAIL不改，原件待中央保存后清理 |
 | `docs/team/reviews/P471.md`、`docs/team/reviews/P471-verify.log` | PM（V177已接受） | merged967da984正式PASS与c03a2705报告已接收；非作者临时中央写权收回，旧FAIL和D261边界保留 |
 | `skills/teamsmith/scripts/panel/src/**`、`skills/teamsmith/scripts/panel/panel.js`及对应README/config/SKILL设置说明 | agent:dev（默认维护权恢复） | P471/V177已完成，未经新任务不得续写；archive不改产品/测试/生成物 |
-| `openspec/changes/pulse-project-settings-simplify/**`及原生对应日历archive目的目录 | agent:dev2（A13临时） | 已验9/9七工件原样移动，先私有试归档，不改任务正文/规划或其它change |
+| `openspec/changes/archive/2026-11-17-pulse-project-settings-simplify/**` | PM（A13已接受） | 已验9/9七工件原样归档，临时写权收回，不再授实现写入 |
 | `openspec/changes/archive/2026-11-16-routing-parameter-check-dedup/**` | PM（A12已接受） | 已验6/6的五工件原样归档，临时写权收回 |
 | `openspec/changes/archive/2026-11-16-config-check-execution-dedup/**` | PM（A9已接受） | 已验证7/7原样归档，不再授实现写入 |
-| `openspec/specs/panel/spec.md`、`openspec/specs/memory-and-deps/spec.md`、`openspec/specs/verification/spec.md` | agent:dev2（A13临时） | 只原生同步pulse-project-settings-simplify的已验delta；Purpose/未点名正文及其它可执行文件不变，格式变化按D262，不授内容重写 |
+| `openspec/specs/panel/spec.md`、`openspec/specs/memory-and-deps/spec.md`、`openspec/specs/verification/spec.md` | PM（A13已接受） | 原生同步已验delta，Purpose/未点名正文与全部可执行字节不变，临时写权收回 |
 | `openspec/changes/archive/2026-11-16-clipboard-test-session-reuse/**` | PM（A11已接受） | 五工件原样归档，不再授实现写入 |
 | `openspec/changes/archive/2026-11-16-help-route-render-once/**` | PM（A10已接受） | 已验4/4的五文件原样归档，不再授实现写入 |
 | `docs/team/tasks/**`、`docs/team/BOARD.md`、`docs/team/ROADMAP.md`、`docs/team/DECISIONS.md`、`docs/team/OWNERSHIP.md` | PM | 任务书与看板 |
