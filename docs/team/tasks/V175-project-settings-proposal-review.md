@@ -53,3 +53,5 @@ P470规划修订`93b3bc2b`、完整交付`96750d494ff412e138b82156395ec3ab2fc1eb
 ### C1-R1最后一句（同日）
 
 第二轮64037777报告已原文收存main f5cdf248；PM核p21现有等待/断言，接受唯一遗漏。作者只在verification展示退休清单补 `mandatory schema-kind/no-choice explanatory text for retained editors` 及本人报告，其余规划不动。待PM给新提交ID，仅用固定Git对象的diff/show核这句话及其余字节相同，无需第三份整树检出或复跑结构/引用/ledger/任何测试；96750d49的strict证据保留原SHA，不伪称新提交执行。只追加本人最终结论和必要diff-check，W1/W2/S1及C1其余原23场景结论不重开，不改作者工件。当前仍不接受Apply或实现/归档声明。
+
+最后固定源已到：`f987cc05b924bb38e8f757236e7e220e8c39ca2c`。相对96750d49仅verification段内两行及作者报告；用`git diff 96750d49..f987cc05 -- openspec/changes/pulse-project-settings-simplify`、`git show f987cc05:openspec/changes/pulse-project-settings-simplify/specs/verification/spec.md`核C1-R1，PM已核无其它规划差异。原作者误报的“54字”已在通知中撤回，不引用该数。无需新工作树或任何运行，只追加本人最终结论/必要diff并提交；原strict明确只在96750d49执行。
