@@ -41,4 +41,25 @@ TEAM_GATES='bash /var/tmp/<本人证据根>/verify-saved-settings.sh' \
 
 ## 合并后（当前不执行）
 
-PM给独立merged SHA后仍由你核UI源/bundle/相关测试/CLI读取同一性；相同复用组合证据，仅执行原3.1的打开设置、一个入口返回与必要结构/引用短接入，不重跑本批。已知P473提醒测试一行、账本/任务勾选差异不影响本UI；真实相关差异先交PM裁范围。当前不提前启动该接入。
+PM给独立merged SHA后仍由你核UI源/bundle/相关测试/CLI读取同一性；相同复用组合证据，仅执行原3.1的打开设置、一个入口返回与必要结构/引用短接入，不重跑本批。已知P473提醒测试一行、账本/任务勾选差异不影响本UI；真实相关差异先交PM裁范围。该阶段未给源时不提前启动；现已按下节授权执行。
+
+## 当前执行：合并后同人短接入（2026-11-17）
+
+PM已接受你21edcf10的最终候选证据，squash合并`967da9843ed46c884bcabae29dea5e1a850954e9`并单独同步GitHub dev；候选正式record/log另存私有`evidence/P471/candidate-final/`，可正常生成merged正式记录。新独立clean源`/var/tmp/p471-merged.9WbSyl`，原生2.1/2.2据实际证据已勾，8/9，仅3.1待你实际验证。当前下面是唯一新运行授权；前述候选保存帧核对已完成，不再重复。
+
+保持本V177模型/SID/分支：
+
+1. 对照a96864aa和上述merged的UI源/bundle/相关fixture、CLI读取路径、对应设置文档同一性。PM已实看整个skills差异只有main先前独立合入的`tests/remind-tool-real.mjs`一行（P473，与你UI无关），不要因它或native任务/账本差异重新跑候选批次。
+2. 用本次唯一隔离项目、现有P21帮助函数做**打开项目设置→进入项目命令→返回项目设置**的短接入，保留真实帧/来源/argv。不运行完整settings/policy/flip或候选driver，不顺手保存、测其它编辑器/再来中英文尺寸矩阵，也不操作真实Pulse/配置/提醒/待命。私有短driver只调原准备/打开/入口/返回，不能source后自动执行全批。
+3. 用既有OpenSpec1.16执行一次本change严格结构校验`openspec validate pulse-project-settings-simplify --type change --strict --no-interactive`及`bash skills/teamsmith/tests/spec-refs.sh`，仅作3.1的必要结构/引用短检查。不要全仓strict、编译/build/strings/ledger/CLI全量/元套件或旧UI批次。
+
+三项合为一次正式review，TEAM_GATES指向实际短driver：
+
+```sh
+TEAM_GATES='bash /var/tmp/<本人证据根>/verify-merged-settings-short.sh' \
+  bash skills/teamsmith/scripts/team review P471 \
+  --dir /var/tmp/p471-merged.9WbSyl \
+  --branch 967da9843ed46c884bcabae29dea5e1a850954e9
+```
+
+原锁/超时不变，TEAM_P21_KEEP=1及本次唯一/var/tmp原件继续保留。team_bg_run后结束回合，正常完成唤醒再收，不回合内等待；如果相关产品字节确不同先点名差异交PM，不自行扩跑。你只追加本人报告、正式工具写原中央record/log，不改native勾选；报告真实candidate/merged SHA、同一性/短操作/结构的实际rc和既有边界，明确只短接入不是又跑UI全量。全部通过再交最终merged PASS，PM接收后才关单/另派非实现者收尾。本人报告仅必要diff，不再扫描或清任何原件。

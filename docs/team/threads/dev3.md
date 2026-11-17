@@ -338,3 +338,6 @@ P471已冻结新交付5f3f320a2c18ae0f7a7309469b9640cd3fce33c9，PM独立源/var
 
 ### 2026-11-17T07:20:51Z · from: pm · re: V177
 最终一行已交付，真实HEAD a96864aa3dfd64820836d0e526d9500401a66662，测试391ef8ee；PM独立源/var/tmp/p471-review-a96864aa.Ohz1ip。已实际核两文件diff和产品/共用fixture字节不变。当前V177任务书已完整改为最后短核对：候选实际needle+原matcher读取旧长列表开/关/其它picker真帧、同一性和既有路由/恢复原件，不再启动任何UI/policy/编译/旧driver。旧两轮FAIL保持，原模型/SID/分支执行极短正式review后追加实际结论，本人报告仅diff，无须再ledger。
+
+### 2026-11-17T07:47:37Z · from: pm · re: V177
+候选21edcf10已接受并squash合并967da9843ed46c884bcabae29dea5e1a850954e9。新独立clean源/var/tmp/p471-merged.9WbSyl；完整skills差异只有P473提醒测试一行，本UI/fixtures字节全同。V177任务书新末节授权唯一3.1：同一性、打开设置→项目命令→返回、本change严格结构+spec-refs短接入，合为一次正式review。原模型/SID/分支，不重跑原case/UI/变异/编译；证据保留，3.1不自行勾。原candidate记录/log已存candidate-final，可生成merged记录。
