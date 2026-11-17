@@ -13,7 +13,7 @@
 | `docs/team/reviews/P465.md`、`docs/team/reviews/P465-verify.log` | PM（V170已接受关闭） | 两阶段实际记录由dev3执行，已接受merged证据；临时工具写权收回 |
 | `docs/team/reviews/P466.md`、`docs/team/reviews/P466-verify.log` | PM（V171已接受关闭） | 两阶段实际记录由verify执行，已接受merged证据；临时工具写权收回 |
 | `docs/team/reviews/P468.md`、`docs/team/reviews/P468-verify.log` | PM（V173已接受） | 实际两阶段由verify执行，merged28621c57通过；工具临时写权收回，不再授权新执行 |
-| `docs/team/reviews/V174.md`、`docs/team/reviews/V174-verify.log` | agent:verify（V174临时） | 仅正式review记录固定532c8b47的一次完整计时；PM不执行，完成后收回 |
+| `docs/team/reviews/V174.md`、`docs/team/reviews/V174-verify.log` | PM（计时交付接受；检查FAIL保留） | 唯一运行证据已收存，测量任务关闭不代表全绿；verify临时中央写权收回，P472只读归因 |
 | `openspec/changes/archive/2026-11-16-routing-parameter-check-dedup/**` | PM（A12已接受） | 已验6/6的五工件原样归档，临时写权收回 |
 | `openspec/changes/archive/2026-11-16-config-check-execution-dedup/**` | PM（A9已接受） | 已验证7/7原样归档，不再授实现写入 |
 | `openspec/specs/verification/spec.md` | PM（A12已接受） | 已验MODIFIED目标原生同步；两处段落空行处理已接受，Purpose及其余正文不变，临时写权收回 |

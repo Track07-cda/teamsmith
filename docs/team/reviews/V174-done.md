@@ -1,0 +1,8 @@
+- 2026-11-17T03:45:42Z · `team board set V174 done` · FORCED：PM 显式覆盖（理由：V174唯一计时已完整交付；原生套件FAIL和两失败保留，P472只读归因；不是测试放行，见reviews/V174-acceptance.md）
+  -   - ① 复验记录 docs/team/reviews/V174.md：存在但判定是 FAIL（FAIL/TIMEOUT 不算证据）
+  -   - ② 分支是否已并入 main：task/V174-post-slimming-full-timing（df43eaa3c）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/V174.md（用 ① 的 team review 生成，判定 PASS）
+- 2026-11-17T03:45:43Z · `team close V174 --status done` · FORCED：PM 显式覆盖（理由：V174唯一计时已完整交付；原生套件FAIL和两失败保留，P472只读归因；不是测试放行，见reviews/V174-acceptance.md）
+  -   - ① 复验记录 docs/team/reviews/V174.md：存在但判定是 FAIL（FAIL/TIMEOUT 不算证据）
+  -   - ② 分支是否已并入 main：task/V174-post-slimming-full-timing（df43eaa3c）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/V174.md（用 ① 的 team review 生成，判定 PASS）

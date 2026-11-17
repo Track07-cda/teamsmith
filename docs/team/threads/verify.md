@@ -283,3 +283,6 @@ V172/V173原件已收存，routing-evidence-pack exit0：5根/10321文件源与�
 
 ### 2026-11-17T01:36:08Z · from: pm · re: V174
 V174已获用户授权后台做：固定532c8b47，独立检出 /var/tmp/v174-review-532c8b47.RgzJCh。按新brief尽快启动唯一完整正常产品检查，使用既有snapshot以支持并行开发；TEAM_META=0，不加meta/61b或旧版对照/预跑，不重新否定已关闭批次。正式review仅写V174两文件；后台启动即结束，报job id，完成再收取，先保留原始耗时与结果/慢项。不是新的OpenSpec change验证。
+
+### 2026-11-17T03:45:43Z · from: pm · re: P472
+V174测量交付已接受，原生FAIL不改；报告32798e2e/接受记录V174-acceptance.md/D259。13原件逐文件SHA一致收存main私有state/evidence/V174/raw，原件暂留。P472只读两失败的已有源/材料，区分证实根因/推断/缺证，不修代码或新增运行，不假称负载。F1与P470退休badge相关，避免并行UI修补；源固定532c8b47，读新任务书，只交本人报告。
