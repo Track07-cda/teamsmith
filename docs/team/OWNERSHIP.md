@@ -17,8 +17,7 @@
 | `docs/team/reviews/V174.md`、`docs/team/reviews/V174-verify.log` | PM（计时交付接受；检查FAIL保留） | 原件已收存，P472已只读归因并关闭，历史结果不改 |
 | `docs/team/reviews/P473.md`、`docs/team/reviews/P473-verify.log` | PM（V176最终证据已接受） | 候选三臂及merged cea2b7f2同一性/语法rc0已接受，临时中央写权收回；旧完整FAIL不改，原件待中央保存后清理 |
 | `docs/team/reviews/P471.md`、`docs/team/reviews/P471-verify.log` | PM（V177已接受） | merged967da984正式PASS与c03a2705报告已接收；非作者临时中央写权收回，旧FAIL和D261边界保留 |
-| `skills/teamsmith/scripts/panel/src/layout.ts`、`skills/teamsmith/scripts/panel/panel.js` | agent:dev（P474候选冻结） | 22a1c4af 已交付，未经新返修不得继续改动 |
-| `docs/team/reviews/P474.md`、`docs/team/reviews/P474-verify.log` | agent:verify（V179临时） | 仅工具写候选及合并后定点实际执行记录，其余主检出只读 |
+| `docs/team/reviews/P474.md`、`docs/team/reviews/P474-verify.log` | PM（V179已接受） | 合并版 0e6677e2 定点复核通过，临时写权收回；P474 实现写权收回 |
 | `docs/team/reviews/P475.md`、`docs/team/reviews/P475-verify.log` | PM（V178已接受） | 合并版 ec0ad970 定点核对通过，临时写权收回 |
 | `skills/teamsmith/scripts/lib/cmd-review.sh` | agent:dev2（P478候选冻结） | c97a8efe 已交付，未经新返修不得继续改动 |
 | `docs/team/reviews/P478.md`、`docs/team/reviews/P478-verify.log` | agent:dev-bob（V180临时） | 只允许工具写独立候选及合并后定点执行记录，其余主检出只读 |
