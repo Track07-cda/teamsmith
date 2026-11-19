@@ -19,8 +19,7 @@
 | `docs/team/reviews/P471.md`、`docs/team/reviews/P471-verify.log` | PM（V177已接受） | merged967da984正式PASS与c03a2705报告已接收；非作者临时中央写权收回，旧FAIL和D261边界保留 |
 | `docs/team/reviews/P474.md`、`docs/team/reviews/P474-verify.log` | PM（V179已接受） | 合并版 0e6677e2 定点复核通过，临时写权收回；P474 实现写权收回 |
 | `docs/team/reviews/P475.md`、`docs/team/reviews/P475-verify.log` | PM（V178已接受） | 合并版 ec0ad970 定点核对通过，临时写权收回 |
-| `skills/teamsmith/scripts/lib/cmd-review.sh` | agent:dev2（P478候选冻结） | c97a8efe 已交付，未经新返修不得继续改动 |
-| `docs/team/reviews/P478.md`、`docs/team/reviews/P478-verify.log` | agent:dev-bob（V180临时） | 只允许工具写独立候选及合并后定点执行记录，其余主检出只读 |
+| `docs/team/reviews/P478.md`、`docs/team/reviews/P478-verify.log` | PM（V180已接受） | 合并版 24ea698b 定点通过，临时写权及 P478 实现写权收回 |
 | `skills/teamsmith/tests/key-replies-ui.sh`、`key-replies-pty.sh`、`lib/reply-fixture.sh`（均在该 tests 目录） | agent:dev3（P480候选冻结） | 00f184fa 已交付，未经新返修不得继续改动 |
 | `docs/team/reviews/P480.md`、`docs/team/reviews/P480-verify.log` | agent:verify（V181临时） | 只允许工具写独立候选及合并后定点执行记录，其余主检出只读 |
 | 其余 `skills/teamsmith/scripts/panel/src/**` 及对应README/config/SKILL设置说明 | agent:dev（默认维护权） | P471/V177已完成，P474不授写 |
