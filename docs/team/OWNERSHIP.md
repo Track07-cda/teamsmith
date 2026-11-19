@@ -19,8 +19,8 @@
 | `docs/team/reviews/P471.md`、`docs/team/reviews/P471-verify.log` | PM（V177已接受） | merged967da984正式PASS与c03a2705报告已接收；非作者临时中央写权收回，旧FAIL和D261边界保留 |
 | `skills/teamsmith/scripts/panel/src/layout.ts`、`skills/teamsmith/scripts/panel/panel.js` | agent:dev（P474候选冻结） | 22a1c4af 已交付，未经新返修不得继续改动 |
 | `docs/team/reviews/P474.md`、`docs/team/reviews/P474-verify.log` | agent:verify（V179临时） | 仅工具写候选及合并后定点实际执行记录，其余主检出只读 |
-| `skills/teamsmith/scripts/strings/commands.tsv` 的 board 行 | agent:dev2（P475候选冻结） | f4a43955 已交付，未经新返修不得继续改动 |
-| `docs/team/reviews/P475.md`、`docs/team/reviews/P475-verify.log` | agent:dev-bob（V178临时） | 仅工具写定点候选/合并后实际执行记录，其余主检出只读 |
+| `docs/team/reviews/P475.md`、`docs/team/reviews/P475-verify.log` | PM（V178已接受） | 合并版 ec0ad970 定点核对通过，临时写权收回 |
+| `skills/teamsmith/scripts/lib/cmd-review.sh` | agent:dev2（P478） | 只修复验准备与计时，不更改共享锁、其它入口或验证记录格式 |
 | `docs/team/reports/P479-dev3.md` | agent:dev3（P479） | 仅交付复用既有工具的可行性结论；试验在私有临时副本，不授产品或测试写权 |
 | 其余 `skills/teamsmith/scripts/panel/src/**` 及对应README/config/SKILL设置说明 | agent:dev（默认维护权） | P471/V177已完成，P474不授写 |
 | `openspec/changes/archive/2026-11-17-pulse-project-settings-simplify/**` | PM（A13已接受） | 已验9/9七工件原样归档，临时写权收回，不再授实现写入 |
