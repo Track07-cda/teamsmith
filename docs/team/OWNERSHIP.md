@@ -20,7 +20,8 @@
 | `skills/teamsmith/scripts/panel/src/layout.ts`、`skills/teamsmith/scripts/panel/panel.js` | agent:dev（P474候选冻结） | 22a1c4af 已交付，未经新返修不得继续改动 |
 | `docs/team/reviews/P474.md`、`docs/team/reviews/P474-verify.log` | agent:verify（V179临时） | 仅工具写候选及合并后定点实际执行记录，其余主检出只读 |
 | `docs/team/reviews/P475.md`、`docs/team/reviews/P475-verify.log` | PM（V178已接受） | 合并版 ec0ad970 定点核对通过，临时写权收回 |
-| `skills/teamsmith/scripts/lib/cmd-review.sh` | agent:dev2（P478） | 只修复验准备与计时，不更改共享锁、其它入口或验证记录格式 |
+| `skills/teamsmith/scripts/lib/cmd-review.sh` | agent:dev2（P478候选冻结） | c97a8efe 已交付，未经新返修不得继续改动 |
+| `docs/team/reviews/P478.md`、`docs/team/reviews/P478-verify.log` | agent:dev-bob（V180临时） | 只允许工具写独立候选及合并后定点执行记录，其余主检出只读 |
 | `skills/teamsmith/tests/key-replies-ui.sh`、`key-replies-pty.sh`、`lib/reply-fixture.sh`（均在该 tests 目录） | agent:dev3（P480） | 只分离只读准备和真实终端启动；FIFO、产品、覆盖及等待不改 |
 | 其余 `skills/teamsmith/scripts/panel/src/**` 及对应README/config/SKILL设置说明 | agent:dev（默认维护权） | P471/V177已完成，P474不授写 |
 | `openspec/changes/archive/2026-11-17-pulse-project-settings-simplify/**` | PM（A13已接受） | 已验9/9七工件原样归档，临时写权收回，不再授实现写入 |
