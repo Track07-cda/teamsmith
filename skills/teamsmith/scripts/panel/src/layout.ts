@@ -38,7 +38,6 @@ import type {
   Frame,
   FrameInput,
   Hit,
-  Impediment,
   LaneWindow,
   Line,
   PageId,
@@ -2193,7 +2192,7 @@ function decisionsBlock(ctx: Ctx): Block | null {
 // ------------------------------------------------------------------ body blocks (page 3)
 
 function queueBlock(ctx: Ctx): Block | null {
-  const { s, blocks, deg, width, view } = ctx
+  const { s, panel, blocks, deg, width, view } = ctx
   const q = blocks.outbox_list
   if (!q && !deg.has('outbox_list')) return null
   if (deg.has('outbox_list') || !q) {
@@ -2216,10 +2215,11 @@ function queueBlock(ctx: Ctx): Block | null {
   }
   const lines: PlacedLine[] = []
   // delivery-truth D2：阻碍是**测量事实**（原因、观察时刻、诊断可否读），不是「有草稿」的暗示。
-  const imps: Impediment[] = q.impediments ?? []
-  if (q.impeded && q.impeded > 0) {
+  const ob = panel.outbox
+  if (!deg.has('outbox') && ob?.impeded && ob.impeded > 0) {
+    const imps = ob.impediments ?? []
     const reasons = Array.from(new Set(imps.map((i) => i.reason))).join(' · ') || s.dash
-    lines.push({ line: truncLine(ln(seg(`  ${fill(s.queueImpededLine, { n: q.impeded, reasons })}`, 'warn')), width) })
+    lines.push({ line: truncLine(ln(seg(`  ${fill(s.queueImpededLine, { n: ob.impeded, reasons })}`, 'warn')), width) })
     for (const im of imps.slice(0, 3)) {
       const when = im.diagnostic === 'available' && im.last_observed ? im.last_observed : s.queueImpededUnavailable
       lines.push({ line: truncLine(ln(seg(fill(s.queueImpededItem, { entry: im.entry, reason: im.reason, when }), 'warn')), width) })
