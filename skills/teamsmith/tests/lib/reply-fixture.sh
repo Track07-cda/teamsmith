@@ -5,8 +5,8 @@
 # 内容：断言器与计数、隔离守卫、夹具仓库（真 `team init` + 真 `team reply post`）、记录 argv 的
 # CLI shim、私有 tmux server 的起停与稳定帧等待、面板的起/捕/按键。夹具本体只写各自的场景。
 #
-# 调用方契约：先 source 本文件（它会 source tmp-root / tmux-iso / pty-wait），再定组；变量
-# sock/sess/tmp/ROOT/state/current 由 fixture_up 维护；TEAM_REPLY_EVIDENCE 指到仓外证据包。
+# 调用方契约：先 source 本文件，再定组。fixture_prepare 写好项目、回复和 argv 记录入口；
+# 真终端组用 fixture_up，另起私有会话。TEAM_REPLY_EVIDENCE 指到仓外证据包。
 set -uo pipefail
 SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SKILL_DIR="$(cd -P "$SELF_DIR/.." && pwd)"
@@ -55,7 +55,7 @@ ev_note() { [ -n "$KR_EV" ] || return 0; mkdir -p "$KR_EV" 2>/dev/null || true; 
 ev_save() { [ -n "$KR_EV" ] || return 0; [ -f "$1" ] || return 0; mkdir -p "$KR_EV" 2>/dev/null || true; cp "$1" "$KR_EV/$2" 2>/dev/null || true; }
 
 clean_env=(env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION -u TEAM_STATE_DIR
-  -u TEAM_DOCS_ABS -u TEAM_DOCS_DIR -u TEAM_SKILL_DIR -u TEAM_ALLOW_FOREIGN_IDENTITY -u TEAM_JS_BIN)
+  -u TEAM_CONFIG_FILE -u TEAM_DOCS_ABS -u TEAM_DOCS_DIR -u TEAM_SKILL_DIR -u TEAM_ALLOW_FOREIGN_IDENTITY -u TEAM_JS_BIN)
 
 kr_cli() { local r="$1"; shift; ( cd "$r" && "${clean_env[@]}" bash "$team_cli" --root "$r" "$@" ); }
 # `--print` 的时钟在行中间：用固定形状把它掩掉再比对（除时钟逐字节一致）。
@@ -73,18 +73,15 @@ kr_mask_print() { sed -E 's/[0-9]{2}:[0-9]{2}:[0-9]{2}/HH:MM:SS/g'; }
 krg_guard_baseline
 
 # ---------------------------------------------------------------- fixture project + store
-fixture_up() { # <name> <replies…>  每份回复是 `<label>:<title>:<bodyfile>`
+fixture_prepare() { # <name> <replies…>  每份回复是 `<label>|<title>|<bodyfile>`
   current="$1"
   ROOT="$tmp/$1/root"
   shift
   mkdir -p "$ROOT/docs/team" "$ROOT/.pi/team/state"
   ( cd "$ROOT" && git init -q -b main && git config user.email kr@teamsmith && git config user.name kr \
       && echo "# $1" > README.md && git add -A && git commit -qm init ) >/dev/null 2>&1
-  tmux_iso_require "key-replies-panel" "重起私有 server 前的 kill-server" --tmpdir "${TMUX_TMPDIR:-}" --sock-name "$sock"
-  tmux -L "$sock" kill-server 2>/dev/null || true
-  rm -f "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/$sock" 2>/dev/null || true
-  ( cd "$ROOT" && bash "$team_cli" init --session "$sess" --agents "dev verify" --vcs local --gates "true" \
-      --docs docs/team --task-models 'routine=deepseek/deepseek-flash' --pm-model 'deepseek/deepseek-flash' ) \
+  kr_cli "$ROOT" init --session "$sess" --agents "dev verify" --vcs local --gates "true" \
+    --docs docs/team --task-models 'routine=deepseek/deepseek-flash' --pm-model 'deepseek/deepseek-flash' \
     >"$tmp/$current/init.log" 2>&1 || { printf 'key-replies-panel: team init 失败\n' >&2; tail -3 "$tmp/$current/init.log" >&2; exit 3; }
   state="$ROOT/.pi/team/state"
   mkdir -p "$ROOT/docs/team" "$state"
@@ -96,6 +93,14 @@ fixture_up() { # <name> <replies…>  每份回复是 `<label>:<title>:<bodyfile
   done
   # 记录 argv 的 CLI shim：真 CLI 前面加一行日志（`__panel-data --block …` 的逐条调用可查）
   kr_shim_set_slow -
+}
+
+fixture_up() { # <name> <replies…>，供真终端组使用
+  tmux_iso_require "key-replies-panel" "重起私有 server 前的 kill-server" --tmpdir "${TMUX_TMPDIR:-}" --sock-name "$sock"
+  # 第一组启动前没有私有 server，kill-server 会返回非零。
+  tmux -L "$sock" kill-server 2>/dev/null || true
+  rm -f "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/$sock" 2>/dev/null || true
+  fixture_prepare "$@"
   tmux -L "$sock" new-session -d -s "$sess" -x 120 -y 32 -n bootstrap -c "$ROOT" 'sleep 900'
   tmux -L "$sock" set -g window-size manual 2>/dev/null || true
 }

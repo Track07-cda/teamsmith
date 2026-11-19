@@ -33,7 +33,7 @@ for g in "${KR_SEL[@]}"; do
   hit=0; for k in "${UI_GROUPS[@]}"; do [ "$g" = "$k" ] && hit=1; done
   [ "$hit" = "1" ] || { printf 'key-replies-ui.sh：未知组 [%s]（可选：%s）\n' "$g" "${UI_GROUPS[*]}" >&2; exit 2; }
 done
-trap reply_fixture_cleanup EXIT
+trap tmp_root_reap_all EXIT
 
 # 面板的 CLI 走记录 argv 的 shim（真 CLI 前面一行日志）：块的逐条调用可查，数据仍是真读数。
 kr_panel_snapshot_raw() { # <页> <额外参数…> → 未剥 ANSI 的原始 stdout
@@ -58,7 +58,7 @@ kr_reply_time_snapshot() { # <输出> <TZ> <at|-> <省略 0|1> <页> <额外参�
 kr_group_blocks() {
   section "blocks · 三个需求块的装配契约（3.3）"
   local b="$tmp/bl.md"; printf '块夹具正文\n' >"$b"
-  fixture_up blocks "dev2|块夹具一号|$b" "verify|块夹具二号|$b"
+  fixture_prepare blocks "dev2|块夹具一号|$b" "verify|块夹具二号|$b"
   # ① 总览一次装配：只有 summary（list/body 不在 wanted 集合里）
   reset_argv
   kr_panel_snapshot 1 --width 120 --height 28 --lang zh >"$tmp/bl-ov.txt"
@@ -154,7 +154,7 @@ FLOOD
 kr_group_machine() {
   section "machine · 机器出口零 reply 读（3.3）"
   local b="$tmp/mn.md"; printf '机器出口夹具正文\n' >"$b"
-  fixture_up machine
+  fixture_prepare machine
   kr_cli "$ROOT" monitor --print 2>/dev/null | kr_mask_print >"$tmp/m-print-before.txt"
   kr_cli "$ROOT" monitor --json 2>/dev/null | sed -E 's/"timestamp": *"[^"]*"/"timestamp": "T"/' >"$tmp/m-json-before.txt"
   printf 'lang=en\ndefaultPage=5\nmouse=off\n' >"$state/panel.conf"
@@ -182,7 +182,7 @@ kr_group_snapshots() {
   local b1="$tmp/s1.md" long="$tmp/s-long.md"
   printf '快照回复一\n第二行\n' >"$b1"
   { local i; for i in $(seq 1 200); do printf '滚动行 %s\n' "$i"; done; printf 'END-MARKER-P234\n'; } >"$long"
-  fixture_up snapshots "dev2|快照标题|$b1" "verify|长文快照|$long"
+  fixture_prepare snapshots "dev2|快照标题|$b1" "verify|长文快照|$long"
   local i
   for i in $(seq 1 58); do kr_cli "$ROOT" reply post --from dev2 --title "槽位 $i" --stdin <"$b1" >/dev/null; done
   assert_eq "snapshots：夹具 store 有 60 个编号" "$(kr_cli "$ROOT" reply list --json | python3 -c 'import json,sys;print(json.load(sys.stdin)["total_slots"])')" "60"
@@ -364,7 +364,13 @@ PYP
 kr_run_group() { # 组名到函数（`routing-regression` 带连字符，不能靠 $var 展开）
   case "$1" in
     routing-regression) kr_group_routing_regression ;;
-    *) "kr_group_$1" ;;
+    *)
+      # 真实面板读者仍会查询窗口状态；只查本轮私有目录，不连调用者的 server。
+      local -x TMUX_TMPDIR="$tmp"
+      local TMUX TMUX_PANE
+      unset TMUX TMUX_PANE
+      "kr_group_$1"
+      ;;
   esac
 }
 
