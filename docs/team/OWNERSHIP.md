@@ -17,7 +17,9 @@
 | `docs/team/reviews/V174.md`、`docs/team/reviews/V174-verify.log` | PM（计时交付接受；检查FAIL保留） | 原件已收存，P472已只读归因并关闭，历史结果不改 |
 | `docs/team/reviews/P473.md`、`docs/team/reviews/P473-verify.log` | PM（V176最终证据已接受） | 候选三臂及merged cea2b7f2同一性/语法rc0已接受，临时中央写权收回；旧完整FAIL不改，原件待中央保存后清理 |
 | `docs/team/reviews/P471.md`、`docs/team/reviews/P471-verify.log` | PM（V177已接受） | merged967da984正式PASS与c03a2705报告已接收；非作者临时中央写权收回，旧FAIL和D261边界保留 |
-| `skills/teamsmith/scripts/panel/src/**`、`skills/teamsmith/scripts/panel/panel.js`及对应README/config/SKILL设置说明 | agent:dev（默认维护权恢复） | P471/V177已完成，未经新任务不得续写；archive不改产品/测试/生成物 |
+| `skills/teamsmith/scripts/panel/src/layout.ts`、`skills/teamsmith/scripts/panel/panel.js` | agent:dev（P474） | 仅恢复消息页受阻诊断的正确读法和重建 bundle，设置页及其余 panel 路径不写 |
+| `skills/teamsmith/scripts/strings/commands.tsv` 的 board 行 | agent:dev2（P475临时） | 只修 board add 的参数用法，不改命令解析及其它帮助 |
+| 其余 `skills/teamsmith/scripts/panel/src/**` 及对应README/config/SKILL设置说明 | agent:dev（默认维护权） | P471/V177已完成，P474不授写 |
 | `openspec/changes/archive/2026-11-17-pulse-project-settings-simplify/**` | PM（A13已接受） | 已验9/9七工件原样归档，临时写权收回，不再授实现写入 |
 | `openspec/changes/archive/2026-11-16-routing-parameter-check-dedup/**` | PM（A12已接受） | 已验6/6的五工件原样归档，临时写权收回 |
 | `openspec/changes/archive/2026-11-16-config-check-execution-dedup/**` | PM（A9已接受） | 已验证7/7原样归档，不再授实现写入 |
