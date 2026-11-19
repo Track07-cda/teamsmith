@@ -21,6 +21,7 @@
 | `docs/team/reviews/P474.md`、`docs/team/reviews/P474-verify.log` | agent:verify（V179临时） | 仅工具写候选及合并后定点实际执行记录，其余主检出只读 |
 | `skills/teamsmith/scripts/strings/commands.tsv` 的 board 行 | agent:dev2（P475候选冻结） | f4a43955 已交付，未经新返修不得继续改动 |
 | `docs/team/reviews/P475.md`、`docs/team/reviews/P475-verify.log` | agent:dev-bob（V178临时） | 仅工具写定点候选/合并后实际执行记录，其余主检出只读 |
+| `docs/team/reports/P479-dev3.md` | agent:dev3（P479） | 仅交付复用既有工具的可行性结论；试验在私有临时副本，不授产品或测试写权 |
 | 其余 `skills/teamsmith/scripts/panel/src/**` 及对应README/config/SKILL设置说明 | agent:dev（默认维护权） | P471/V177已完成，P474不授写 |
 | `openspec/changes/archive/2026-11-17-pulse-project-settings-simplify/**` | PM（A13已接受） | 已验9/9七工件原样归档，临时写权收回，不再授实现写入 |
 | `openspec/changes/archive/2026-11-16-routing-parameter-check-dedup/**` | PM（A12已接受） | 已验6/6的五工件原样归档，临时写权收回 |
