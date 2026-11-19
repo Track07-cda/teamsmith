@@ -17,7 +17,8 @@
 | `docs/team/reviews/V174.md`、`docs/team/reviews/V174-verify.log` | PM（计时交付接受；检查FAIL保留） | 原件已收存，P472已只读归因并关闭，历史结果不改 |
 | `docs/team/reviews/P473.md`、`docs/team/reviews/P473-verify.log` | PM（V176最终证据已接受） | 候选三臂及merged cea2b7f2同一性/语法rc0已接受，临时中央写权收回；旧完整FAIL不改，原件待中央保存后清理 |
 | `docs/team/reviews/P471.md`、`docs/team/reviews/P471-verify.log` | PM（V177已接受） | merged967da984正式PASS与c03a2705报告已接收；非作者临时中央写权收回，旧FAIL和D261边界保留 |
-| `skills/teamsmith/scripts/panel/src/layout.ts`、`skills/teamsmith/scripts/panel/panel.js` | agent:dev（P474） | 仅恢复消息页受阻诊断的正确读法和重建 bundle，设置页及其余 panel 路径不写 |
+| `skills/teamsmith/scripts/panel/src/layout.ts`、`skills/teamsmith/scripts/panel/panel.js` | agent:dev（P474候选冻结） | 22a1c4af 已交付，未经新返修不得继续改动 |
+| `docs/team/reviews/P474.md`、`docs/team/reviews/P474-verify.log` | agent:verify（V179临时） | 仅工具写候选及合并后定点实际执行记录，其余主检出只读 |
 | `skills/teamsmith/scripts/strings/commands.tsv` 的 board 行 | agent:dev2（P475候选冻结） | f4a43955 已交付，未经新返修不得继续改动 |
 | `docs/team/reviews/P475.md`、`docs/team/reviews/P475-verify.log` | agent:dev-bob（V178临时） | 仅工具写定点候选/合并后实际执行记录，其余主检出只读 |
 | 其余 `skills/teamsmith/scripts/panel/src/**` 及对应README/config/SKILL设置说明 | agent:dev（默认维护权） | P471/V177已完成，P474不授写 |
