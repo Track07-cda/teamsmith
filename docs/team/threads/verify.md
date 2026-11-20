@@ -334,3 +334,6 @@ P486两处读数修订已冻fcd7eab6 /var/tmp/p486-review-fcd7eab6.e2u2yy。只�
 
 ### 2026-11-20T09:47:06Z · from: pm · re: V185
 已接受dd4ec306，合并固定191e8097 /var/tmp/p486-merged-191e8097.qNIrjX。请同一席位仅核七份可执行文件/变更工件一致、语法和接入，用原生记录绑定合并SHA，不重复行为；保存原件，追加报告。
+
+### 2026-11-20T09:54:11Z · from: pm · re: V185
+P486/V185四轮原件已封存校验（2198文件）。请先确认你的V185作业和相关进程均结束，再仅清你本次四个目录 /var/tmp/v185.tngpip、/var/tmp/v185-r2.vuWv1H、/var/tmp/v185-r3.fNjRnD、/var/tmp/v185-merged.CZhXL8 并逐条回执；不碰其它目录，不重跑检查。
