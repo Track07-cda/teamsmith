@@ -17,3 +17,5 @@ branch: task/P486-reminder-test-temp-roots-apply
 允许写 `skills/teamsmith/tests/remind-tool-real.{sh,mjs}`、`remind-adversarial-real.sh`、`remind-adversarial-faults.{sh,mjs}` 共五个测试文件，和自己的报告；提交静态证据后只勾本 change `tasks.md` 的 1.x。复用现有目录管理、PID 与私有终端工具，保留原有参数、退出结果、指纹检查及主动保留的证据路径。既有恢复入口、smoke、共用工具、提醒产品与正式规格不动。禁止引入进程组信号、扫描、通用监督器、测试框架或额外开关。若见现有接口不能满足已批准方案，留具体反例并回 PM，不自行扩大文件或修改规格。
 
 作者检查仅受影响 shell 的 `bash -n`、两份 `.mjs` 的 `node --check`、写集、`git diff --check`；按现有工具核对 apply 进度。不运行 2.x 行为样本、真实 Pi、故障矩阵、整套、现场提醒或模型。分步本地提交；在 `docs/team/reports/P486-dev-bob.md` 写改动、实际命令/退出码、未运行范围及精确候选 commit，不推送、不发布。完成后停止修改，交非作者独立验收。
+
+V185 首轮 `bc51f1ba`：`f7db9e77` 五项四过，2.3 FAIL。仅修真实 Pi 中断清理：`tmux kill-server` 返回时，pane 内已启动的 Pi 尚可执行退出回调，实测由此重建了刚删的工作目录。只能在本次私有 Pi 确认退出后回收本次工作目录；沿用现有私有进程身份及精确 socket，只停本轮，不使用固定等待、按进程名查杀或进程组信号，不改产品退出回调。若不能证明退出，不把目录当已安全回收。修复仅限 `remind-tool-real.{sh,mjs}` 两个文件与作者报告，只做原静态检查、不运行行为；保留正常退出码及显式证据路径，不改其余已通过的入口、场景或检查。候选交回原验证者补跑 2.3，另外四项原件直接复用。

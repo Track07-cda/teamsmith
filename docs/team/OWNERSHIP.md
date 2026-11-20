@@ -5,7 +5,8 @@
 
 | 路径 | Owner | 说明 |
 |---|---|---|
-| `skills/teamsmith/tests/remind-tool-real.{sh,mjs}`、`skills/teamsmith/tests/remind-adversarial-real.sh`、`skills/teamsmith/tests/remind-adversarial-faults.{sh,mjs}` | agent:dev-bob（P486 候选冻结） | 固定 `f7db9e77`，未经新返修不得修改 |
+| `skills/teamsmith/tests/remind-tool-real.{sh,mjs}` | agent:dev-bob（P486 定点返修） | 只改本轮私有 Pi 退出与清理时序 |
+| `skills/teamsmith/tests/remind-adversarial-real.sh`、`skills/teamsmith/tests/remind-adversarial-faults.{sh,mjs}` | agent:dev-bob（P486 已通过部分冻结） | 保持 `f7db9e77`，不重复执行或改动 |
 | `docs/team/reviews/P486.md`、`docs/team/reviews/P486-verify.log` | agent:verify（V185 临时） | 只允许原生工具写候选和合并后的定点记录；其余主检出只读 |
 | `skills/teamsmith/tests/**` | agent:dev | 本轮P471仅现有panel-p21.sh/panel-strings.mjs的设置相关断言替换；P473上述单文件除外，其它范围未授 |
 | `.github/workflows/gates.yml` | agent:dev（P326 临时） | 仅任务书明授的CI入口，不提高60分钟上限；冻结交付后归还PM |
