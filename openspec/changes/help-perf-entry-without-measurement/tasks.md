@@ -1,7 +1,7 @@
 ## 1. Apply only after proposal acceptance
 
-- [ ] 1.1 In `skills/teamsmith/tests/help-surface.sh` replace the existing `perf` claim's measurement call with the private-source handoff, expected-status and six-face check in `verification#A gate that cannot judge says so`, scenario **The perf help claim observes a handoff, not a measurement**. Remove only `perf` from the whole-suite branch. Reuse existing scratch setup, selector and outcome accounting; leave the real CLI, real measurement, `smoke` and the rest of the help check untouched.
-- [ ] 1.2 Provide static evidence of that narrow write set, the replacement of the one old verdict and the unchanged real-measurement entry. Do not run the behavioral samples as the author or create another gate section.
+- [x] 1.1 In `skills/teamsmith/tests/help-surface.sh` replace the existing `perf` claim's measurement call with the private-source handoff, expected-status and six-face check in `verification#A gate that cannot judge says so`, scenario **The perf help claim observes a handoff, not a measurement**. Remove only `perf` from the whole-suite branch. Reuse existing scratch setup, selector and outcome accounting; leave the real CLI, real measurement, `smoke` and the rest of the help check untouched.
+- [x] 1.2 Provide static evidence of that narrow write set, the replacement of the one old verdict and the unchanged real-measurement entry. Do not run the behavioral samples as the author or create another gate section.
 
 ## 2. Independent verification of the same requirement
 

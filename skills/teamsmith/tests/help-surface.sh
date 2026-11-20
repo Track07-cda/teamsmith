@@ -926,7 +926,7 @@ FACE_VOCAB="state docs config worktree skills meetings"
 TEAM_HELP_AUTH_CONDITIONS="TEAM_CONFIRM_WRITES"
 EFFECT_VOCAB="read-only writes-<face> starts-process"
 # commands whose real run is a whole suite: the probe judges a bounded window (never a silent skip)
-BOUNDED_PROBES="smoke perf"
+BOUNDED_PROBES="smoke"
 
 probe_is_bounded() { case " $BOUNDED_PROBES " in *" $1 "*) return 0 ;; esac; return 1; }
 
@@ -1041,6 +1041,53 @@ run_probe() { # <cmd> → ok/finding
   mkdir -p "$tmp/probe-tmp/$cmd"
   local eff="${MG_EFFECT[$cmd]}" faces="${MG_FACES[$cmd]}" before after i face changed missing
   before="$(fp_all "$d")"
+
+  if [ "$cmd" = perf ]; then
+    # The copied CLI resolves its own sibling target; never run the measurement in this fixture.
+    local private="$tmp/perf-cli" receipt="$tmp/logs/p-perf.receipt" physical expected_rc=23
+    if ! physical="$(cd -P "$d" && pwd -P)" || ! mkdir "$private" "$private/tests" ||
+       ! cp -a "$skill/scripts" "$private/scripts" ||
+       ! cat > "$private/tests/perf.sh" <<'PERF_RECORDER'
+status=23
+cwd="$(pwd -P)" || exit 1
+# One line of shell-quoted words: status, physical cwd, argc, then the actual argv.
+printf -v record '%q ' "$status" "$cwd" "$#" "$@"
+printf '%s\n' "${record% }" >> "$HS_PERF_RECEIPT" || exit 1
+exit "$status"
+PERF_RECORDER
+    then
+      finding "claims: perf 无法准备私有 CLI 和交接记录器"
+      return 1
+    fi
+    local -a perf_argv
+    read -r -a perf_argv <<< "$argv"
+    team="$private/scripts/team" TMPDIR="$tmp/probe-tmp/$cmd" HS_PERF_RECEIPT="$receipt" \
+      env_run "$d" "${perf_argv[@]}"
+    local rc="$HS_RC" handoff="已确认" status_note="" digest
+    printf '%s\n' "$HS_OUT" > "$tmp/logs/p-$cmd.out"
+    after="$(fp_all "$d")"
+    changed=""
+    while read -r face digest; do
+      grep -qxF -- "$face $digest" <<< "$before" || changed="${changed:+$changed }$face"
+    done <<< "$after"
+    if [ ! -e "$receipt" ]; then
+      handoff="未交接：没有回执"
+    elif ! cmp -s "$receipt" <(printf '%q %q 1 --host\n' "$expected_rc" "$physical"); then
+      handoff="回执不符：需要恰好一条完整回执，参数为 --host，目录为调用项目，状态为 $expected_rc"
+    fi
+    case "$rc" in
+      "$expected_rc") ;;
+      124) status_note="，CLI 超时" ;;
+      *) status_note="，预期退出 $expected_rc" ;;
+    esac
+    if [ "$handoff" = "已确认" ] && [ "$rc" = "$expected_rc" ] && [ -z "$changed" ]; then
+      ok "claims: perf 交接已确认（rc=$rc），调用项目六项指纹不变：$FACE_VOCAB"
+    else
+      finding "claims: perf 交接：$handoff；rc=$rc$status_note；调用项目变化：${changed:-无}"
+    fi
+    return 0
+  fi
+
   local launch_before launch_after
   launch_before="$(cat "$tmp/tmux-calls.log" "$tmp/launch.log" 2>/dev/null | wc -l)"
 
