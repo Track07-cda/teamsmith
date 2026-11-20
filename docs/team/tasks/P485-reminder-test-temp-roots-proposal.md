@@ -17,3 +17,5 @@ branch: task/P485-reminder-test-temp-roots-proposal
 在 `openspec/changes/reminder-test-temp-root-ownership/` 写元数据、proposal/design、verification delta、tasks。基准以 `A fixture's temp root resolves TMPDIR, carries an owned name, and is reclaimed` 为准；不要重写、再抄或放宽通用要求。仅增加这两份测试的工作与显式证据边界，适合独立检查，不能与默认回收冲突。写清拟改的精确测试文件及每一处的必要性。验收优先一次成功的短运行、一次可见失败/保留和一个代表性的隔离中断样本；说明如何用原行为或短等价样本覆盖另一份测试、四入口与直接调用，不能以零场景假通过，也不要求先把 P484 报告的所有矩阵执行一遍。当前只设计，不执行这些样本；不跑整套、真实性能、安装、提醒发送或真实模型。
 
 只做本 change 严格结构校验、普通全仓规格结构校验、`git diff --check` 和原账本公开文件检查。用现有 1.16，不安装或升级工具，命令 stdout/stderr/rc 与未验范围写入 `docs/team/reports/P485-dev.md`。本地分步提交，送非作者审阅；不推送、不进入实施。若发现改动会改变现有显式证据或非短的测量要求，说明缺口并以最小替代方案交 PM，不擅自扩大。
+
+V184 首轮 `1dc98ef4` 退回 R1–R4，按 `docs/team/reviews/reminder-test-temp-root-ownership-proposal.md` 一次修订：恢复入口保持原样、至多五个测试文件；用现有 helper 按字节和同一确切私有 socket 选择/收尾；普通中断必须等当前已知命令落定再删工作目录，仅对现有两个不同中断边界各取一种短证据，不写进程组/扫描/通用监督逻辑；差异规格只管本次显式证据边界，注销重复验收。修完仅运行本 change strict 与 diff，不执行任何行为测试或改代码。报告记变动与短回执，交原审阅者。
