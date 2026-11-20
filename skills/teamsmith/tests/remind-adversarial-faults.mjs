@@ -2,14 +2,44 @@
 // P444: real SIGKILL injection around Reminder intent/observation and writeAtomic boundaries.
 // Faults exist only in per-case scratch copies. Recovery always runs the unmodified production helper.
 import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
-import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { spawn, spawnSync } from 'node:child_process'
+import { once } from 'node:events'
+import { cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { constants } from 'node:os'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { setTimeout as delay } from 'node:timers/promises'
+import { setImmediate as immediate, setTimeout as delay } from 'node:timers/promises'
 
 const tests = dirname(fileURLToPath(import.meta.url)), skill = dirname(tests)
-const root = mkdtempSync('/var/tmp/p444-remind-faults-'), home = join(root, 'home'), tmp = join(root, 'tmp')
+if (!process.env._P444_WORK) {
+  // The owner skips the shell-only fingerprint for a direct driver invocation.
+  const owner = spawn('bash', [join(tests, 'remind-adversarial-faults.sh'), ...process.argv.slice(2)], {
+    env: { ...process.env, _P444_NODE: process.execPath }, stdio: 'inherit',
+  })
+  for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => owner.kill(signal))
+  const [code, signal] = await once(owner, 'exit')
+  process.exit(code ?? 128 + constants.signals[signal])
+}
+
+let stopSignal
+for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => { stopSignal ??= signal })
+function checkStop() {
+  if (stopSignal) process.exit(128 + constants.signals[stopSignal])
+}
+async function stopPoint() {
+  // Give pending signals a poll turn even when returning from a command in a callback.
+  await immediate()
+  await immediate()
+  checkStop()
+}
+async function runSync(bin, args, options) {
+  checkStop()
+  try { return spawnSync(bin, args, options) }
+  finally { await stopPoint() }
+}
+
+const root = process.env._P444_WORK, home = join(root, 'home'), tmp = join(root, 'tmp')
+delete process.env._P444_WORK
 mkdirSync(home, { recursive: true }); mkdirSync(tmp, { recursive: true })
 const runner = process.execPath, team = join(skill, 'scripts/team'), original = join(skill, 'scripts/state-authority.mjs')
 const env = { ...process.env, HOME: home, TMPDIR: tmp }
@@ -18,41 +48,42 @@ let passed = 0, failed = 0
 const stateFile = repo => join(repo, '.pi/team/state/reminders/state.json')
 const snap = repo => JSON.parse(readFileSync(stateFile(repo), 'utf8'))
 const lastBatch = repo => snap(repo).batches.at(-1)
-const run = (bin, args, options = {}) => {
-  const result = spawnSync(bin, args, { encoding: 'utf8', env, ...options })
+const run = async (bin, args, options = {}) => {
+  const result = await runSync(bin, args, { encoding: 'utf8', env, ...options })
   assert.equal(result.error, undefined, `${bin}: ${result.error}`)
   return result
 }
 const good = (result, label) => assert.equal(result.status, 0, `${label}: ${result.stdout}${result.stderr}`)
-function newRepo(name) {
+async function newRepo(name) {
   const repo = join(root, name); mkdirSync(repo, { recursive: true })
-  good(run('git', ['init', '-q', repo]), 'git init')
-  good(run('git', ['-C', repo, '-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid',
+  good(await run('git', ['init', '-q', repo]), 'git init')
+  good(await run('git', ['-C', repo, '-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid',
     'commit', '-q', '--allow-empty', '-m', 'fixture']), 'git commit')
   return repo
 }
-function authority(helper, repo, args, label = 'authority') {
-  const result = run(runner, [helper, '--cli', repo, join(repo, '.pi/team/state'), ...args],
+async function authority(helper, repo, args, label = 'authority') {
+  const result = await run(runner, [helper, '--cli', repo, join(repo, '.pi/team/state'), ...args],
     { cwd: repo, stdio: ['ignore', 'pipe', 'pipe'] })
   writeFileSync(join(repo, 'last-authority.txt'), (result.stdout ?? '') + (result.stderr ?? ''))
   return result
 }
-function goodAuthority(helper, repo, args, label) {
-  const result = authority(helper, repo, args, label)
+async function goodAuthority(helper, repo, args, label) {
+  const result = await authority(helper, repo, args, label)
   good(result, `${label}: ${readFileSync(join(repo, 'last-authority.txt'), 'utf8')}`)
   return JSON.parse(result.stdout)
 }
-function setup(op, point) {
-  const repo = newRepo(`${op}-${point}`)
-  const add = run('bash', [team, '--root', repo, 'remind', 'add', '--after', '1s', '--message', `P444 ${op} ${point}`], { cwd: repo })
+async function setup(op, point) {
+  const repo = await newRepo(`${op}-${point}`)
+  const add = await run('bash', [team, '--root', repo, 'remind', 'add', '--after', '1s', '--message', `P444 ${op} ${point}`], { cwd: repo })
   good(add, 'real one-second Reminder create')
-  goodAuthority(original, repo, ['standby-on', '--reason', 'G1', '--json'], 'G1')
+  await goodAuthority(original, repo, ['standby-on', '--reason', 'G1', '--json'], 'G1')
   return repo
 }
 async function admit(repo) {
   await delay(1100) // Real due time; the fixture never rewrites a clock or a callback timestamp.
+  await stopPoint()
   const started = new Date(Date.now() - 10000).toISOString()
-  const result = run(runner, [join(skill, 'scripts/remind-tick.mjs'), '--root', repo, '--state-dir', join(repo, '.pi/team/state'),
+  const result = await run(runner, [join(skill, 'scripts/remind-tick.mjs'), '--root', repo, '--state-dir', join(repo, '.pi/team/state'),
     '--pulse-started', started, '--json'], { cwd: repo, stdio: ['ignore', 'pipe', 'pipe'] })
   good(result, `due admission: ${result.stdout}${result.stderr}`)
   assert.equal(snap(repo).reminders[0].phase, 'queued')
@@ -99,13 +130,13 @@ function p444Fault(point, op, value) {
   return join(dir, 'state-authority.mjs')
 }
 async function runCase(op, point) {
-  const repo = setup(op, point)
-  await admit(repo)
-  const intent = op === 'remind-intent' ? null : makeIntent(repo)
+  const repo = await setup(op, point)
+  await admit(repo) // runSync has yielded and checked for stop before the next write or injection.
+  const intent = op === 'remind-intent' ? null : await makeIntent(repo)
   const helper = faultyHelper(op, point), mark = join(repo, 'fault-mark.txt')
   const requestEnv = { ...env, P444_FAULT_OP: op, P444_KILL_POINT: point, P444_FAULT_MARK: mark }
   const args = op === 'remind-intent' ? ['remind-intent', '--session', 'p444-session', '--pid', '4242'] : observeArgs(intent)
-  const result = spawnSync(runner, [helper, '--cli', repo, join(repo, '.pi/team/state'), ...args],
+  const result = await runSync(runner, [helper, '--cli', repo, join(repo, '.pi/team/state'), ...args],
     { cwd: repo, env: requestEnv, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   assert.notEqual(result.status, 0, `${op} ${point}: injected process must die`)
   assert.equal(readFileSync(mark, 'utf8').trim(), point, `${op} ${point}: exact death point reached`)
@@ -114,12 +145,12 @@ async function runCase(op, point) {
   if (op === 'remind-intent') {
     if (committed) {
       assert.equal(current.batches.length, 1); assert.equal(current.reminders[0].phase, 'intent')
-      const recovered = goodAuthority(original, repo, args, 'restart with original helper')
+      const recovered = await goodAuthority(original, repo, args, 'restart with original helper')
       assert.equal(recovered.action, 'wait', 'a durable intent is not sendable again after restart')
       assert.equal(snap(repo).batches.length, 1)
     } else {
       assert.equal(current.batches.length, 0); assert.equal(current.reminders[0].phase, 'queued')
-      const recovered = goodAuthority(original, repo, args, 'restart with original helper')
+      const recovered = await goodAuthority(original, repo, args, 'restart with original helper')
       assert.equal(recovered.action, 'send', 'a pre-intent crash remains eligible once')
       assert.equal(snap(repo).batches.length, 1)
     }
@@ -134,9 +165,9 @@ async function runCase(op, point) {
       assert.equal(current.standby.on, true); assert.equal(current.batches[0].right, 'unspent')
       assert.equal(current.audit.filter(entry => entry.op === 'remind-observed').length, 0)
     }
-    goodAuthority(original, repo, ['standby-off', '--json'], 'manual off before fresh G2')
-    goodAuthority(original, repo, ['standby-on', '--reason', 'fresh G2', '--json'], 'fresh G2')
-    const replay = goodAuthority(original, repo, observeArgs(intent), 'original-helper replay')
+    await goodAuthority(original, repo, ['standby-off', '--json'], 'manual off before fresh G2')
+    await goodAuthority(original, repo, ['standby-on', '--reason', 'fresh G2', '--json'], 'fresh G2')
+    const replay = await goodAuthority(original, repo, observeArgs(intent), 'original-helper replay')
     assert.equal(replay.outcome, committed ? 'duplicate' : 'observed')
     assert.equal(replay.standby, committed ? undefined : 'generation-ambiguous')
     current = snap(repo)
@@ -148,16 +179,12 @@ async function runCase(op, point) {
 }
 
 const points = ['before-apply', 'after-apply', 'before-file-fsync', 'after-file-fsync', 'after-rename', 'after-dir-fsync']
-try {
-  const lock = run('flock', ['--version'])
-  assert.equal(lock.status, 0, 'flock is required; missing evidence is a failure, not SKIP')
-  for (const op of ['remind-intent', 'remind-observe']) for (const point of points) {
-    try { await runCase(op, point); console.log(`FAULT PASS ${op} ${point}`); passed++ }
-    catch (error) { console.error(`FAULT FAIL ${op} ${point}: ${error.stack}`); failed++ }
-  }
-} finally {
-  if (process.env.P444_KEEP) console.log(`kept fault evidence=${root}`)
-  else rmSync(root, { recursive: true, force: true })
+const lock = await run('flock', ['--version'])
+assert.equal(lock.status, 0, 'flock is required; missing evidence is a failure, not SKIP')
+for (const op of ['remind-intent', 'remind-observe']) for (const point of points) {
+  try { await runCase(op, point); await stopPoint(); console.log(`FAULT PASS ${op} ${point}`); passed++ }
+  catch (error) { await stopPoint(); console.error(`FAULT FAIL ${op} ${point}: ${error.stack}`); failed++ }
 }
+await stopPoint()
 console.log(`fault-matrix: passed=${passed} failed=${failed}`)
 if (failed) process.exitCode = 1

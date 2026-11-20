@@ -1,9 +1,9 @@
 ## 1. Apply after proposal acceptance
 
-- [ ] 1.1 Implement the shared real-Pi lifetime in its normal shell, adversarial shell and driver. Keep
+- [x] 1.1 Implement the shared real-Pi lifetime in its normal shell, adversarial shell and driver. Keep
   both existing evidence layouts, the existing arguments, and the private socket. Covers caller evidence
   and default scene output. Do not edit the recovery wrapper or smoke.
-- [ ] 1.2 Implement the managed fault lifetime in its shell and driver. Keep explicit fault records and
+- [x] 1.2 Implement the managed fault lifetime in its shell and driver. Keep explicit fault records and
   each entry's existing result. Both lifetimes must finish the active command before reaping work.
 
 ## 2. Independent check on one fixed Apply revision

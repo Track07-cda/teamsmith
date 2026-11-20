@@ -130,7 +130,7 @@ _tmp_root_proc_start() {
   # shellcheck disable=SC2086
   set -- $stat
   [ -n "${20:-}" ] || return 1
-  printf '%s\n' "$20"
+  printf '%s\n' "${20}"
 }
 
 # 0 = pid 活着且（给了 start 时）就是记下的那个进程；僵尸（Z）算死。

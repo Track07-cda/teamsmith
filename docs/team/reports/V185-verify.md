@@ -1,10 +1,10 @@
 # V185 · 两份提醒测试的清理、保留和中断复验
 
-agent: verify · status: REWORK · time: 2026-11-20T09:19:26Z
+agent: verify · status: PASS（候选定点补验） · time: 2026-11-20T09:43:59Z
 
 branch: `task/V185-reminder-test-temp-roots-verify` · PR/MR: -
 
-**当前结论：`f18c60e4` 仍不可合并。** 定点补验发现，返修把父进程号误当成 Pi 的启动时间。关闭终端后 Pi 被重新托管，测试误以为 Pi 已退出，开始删目录时 Pi 仍在运行；目录仍然留下。首轮其余四项未重跑，结果及原件保留。见文末补验。
+**当前结论：接受候选 `fcd7eab6` 的定点补验。** 两处读取结果与内核一致。真实 Pi 的父进程变为 1 后，原进程身份仍被正确识别；实际观察到 Pi 退出时工作目录尚在，之后才删除目录。入口返回 `143`，命名证据不变，独立私有终端仍正常。其余四项沿用首轮原件；两轮历史 FAIL 均保留。接受候选不等于完成合并后核对。
 
 **首轮结论：不合并 `f7db9e77`。** 五项中四项通过；真实 Pi 收到 TERM 后，私有终端关闭、指定场景日志保留，但 Pi 的退出回调在原工作目录被删除后重建了它。运行返回 `143`，工作目录仍在。故障测试的中断没有这个问题：真实入队写完，驱动自己以 `143` 退出，未开始故障注入，工作目录消失。
 
@@ -122,3 +122,36 @@ v185-candidate-r2 exit=1, wall=15.0s
 **范围及静态回执：** `f7db9e77..f18c60e4` 只有两份真实 Pi 测试及首轮作者报告；`a4904676..f18c60e4` 只改两份测试；`f18c60e4..a76a9ede` 只改作者报告。候选前后干净，差异检查、`bash -n`、`node --check`、OpenSpec 1.16.0 单变更 `--strict` 均 rc=0（`static/`）。2.2、2.4 故障入口字节不变；2.5 的回执在启动任何 Pi 前返回，没有新的场景身份供收尾等待；2.1 的普通场景仍先等 Pi 落 `done` 或确认 Pi 已停止才关 session（`remind-tool-real.mjs:195–220`），新逻辑只读该场景已有的启动回执，正常完成路径不依赖此时 Pi 还活着。2.1、2.2、2.4、2.5 沿用首轮原件，未作为 `f18c60e4` 重新实跑。
 
 **BLOCKED:** F1 仍未闭合。请 PM 让实现者保证实际比较的是内核启动刻度，而不是父进程号；如改共用函数，先明确其他调用受影响的范围，再决定必要的定点验证。两个版本的正式 FAIL 和报告均保留于各自证据根的 `formal-candidate/`；返修原件在 `/var/tmp/v185-r2.vuWv1H/`。未改候选、共享脚本、规格勾选或首轮原件。本人工作树在本轮报告定稿前重跑上述 ledger-ban 命令，`files=2964 hits=0`、rc=0（`ledger-ban.log`）。
+
+## 第三轮 · `fcd7eab6` 定点补验 · 2026-11-20T09:43:59Z
+
+**2.3 通过，F1 闭合。** 仅向真实 Node 入口 PID `2148989` 发 TERM。活 pane `%0` 的实际 `#{socket_path}` 为 `/var/tmp/.t-1000.9g2mLO/s`；普通路径 143 字节，helper 第一候选为 84 字符、110 字节，触发 `/var/tmp` 短回退。实际 `pm.pid.spawn`、`session-start` 和 `/proc` 一致指向 Pi `2153713`。关闭 tmux 返回时不再假定 Pi 已退出，顺序如下。
+
+| 实际顺序（UTC） | 原件 |
+|---|---|
+| `09:43:29.600878` owner 记下 `2153713:88520554`，与独立读取吻合，初始 PPID `2153706` | `23/lifetime.tsv`、`23/observer.jsonl`、`23/real-pi-spawn-receipt` |
+| `09:43:29.605974` 私有 tmux 关闭调用返回 | `23/lifetime.tsv` |
+| `09:43:29.883698969` 独立 pidfd 观察 Pi 已退出：短暂 `Z`，PPID 已变为 `1`，启动刻度仍为 `88520554`；此时工作目录仍存在 | `23/observer.jsonl` |
+| `09:43:29.932081` owner 等 Pi 函数成功返回；`.937571` 回收前 Pi 已不在；`09:43:30.005998` 回收结束，目录不存在 | `23/lifetime.tsv` |
+
+入口 rc=143、stderr 为空；事后六个私有进程都不在，短 socket 目录不存在，确切 socket 的 `has-session` 返回 `1`，无关私有终端的 `has-session` 返回 `0`。保留的 `session-start` 与 `requests.jsonl` 前后字节相同。没有靠固定延迟认定进程已退出或目录已安全删除。
+
+**两处读取对照通过。** 同一个本轮自建的无关进程 PID `2147740`，独立读取 `/proc/<pid>/stat` 得 `88520410`；从固定检出的 `lib/tmp-root.sh` 直接调用 `_tmp_root_proc_start`，从 `tmp-hygiene.sh` 逐字提取完整 `_proc_start` 后直接调用，均返回 `88520410`。父 PID `2147445` 接 `0` 得 `21474450`，不是这两次结果。命令、输出、rc=0、真实内核值和随后回收该受控进程的确认均在 `readers/`。没有加载 `tmp-hygiene.sh` 的命令入口、扫描或清扫。
+
+```text
+$ TMPDIR=/var/tmp OPENSPEC_TELEMETRY=0 TEAM_GATES='/usr/bin/python3 /var/tmp/v185-r3.fNjRnD/run.py' \
+    bash skills/teamsmith/scripts/team review P486 \
+    --dir /var/tmp/p486-review-fcd7eab6.e2u2yy --branch fcd7eab6985568bcb7ccb115639ccd3e9ca195c2
+Change 'reminder-test-temp-root-ownership' is valid
+Both existing readers for pid=2147740: /proc tick=88520410 tmp-root=88520410 tmp-hygiene=88520410; parent=2147445
+VERIFIED 2.3 only: tracked Pi exited before reap; no recreated root, short socket gone, two evidence records byte-identical, other session still alive
+checkout clean · HEAD=fcd7eab69 · executor=verify · queued=0s · ran=4s · PASS
+v185-candidate-r3 exit=0, wall=20.4s
+```
+
+**静态与复用边界。** 相对第二轮，两份公共工具各只把 `"$20"` 换为 `"${20}"`；其他测试和规格字节相同，连同候选进入的首轮作者报告不算可执行变化。`fcd7eab6..a1c85a77` 仅改作者报告。候选前后干净，两份 `bash -n`、差异检查和 OpenSpec 1.16.0 单变更 strict 均 rc=0（`static/`）。
+
+- `tmp-root.sh:200–263,321–343` 中，工作根与本轮进程的登记和读取都使用同一函数，既有的销毁与 KEEP 判定未变。正常 2.1/2.2 的 owner 未换父进程，2.4 的驱动在原 shell 等待期间保持同一父进程直至退出；2.5 没有启动 Pi。保留它们的原行为证据，不把它们称为在最终候选重新运行。2.3 单独补上原判据以及此次进程读数改动最直接影响的路径。
+- `tmp-hygiene.sh:169–177,795–816,1217` 中，这个读值用于列表的 owner 状态说明；占用判定仍看 `_occupants_of`，未改扫描或清扫分支。旧版本曾写入的 `start=` 并不等于内核刻度，本次不声称旧标记兼容或已检验清扫；没有运行扫描、清扫或碰其它运行的目录。
+
+**最终评估：** 实施清单仍为 `2/7`，未代勾 2.x；合并前核验范围内，证据为首轮四项实跑 + 第三轮 2.3 及两函数读数，不是一次完整重跑。CRITICAL 0 · WARNING 0 · SUGGESTION 0；下一步仅在 PM 合并后核合并版同一性、语法和接入，无需重跑场景。`/var/tmp/v185-r3.fNjRnD/` 与 `formal-candidate/` 保留本次原始命令、stdout/stderr/rc、时序与原生 PASS 记录；前两轮原件及各自的正式 FAIL 原样保留。本轮本人工作树的同一 ledger-ban 命令 `files=2964 hits=0`、rc=0（`ledger-ban.log`）。

@@ -164,7 +164,7 @@ _proc_start() { # <pid> → /proc/<pid>/stat 的 starttime
   # shellcheck disable=SC2086
   set -- $stat
   [ -n "${20:-}" ] || return 1
-  printf '%s\n' "$20"
+  printf '%s\n' "${20}"
 }
 _proc_alive() { # <pid> [start]
   local pid="${1:-}" want="${2:-}" st state

@@ -2,28 +2,52 @@
 // P442 private real Pi + private tmux + controlled loopback provider. No live team, credentials or model.
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { spawnSync } from 'node:child_process'
-import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { spawn, spawnSync } from 'node:child_process'
+import { once } from 'node:events'
+import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { constants } from 'node:os'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { setTimeout as delay } from 'node:timers/promises'
+import { setImmediate as immediate, setTimeout as delay } from 'node:timers/promises'
 
 const tests = dirname(fileURLToPath(import.meta.url)), skill = dirname(tests)
+// Direct Node calls (including the recovery entry) use the same owner as the shell.
+if (!process.env._P442_WORK) {
+  const owner = spawn('bash', [join(tests, 'remind-tool-real.sh'), ...process.argv.slice(2)], {
+    env: { ...process.env, _P442_NODE: process.execPath }, stdio: 'inherit',
+  })
+  for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => owner.kill(signal))
+  const [code, signal] = await once(owner, 'exit')
+  process.exit(code ?? 128 + constants.signals[signal])
+}
+
+let stopSignal
+for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => { stopSignal ??= signal })
+function checkStop() {
+  if (stopSignal) process.exit(128 + constants.signals[stopSignal])
+}
+async function stopPoint() {
+  // Cross a poll turn even if the command returned in an I/O callback before this turn's check phase.
+  await immediate()
+  await immediate()
+  checkStop()
+}
+async function runSync(bin, args, options) {
+  checkStop()
+  try { return spawnSync(bin, args, options) }
+  finally { await stopPoint() }
+}
+
 const selection = (process.argv.find(a => a.startsWith('--select='))?.slice(9) ?? 'pm,large,identity,doctor').split(',')
-const evidence = resolve(process.env.P442_EVIDENCE ?? `/var/tmp/p442-real-evidence-${Date.now()}`)
-mkdirSync(evidence, { recursive: true, mode: 0o700 })
-// Resolve against the caller's PATH before replacing HOME for the private Pi processes.
-const pi = process.env.P442_PI || spawnSync('bash', ['-c', 'command -v pi'], { encoding: 'utf8' }).stdout.trim()
-assert(pi, 'Pi not found on caller PATH (or set P442_PI)')
-const temporary = mkdtempSync(join(evidence, 'run-')), socket = join(temporary, 'socket')
-const bunbin = dirname(pi)
+const { _P442_WORK: temporary, _P442_EVIDENCE: evidence, _P442_SOCKET: socket, _P442_PATH: privatePath,
+  _P442_PI: pi, _P442_SCENES: launchedScenes } = process.env
 console.log(`remind-tool-real: pi=${pi}`)
 mkdirSync(join(temporary, 'driver-home'))
-const base = { HOME: join(temporary, 'driver-home'), PATH: `${bunbin}:/usr/local/bin:/usr/bin:/bin`, LANG: 'C.UTF-8',
+const base = { HOME: join(temporary, 'driver-home'), PATH: privatePath, LANG: 'C.UTF-8',
   TERM: 'xterm-256color', USER: process.env.USER ?? 'fixture', LOGNAME: process.env.LOGNAME ?? 'fixture', TMPDIR: temporary }
 const sh = value => `'${value.replaceAll("'", "'\\''")}'`
-function command(bin, args, options = {}) {
-  const result = spawnSync(bin, args, { encoding: 'utf8', env: base, ...options })
+async function command(bin, args, options = {}) {
+  const result = await runSync(bin, args, { encoding: 'utf8', env: base, ...options })
   assert.equal(result.error, undefined, `${bin}: ${result.error}`)
   assert.equal(result.status, 0, `${bin} ${args.join(' ')}: ${result.stderr}\n${result.stdout}`)
   return result.stdout
@@ -40,6 +64,7 @@ async function until(test, label) {
   const end = Date.now() + 90000 // Fixture watchdog, not a product latency claim.
   let last
   for (;;) {
+    checkStop()
     try { if (test()) return } catch (e) { last = e } // A snapshot/process may not exist on the first poll.
     if (Date.now() > end) throw new Error(`watchdog: ${label}: ${last?.message ?? 'condition stayed false'}`)
     await delay(50)
@@ -61,35 +86,39 @@ server = createServer(async (req, res) => {
   let raw = ''; for await (const chunk of req) raw += chunk
   const body = JSON.parse(raw), name = req.url.split('/')[1], plan = plans.get(name)
   if (!plan) { res.writeHead(404); res.end(); return }
+  checkStop()
   const n = plan.requests++
   appendFileSync(join(plan.dir, 'requests.jsonl'), JSON.stringify(body) + '\n')
   if (n === (plan.gateN ?? 0) && plan.gate) await plan.gate
+  checkStop()
   await plan.respond({ body, n, res, plan })
 })
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+checkStop()
 const port = server.address().port
-function publishLaunch(info) {
+async function publishLaunch(info) {
   const source = `source ${sh(join(info.skill, 'scripts/lib/common.sh'))}; source ${sh(join(info.skill, 'scripts/lib/cmd-config.sh'))}; team_load_config; team_pm_metadata_publish p442-${info.name}`
-  command('bash', ['-c', source], { cwd: info.root, env: info.env })
+  await command('bash', ['-c', source], { cwd: info.root, env: info.env })
 }
-function doctor(info) {
-  const result = spawnSync('bash', [join(info.skill, 'scripts/team'), '--root', info.root, 'doctor'],
+async function doctor(info) {
+  const result = await runSync('bash', [join(info.skill, 'scripts/team'), '--root', info.root, 'doctor'],
     { cwd: info.root, env: { ...info.env, TMUX: `${socket},${info.serverPid},0`, TMUX_PANE: info.pane }, encoding: 'utf8' })
   const output = result.stdout + result.stderr
   writeFileSync(join(info.dir, `doctor-${Date.now()}.txt`), output)
   return output
 }
 async function start(name, respond, opts = {}) {
+  checkStop()
   const dir = join(evidence, name), root = join(temporary, name), home = join(root, 'home'), state = join(root, '.pi/team/state'), config = join(root, '.pi/team/config.sh')
   for (const path of [dir, home, join(home, '.pi/agent')]) mkdirSync(path, { recursive: true })
   const runSkill = opts.skillCopy ? join(root, 'skill') : skill
   if (opts.skillCopy) cpSync(skill, runSkill, { recursive: true })
   if (opts.mutate) opts.mutate(runSkill)
   writeFileSync(join(home, '.pi/agent/settings.json'), JSON.stringify({ retry: { enabled: false }, compaction: { enabled: false } }))
-  command('git', ['init', '-q', '-b', 'main'], { cwd: root })
+  await command('git', ['init', '-q', '-b', 'main'], { cwd: root })
   const session = `p442-${name}`, fixture = join(tests, 'fixtures/remind-tool-provider.ts')
   const extra = `--offline --no-extensions --no-skills --no-context-files -e ${sh(fixture)}`
-  command('bash', [join(skill, 'scripts/team'), 'init', '--no-skills', '--session', session,
+  await command('bash', [join(skill, 'scripts/team'), 'init', '--no-skills', '--session', session,
     '--agents', 'dev', '--vcs', 'local', '--gates', 'true', '--pm-model', 'p442/controlled',
     '--task-models', 'routine=p442/controlled analysis=p442/controlled verify=p442/controlled code=p442/controlled'], { cwd: root, env: base })
   writeFileSync(join(dir, 'config.generated.sh'), readFileSync(config))
@@ -98,19 +127,23 @@ async function start(name, respond, opts = {}) {
   const env = { ...base, HOME: home, PI_CODING_AGENT_DIR: join(home, '.pi/agent'), P442_EVIDENCE: dir,
     P442_ENDPOINT: `http://127.0.0.1:${port}/${name}/v1`, TEAM_REMIND_POLL_MS: '200',
     TEAM_PI_BIN: pi, TEAM_PM_EXTRA_PI_ARGS: extra, ...(opts.env ?? {}) }
-  const info = { name, dir, root, home, state, config, session, env, skill: runSkill, pane: '', done: join(dir, 'done') }
+  const manualLaunch = ['ordinary', 'worker'].includes(opts.invalid)
+  const receiptPath = manualLaunch ? 'home/.fixture-pi.pid' : '.pi/team/state/pm.pid.spawn'
+  const spawnReceipt = join(root, receiptPath)
+  const info = { name, dir, root, home, state, config, session, env, skill: runSkill, pane: '', spawnReceipt, done: join(dir, 'done') }
   let launch
-  if (['ordinary', 'worker'].includes(opts.invalid)) {
+  if (manualLaunch) {
     let cwd = root
     if (opts.invalid === 'worker') {
-      cwd = join(root, 'worker'); writeFileSync(join(root, 'README'), 'fixture'); command('git', ['add', 'README'], { cwd: root })
-      command('git', ['-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'fixture'], { cwd: root })
-      command('git', ['worktree', 'add', '-q', '--detach', cwd, 'HEAD'], { cwd: root })
+      cwd = join(root, 'worker'); writeFileSync(join(root, 'README'), 'fixture'); await command('git', ['add', 'README'], { cwd: root })
+      await command('git', ['-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'fixture'], { cwd: root })
+      await command('git', ['worktree', 'add', '-q', '--detach', cwd, 'HEAD'], { cwd: root })
     }
-    launch = `cd ${sh(cwd)} && exec ${sh(pi)} --provider p442 --model controlled -e ${sh(join(runSkill, 'extension/team-remind.ts'))} ${extra} @${sh(prompt)}`
+    // These two cases bypass team_pm_launch_cmd; record the same pre-exec PID for cleanup.
+    launch = `cd ${sh(cwd)} && printf '%s\\n' "$$" > ${sh(spawnReceipt)} && exec ${sh(pi)} --provider p442 --model controlled -e ${sh(join(runSkill, 'extension/team-remind.ts'))} ${extra} @${sh(prompt)}`
   } else {
-    const sourceScript = `source ${sh(join(runSkill, 'scripts/lib/common.sh'))}; source ${sh(join(runSkill, 'scripts/lib/cmd-config.sh'))}; team_load_config; team_pm_launch_cmd ${sh(prompt)} ${sh(join(state, 'pm.pid.spawn'))}`
-    launch = command('bash', ['-c', sourceScript], { cwd: root, env })
+    const sourceScript = `source ${sh(join(runSkill, 'scripts/lib/common.sh'))}; source ${sh(join(runSkill, 'scripts/lib/cmd-config.sh'))}; team_load_config; team_pm_launch_cmd ${sh(prompt)} ${sh(spawnReceipt)}`
+    launch = await command('bash', ['-c', sourceScript], { cwd: root, env })
     if (opts.invalid === 'no-entry') launch = launch.replace(` -e ${join(runSkill, 'extension/team-remind.ts')}`, '')
   }
   // Mutate after computing the directed launch so its environment still belongs to the real pane.
@@ -128,27 +161,30 @@ async function start(name, respond, opts = {}) {
   const gate = opts.deferFirstResponse ? new Promise(resolve => { release = resolve }) : null
   plans.set(name, { requests: 0, dir, state, respond, gate })
   const window = opts.invalid === 'forged' ? 'not-pm' : 'pm'
-  tmux('new-session', '-d', '-s', session, '-n', window, '-c', root, 'sleep 600')
-  tmux('set-option', '-t', session, 'remain-on-exit', 'on')
-  const pane = tmux('display-message', '-p', '-t', `${session}:${window}`, '#{pane_id}').trim(); info.pane = pane
-  info.serverPid = tmux('display-message', '-p', '-t', pane, '#{pid}').trim()
+  await tmux('new-session', '-d', '-s', session, '-n', window, '-c', root, 'sleep 600')
+  await tmux('set-option', '-t', session, 'remain-on-exit', 'on')
+  const pane = (await tmux('display-message', '-p', '-t', `${session}:${window}`, '#{pane_id}')).trim(); info.pane = pane
+  info.serverPid = (await tmux('display-message', '-p', '-t', pane, '#{pid}')).trim()
   const script = join(root, 'launch.sh')
   const assignments = Object.entries(env).map(([key, value]) => `export ${key}=${sh(value)};`).join('\n')
   const launchError = join(dir, 'launch-stderr.txt')
   writeFileSync(script, `#!/usr/bin/env bash\n${assignments}\nunset TEAM_ROOT TEAM_MAIN_ROOT TEAM_CONFIG_FILE TEAM_STATE_DIR\nbash -c ${sh(launch)} 2>${sh(launchError)}\nrc=$?; printf '%s\\n' "$rc" >${sh(info.done)}\nsleep 600\n`)
-  tmux('respawn-pane', '-k', '-t', pane, `bash ${sh(script)}`)
+  // Tell the owner before requesting the launch, even if interrupted before Pi can log session_start.
+  appendFileSync(launchedScenes, `${name}\t${receiptPath}\n`)
+  await tmux('respawn-pane', '-k', '-t', pane, `bash ${sh(script)}`)
   await until(() => existsSync(join(dir, 'session-start')) || existsSync(info.done), `${name} session_start`)
   if (existsSync(info.done) && !existsSync(join(dir, 'session-start'))) {
-    const output = tmux('capture-pane', '-p', '-t', pane, '-S', '-')
+    const output = await tmux('capture-pane', '-p', '-t', pane, '-S', '-')
     writeFileSync(join(dir, 'launch-output.txt'), output)
     throw new Error(`${name} Pi exited before session_start: rc=${readFileSync(info.done, 'utf8').trim()}\n${readFileSync(launchError, 'utf8')}${output}`)
   }
-  if (!['ordinary', 'worker', 'forged', 'no-entry'].includes(opts.invalid)) publishLaunch(info)
+  if (!['ordinary', 'worker', 'forged', 'no-entry'].includes(opts.invalid)) await publishLaunch(info)
   if (release) release()
   if (opts.invalid === 'no-entry' && release) release()
-  const tick = () => {
+  const tick = async () => {
     if (['ordinary', 'worker', 'forged', 'no-entry'].includes(opts.invalid)) return
-    spawnSync(process.execPath, [join(runSkill, 'scripts/remind-tick.mjs'), '--root', root, '--state-dir', state,
+    await stopPoint()
+    await runSync(process.execPath, [join(runSkill, 'scripts/remind-tick.mjs'), '--root', root, '--state-dir', state,
       '--pulse-started', new Date().toISOString(), '--json'], { cwd: root, env, stdio: 'ignore' })
   }
   const armTicker = () => setInterval(tick, 250)
@@ -161,10 +197,13 @@ async function stopPi(info) {
   if (!existsSync(info.done)) {
     const pid = Number(readFileSync(join(info.dir, 'session-start'), 'utf8').trim())
     const alive = () => { try { process.kill(pid, 0); return true } catch { return false } }
-    tmux('send-keys', '-t', info.pane, '-l', '/p442-control stop'); tmux('send-keys', '-t', info.pane, 'Enter')
+    await tmux('send-keys', '-t', info.pane, '-l', '/p442-control stop'); await tmux('send-keys', '-t', info.pane, 'Enter')
     // team_pm_start restarts do not use launch.sh, so they have no `done` receipt. Wait for either
     // that receipt or the actual process exit; a stuck private fixture is killed by its recorded pid.
-    for (let n = 0; n < 200 && !existsSync(info.done) && alive(); n++) await delay(50)
+    for (let n = 0; n < 200 && !existsSync(info.done) && alive(); n++) {
+      await delay(50)
+      checkStop()
+    }
     if (!existsSync(info.done) && alive()) {
       console.error(`CLEANUP ${info.name}: graceful shutdown did not exit; killing private Pi pid ${pid}`)
       process.kill(pid, 'SIGKILL')
@@ -173,31 +212,31 @@ async function stopPi(info) {
   }
 }
 async function stop(info) {
-  const alive = spawnSync('tmux', ['-S', socket, '-f', '/dev/null', 'has-session', '-t', info.session], { env: base, encoding: 'utf8' })
+  const alive = await runSync('tmux', ['-S', socket, '-f', '/dev/null', 'has-session', '-t', info.session], { env: base, encoding: 'utf8' })
   if (alive.status === 0) {
     await stopPi(info)
-    tmux('kill-session', '-t', info.session)
+    await tmux('kill-session', '-t', info.session)
   } else clearInterval(info.ticker)
 }
-function team(info, args, label = 'team') {
-  const result = spawnSync('bash', [join(info.skill, 'scripts/team'), '--root', info.root, ...args], {
+async function team(info, args, label = 'team') {
+  const result = await runSync('bash', [join(info.skill, 'scripts/team'), '--root', info.root, ...args], {
     cwd: info.root, env: { ...info.env, TMUX: `${socket},${info.serverPid},0`, TMUX_PANE: info.pane }, encoding: 'utf8' })
   writeFileSync(join(info.dir, `${label}.txt`), (result.stdout ?? '') + (result.stderr ?? ''))
   return result
 }
-function recover(info) {
+async function recover(info) {
   // tmux respawn inherits the private server's environment, not spawnSync's. Publish the same
   // controlled fixture environment the initial launch.sh supplied explicitly.
-  for (const [key, value] of Object.entries(info.env)) tmux('set-environment', '-t', info.session, key, String(value))
+  for (const [key, value] of Object.entries(info.env)) await tmux('set-environment', '-t', info.session, key, String(value))
   const source = `source ${sh(join(info.skill, 'scripts/lib/common.sh'))}; source ${sh(join(info.skill, 'scripts/lib/cmd-config.sh'))}; source ${sh(join(info.skill, 'scripts/lib/cmd-remind.sh'))}; team_load_config; team_remind_recovery`
-  const result = spawnSync('bash', ['-c', source], { cwd: info.root,
+  const result = await runSync('bash', ['-c', source], { cwd: info.root,
     env: { ...info.env, TMUX: `${socket},${info.serverPid},0`, TMUX_PANE: info.pane }, encoding: 'utf8' })
   writeFileSync(join(info.dir, `recovery-${Date.now()}.txt`), (result.stdout ?? '') + (result.stderr ?? ''))
   return result
 }
-function control(info, action) {
-  tmux('send-keys', '-t', info.pane, '-l', `/p442-control ${action}`)
-  tmux('send-keys', '-t', info.pane, 'Enter')
+async function control(info, action) {
+  await tmux('send-keys', '-t', info.pane, '-l', `/p442-control ${action}`)
+  await tmux('send-keys', '-t', info.pane, 'Enter')
 }
 async function hardStop(info) {
   const pid = Number(readFileSync(join(info.dir, 'session-start'), 'utf8').trim())
@@ -210,12 +249,12 @@ async function restartDirect(info) {
   // resends). Restart the same stopped PM through the production prompt-free start primitive instead.
   rmSync(info.done, { force: true })
   delete info.env.P444_KILL_AT
-  for (const [key, value] of Object.entries(info.env)) tmux('set-environment', '-t', info.session, key, String(value))
+  for (const [key, value] of Object.entries(info.env)) await tmux('set-environment', '-t', info.session, key, String(value))
   const script = join(info.root, 'launch.sh')
   writeFileSync(script, readFileSync(script, 'utf8').replace(/^export P444_KILL_AT=.*;$/m, 'unset P444_KILL_AT;'))
   const before = events(info).filter(e => e.type === 'session_start').length
   const source = `source ${sh(join(info.skill, 'scripts/lib/common.sh'))}; source ${sh(join(info.skill, 'scripts/lib/cmd-config.sh'))}; team_load_config; TEAM_REMINDER_ONLY_RECOVERY=1 team_pm_start`
-  const result = spawnSync('bash', ['-c', source], { cwd: info.root,
+  const result = await runSync('bash', ['-c', source], { cwd: info.root,
     env: { ...info.env, TMUX: `${socket},${info.serverPid},0`, TMUX_PANE: info.pane }, encoding: 'utf8' })
   writeFileSync(join(info.dir, `restart-${Date.now()}.txt`), (result.stdout ?? '') + (result.stderr ?? ''))
   assert.equal(result.status, 0, `prompt-free restart after death: ${result.stdout}${result.stderr}`)
@@ -232,14 +271,16 @@ async function restartForeign(info) {
   const script = join(info.root, 'launch-foreign.sh')
   const assignments = Object.entries(info.env).map(([key, value]) => `export ${key}=${sh(value)};`).join('\n')
   writeFileSync(script, `#!/usr/bin/env bash\n${assignments}\nunset TEAM_ROOT TEAM_MAIN_ROOT TEAM_CONFIG_FILE TEAM_STATE_DIR\nbash -c ${sh(launch)} 2>${sh(join(info.dir, 'launch-stderr.txt'))}\nrc=$?; printf '%s\\n' "$rc" >${sh(info.done)}\nsleep 600\n`)
-  tmux('respawn-pane', '-k', '-t', info.pane, `bash ${sh(script)}`)
+  // The old Pi has exited. Do not let its receipt stand in for a replacement still starting.
+  rmSync(info.spawnReceipt, { force: true })
+  await tmux('respawn-pane', '-k', '-t', info.pane, `bash ${sh(script)}`)
   await until(() => events(info).filter(e => e.type === 'session_start').length > before &&
     events(info).filter(e => e.type === 'session_start').at(-1).sessionId !== oldSession, 'actual foreign process/session')
 }
-function addReal(info, message, key, label = 'add-adversarial') {
+async function addReal(info, message, key, label = 'add-adversarial') {
   const args = ['remind', 'add', '--after', '1s', '--message', message]
   if (key) args.push('--key', key)
-  const result = team(info, args, label)
+  const result = await team(info, args, label)
   assert.equal(result.status, 0, `${label}: ${result.stdout}${result.stderr}`)
 }
 function lastBatch(info) { return snapshot(info.state).batches.at(-1) }
@@ -252,12 +293,12 @@ function replayPayload(info, name = 'replay') {
 }
 async function replay(info, file, label) {
   const sends = events(info).filter(e => e.type === 'fixture_send').length
-  control(info, `send ${file}`)
+  await control(info, `send ${file}`)
   await until(() => events(info).filter(e => e.type === 'fixture_send').length > sends, `${label} actual Pi send`)
 }
 async function test(name, body) {
-  try { await body(); console.log(`PASS real Pi ${name}`); passed++ }
-  catch (e) { failed++; console.error(`FAIL real Pi ${name}: ${e.stack}`) }
+  try { await body(); await stopPoint(); console.log(`PASS real Pi ${name}`); passed++ }
+  catch (e) { await stopPoint(); failed++; console.error(`FAIL real Pi ${name}: ${e.stack}`) }
 }
 const add = (after, message, key) => ({ action: 'add', after, message, ...(key ? { key } : {}) })
 const final = text => ({ text })
@@ -270,7 +311,7 @@ const mismatchGeneratedSession = config => {
   assert.notEqual(changed, source, 'change only the generated TEAM_SESSION line')
   writeFileSync(config, changed)
 }
-function assertConfigMismatch(info) {
+async function assertConfigMismatch(info) {
   const evidence = join(info.state, 'remind-tool/current.json')
   assert(existsSync(evidence), 'mismatched config leaves visible error evidence')
   const record = json(evidence)
@@ -280,7 +321,7 @@ function assertConfigMismatch(info) {
   const started = events(info).filter(e => e.type === 'session_start').at(-1)
   assert.equal(started.reminderTools[0]?.exposure, 'hidden', 'real Pi registers only the hidden tool')
   assert(!started.activeTools.includes('team_remind'), 'real Pi active tools exclude team_remind')
-  assert.match(doctor(info), /PM 提醒工具\s+.*error PM config TEAM_SESSION does not match the directed launch/,
+  assert.match(await doctor(info), /PM 提醒工具\s+.*error PM config TEAM_SESSION does not match the directed launch/,
     'doctor reports the configuration error instead of unknown or ready')
   assert(!existsSync(join(info.state, 'reminders/state.json')), 'rejected config touches no Reminder state')
 }
@@ -325,13 +366,13 @@ try {
       assert.equal(snap.reminders[2].message, 'identical no key'); assert.equal(snap.reminders[3].message, 'identical no key')
       assert.notEqual(snap.reminders[2].id, snap.reminders[3].id)
       assert(snap.reminders.every(record => record.source === 'pm-tool'))
-      const output = doctor(info); assert.match(output, /PM 提醒工具\s+.*ready extension reported registered\/active/)
+      const output = await doctor(info); assert.match(output, /PM 提醒工具\s+.*ready extension reported registered\/active/)
       const capability = json(join(info.state, 'remind-tool/current.json'))
       assert(capability.launchNonce && capability.sessionId && capability.starttime && capability.extensionVersion)
       writeFileSync(join(info.dir, 'receipt.json'), JSON.stringify({ firstId, firstDue, final: snap, capability }, null, 2))
     } finally { await stop(info) }
     assert(!existsSync(join(info.state, 'remind-tool/current.json')), 'shutdown removes only its own capability evidence')
-    assert.match(doctor(info), /PM 提醒工具\s+.*not-running/)
+    assert.match(await doctor(info), /PM 提醒工具\s+.*not-running/)
   })
 
   if (selection.includes('large')) await test('64 KiB plus final newline through real PM tool add/show/list/cancel', async () => {
@@ -374,13 +415,13 @@ try {
       try {
         await until(() => snapshot(info.state).reminders.length === 1 && events(info).some(e => e.type === 'agent_settled'), 'pre-reload add')
         const before = readFileSync(join(info.state, 'reminders/state.json'), 'utf8')
-        tmux('rename-window', '-t', info.pane, 'not-pm')
-        tmux('send-keys', '-t', info.pane, '-l', '/p442-control reload'); tmux('send-keys', '-t', info.pane, 'Enter')
+        await tmux('rename-window', '-t', info.pane, 'not-pm')
+        await tmux('send-keys', '-t', info.pane, '-l', '/p442-control reload'); await tmux('send-keys', '-t', info.pane, 'Enter')
         await until(() => events(info).filter(e => e.type === 'session_start').length >= 2 && requests(info).length >= 2, 'invalid reload response')
         const current = events(info).filter(e => e.type === 'session_start').at(-1)
         assert.equal(current.reminderTools[0]?.exposure, 'hidden'); assert.equal(current.activeTools.length, 0)
         assert.equal(readFileSync(join(info.state, 'reminders/state.json'), 'utf8'), before)
-        assert.match(doctor(info), /PM 提醒工具\s+.*not-running/) // configured PM pane is gone; no ready claim follows the stale evidence
+        assert.match(await doctor(info), /PM 提醒工具\s+.*not-running/) // configured PM pane is gone; no ready claim follows the stale evidence
       } finally { await stop(info) }
     })
   }
@@ -395,22 +436,22 @@ try {
       const promptBefore = readFileSync(join(info.state, 'pm-prompt.md'), 'utf8')
       const wrapper = join(info.dir, 'pi-argv-wrapper.sh'), argvBytes = join(info.dir, 'argv.bin')
       writeFileSync(wrapper, `#!/usr/bin/env bash\nprintf '%s\\0' "$@" >${sh(argvBytes)}\nexec ${sh(pi)} "$@"\n`)
-      command('chmod', ['+x', wrapper])
+      await command('chmod', ['+x', wrapper])
       writeFileSync(info.config, readFileSync(info.config, 'utf8').replace(/^TEAM_PI_BIN=.*$/m, `TEAM_PI_BIN=${sh(wrapper)}`))
       // team_load_config gives environment overrides precedence; recover() also publishes info.env to tmux.
       info.env.TEAM_PI_BIN = wrapper
-      let result = team(info, ['notify', 'pm', 'P443_ORDINARY_BACKLOG'], 'ordinary-backlog')
+      let result = await team(info, ['notify', 'pm', 'P443_ORDINARY_BACKLOG'], 'ordinary-backlog')
       assert.equal(result.status, 0, 'ordinary backlog is pending before recovery')
-      result = team(info, ['standby', 'on', '--reason', 'P443 stopped recovery'], 'standby-on')
+      result = await team(info, ['standby', 'on', '--reason', 'P443 stopped recovery'], 'standby-on')
       assert.equal(result.status, 0, 'Standby on succeeds')
-      result = team(info, ['remind', 'add', '--after', '1s', '--message', 'P443_RECOVERY_ONLY', '--key', 'recovery'], 'add-recovery')
+      result = await team(info, ['remind', 'add', '--after', '1s', '--message', 'P443_RECOVERY_ONLY', '--key', 'recovery'], 'add-recovery')
       assert.equal(result.status, 0, 'recovery Reminder is created')
       await delay(1200)
-      result = recover(info)
+      result = await recover(info)
       assert.equal(result.status, 0, `prompt-free recovery: ${result.stdout}${result.stderr}`)
       assert.match(result.stdout, /result=started/)
       await delay(500)
-      const pane = spawnSync('tmux', ['-S', socket, '-f', '/dev/null', 'capture-pane', '-p', '-t', `${info.session}:pm`, '-S', '-100'], { env: base, encoding: 'utf8' })
+      const pane = await runSync('tmux', ['-S', socket, '-f', '/dev/null', 'capture-pane', '-p', '-t', `${info.session}:pm`, '-S', '-100'], { env: base, encoding: 'utf8' })
       writeFileSync(join(info.dir, 'recovery-pane.txt'), (pane.stdout ?? '') + (pane.stderr ?? ''))
       const pid = readFileSync(join(info.state, 'pm.pid'), 'utf8').trim()
       const argv = readFileSync(argvBytes).toString('utf8').split('\0').filter(Boolean)
@@ -434,15 +475,15 @@ try {
       plan.gateN = plan.requests
       let releaseBusy
       plan.gate = new Promise(resolve => { releaseBusy = resolve; info.releaseBusy = resolve })
-      result = team(info, ['remind', 'add', '--after', '1s', '--message', 'P443_BUSY_FOLLOW_UP'], 'add-busy')
+      result = await team(info, ['remind', 'add', '--after', '1s', '--message', 'P443_BUSY_FOLLOW_UP'], 'add-busy')
       assert.equal(result.status, 0)
       await delay(1200)
-      result = recover(info)
+      result = await recover(info)
       assert.equal(result.status, 0)
       assert.match(result.stdout, /result=running/)
       await until(() => requests(info).length === plan.gateN + 1, 'busy controlled response is pending')
       const restartsBeforeBusyCheck = readFileSync(join(info.state, 'pm-restarts.log'), 'utf8')
-      result = recover(info)
+      result = await recover(info)
       assert.equal(result.status, 0)
       assert.doesNotMatch(result.stdout, /result=started/, 'an in-flight Reminder never causes another PM start')
       assert.equal(readFileSync(join(info.state, 'pm-restarts.log'), 'utf8'), restartsBeforeBusyCheck)
@@ -461,9 +502,9 @@ try {
         { deferFirstResponse: true, earlierHandler: true, pauseTicker: true, env: { P444_DELAY: '1' } })
       try {
         await until(() => requests(info).length === 1 && events(info).some(e => e.type === 'agent_settled'), 'batch initial response')
-        assert.equal(team(info, ['standby', 'on', '--reason', 'P444 G1'], 'batch-g1').status, 0)
-        addReal(info, 'P444_A first line\nsecond line\n', 'batch-a', 'add-a')
-        addReal(info, 'P444_B full text', 'batch-b', 'add-b')
+        assert.equal((await team(info, ['standby', 'on', '--reason', 'P444 G1'], 'batch-g1')).status, 0)
+        await addReal(info, 'P444_A first line\nsecond line\n', 'batch-a', 'add-a')
+        await addReal(info, 'P444_B full text', 'batch-b', 'add-b')
         await delay(1100) // Both one-second Reminders are actually due before admission is allowed to run.
         info.armTicker()
         await until(() => lastBatch(info)?.phase === 'intent' && events(info).some(e => e.type === 'delay_enter'), 'A+B real event paused in earlier handler')
@@ -486,7 +527,7 @@ try {
           'the frozen A+B batch caused one controlled model request')
         assert.equal(requests(info).filter(r => JSON.stringify(r).includes('P444_A') && JSON.stringify(r).includes('P444_B')).length, 1)
 
-        assert.equal(team(info, ['standby', 'on', '--reason', 'P444 fresh G2'], 'batch-g2').status, 0)
+        assert.equal((await team(info, ['standby', 'on', '--reason', 'P444 fresh G2'], 'batch-g2')).status, 0)
         const malformed = join(info.dir, 'wrong-members.json')
         writeFileSync(malformed, JSON.stringify({ ...delayed.message, details: { ...delayed.message.details, members: [] } }))
         await replay(info, malformed, 'wrong members')
@@ -516,11 +557,11 @@ try {
         { deferFirstResponse: true, earlierHandler: true, env: { P444_DELAY: '1' } })
       try {
         await until(() => events(info).some(e => e.type === 'agent_settled'), 'event-first initial response')
-        team(info, ['standby', 'on', '--reason', 'G1'], 'event-first-g1')
-        addReal(info, 'P444_EVENT_BEFORE_G2', 'event-first')
+        await team(info, ['standby', 'on', '--reason', 'G1'], 'event-first-g1')
+        await addReal(info, 'P444_EVENT_BEFORE_G2', 'event-first')
         await until(() => events(info).some(e => e.type === 'delay_enter') && lastBatch(info)?.phase === 'intent', 'real event arrived before G2')
-        assert.equal(team(info, ['standby', 'off'], 'event-first-off').status, 0)
-        assert.equal(team(info, ['standby', 'on', '--reason', 'G2'], 'event-first-g2').status, 0)
+        assert.equal((await team(info, ['standby', 'off'], 'event-first-off')).status, 0)
+        assert.equal((await team(info, ['standby', 'on', '--reason', 'G2'], 'event-first-g2')).status, 0)
         assert.equal(snapshot(info.state).standby.generation, 2)
         assert.equal(lastBatch(info).phase, 'intent', 'paused earlier handler has not committed observation')
         assert(!events(info).some(e => e.type === 'delay_exit'), 'both Standby commands completed while Pi handler was paused')
@@ -542,16 +583,16 @@ try {
         plan.gateN = plan.requests
         let releaseBusy
         plan.gate = new Promise(resolve => { releaseBusy = resolve; info.releaseBusy = resolve })
-        control(info, 'busy')
+        await control(info, 'busy')
         await until(() => requests(info).length === plan.gateN + 1, 'unrelated controlled turn is busy')
-        team(info, ['standby', 'on', '--reason', 'G1'], 'event-after-g1')
-        addReal(info, 'P444_EVENT_AFTER_G2', 'event-after')
+        await team(info, ['standby', 'on', '--reason', 'G1'], 'event-after-g1')
+        await addReal(info, 'P444_EVENT_AFTER_G2', 'event-after')
         await until(() => lastBatch(info)?.phase === 'intent' && readFileSync(join(info.state, 'inbox-watch.log'), 'utf8').includes('intent-sent'),
           'busy follow-up call returned with durable intent')
         assert(!events(info).some(e => e.type === 'custom_start' && e.customType === 'team-reminder'), 'no message event before the busy turn ends')
         assert.equal(lastBatch(info).phase, 'intent', 'sendMessage returning is not a wake')
-        assert.equal(team(info, ['standby', 'off'], 'event-after-off').status, 0)
-        assert.equal(team(info, ['standby', 'on', '--reason', 'G2'], 'event-after-g2').status, 0)
+        assert.equal((await team(info, ['standby', 'off'], 'event-after-off')).status, 0)
+        assert.equal((await team(info, ['standby', 'on', '--reason', 'G2'], 'event-after-g2')).status, 0)
         releaseBusy()
         await until(() => lastBatch(info)?.phase === 'observed', 'busy follow-up observed after G2')
         await until(() => events(info).some(e => e.type === 'custom_start' && e.customType === 'team-reminder'), 'busy follow-up event recorded after G2')
@@ -567,10 +608,10 @@ try {
       const bound = await start('adversarial-g2-bound', async ({ n, res }) => sse(res, { name: 'adversarial-g2-bound', ...final(`G2 bound ${n}`) }), { deferFirstResponse: true })
       try {
         await until(() => events(bound).some(e => e.type === 'agent_settled'), 'G2-bound initial response')
-        team(bound, ['standby', 'on', '--reason', 'G1'], 'bound-g1')
-        team(bound, ['standby', 'off'], 'bound-off1')
-        team(bound, ['standby', 'on', '--reason', 'G2'], 'bound-g2')
-        addReal(bound, 'P444_G2_BOUND', 'g2-bound')
+        await team(bound, ['standby', 'on', '--reason', 'G1'], 'bound-g1')
+        await team(bound, ['standby', 'off'], 'bound-off1')
+        await team(bound, ['standby', 'on', '--reason', 'G2'], 'bound-g2')
+        await addReal(bound, 'P444_G2_BOUND', 'g2-bound')
         await until(() => lastBatch(bound)?.phase === 'observed', 'G2-bound observation')
         assert.equal(lastBatch(bound).generation, 2); assert.equal(lastBatch(bound).outcome.standby, 'auto-off')
         assert.equal(snapshot(bound.state).standby.on, false)
@@ -581,10 +622,10 @@ try {
         { deferFirstResponse: true, earlierHandler: true, env: { P444_DELAY: '1' } })
       try {
         await until(() => events(manual).some(e => e.type === 'agent_settled'), 'manual-off initial response')
-        team(manual, ['standby', 'on', '--reason', 'G1'], 'manual-g1')
-        addReal(manual, 'P444_MANUAL_OFF', 'manual-off')
+        await team(manual, ['standby', 'on', '--reason', 'G1'], 'manual-g1')
+        await addReal(manual, 'P444_MANUAL_OFF', 'manual-off')
         await until(() => events(manual).some(e => e.type === 'delay_enter'), 'manual-off real event paused')
-        assert.equal(team(manual, ['standby', 'off'], 'manual-off-command').status, 0)
+        assert.equal((await team(manual, ['standby', 'off'], 'manual-off-command')).status, 0)
         writeFileSync(join(manual.dir, 'release-event'), 'release')
         await until(() => lastBatch(manual)?.phase === 'observed', 'manual-off observation')
         assert.equal(lastBatch(manual).outcome.standby, 'already-off')
@@ -598,8 +639,8 @@ try {
         { deferFirstResponse: true, earlierHandler: true, env: { P444_KILL_AT: 'event' } })
       try {
         await until(() => events(info).some(e => e.type === 'agent_settled'), 'death-event initial response')
-        team(info, ['standby', 'on', '--reason', 'G1'], 'death-event-g1')
-        addReal(info, 'P444_DEATH_AFTER_EVENT', 'death-event')
+        await team(info, ['standby', 'on', '--reason', 'G1'], 'death-event-g1')
+        await addReal(info, 'P444_DEATH_AFTER_EVENT', 'death-event')
         await until(() => existsSync(info.done) && events(info).some(e => e.type === 'delay_enter'), 'death inside earlier real event handler')
         const original = replayPayload(info, 'late-original-event')
         assert.equal(lastBatch(info).phase, 'intent'); assert.equal(snapshot(info.state).standby.on, true)
@@ -609,8 +650,8 @@ try {
         assert.equal((ledger().match(/reminder intent-sent/g) ?? []).length, 1, 'restart did not resend the old intent')
         await until(() => lastBatch(info)?.phase === 'unknown', 'actual sixty-second deadline marks the old intent unknown')
         assert.equal(snapshot(info.state).standby.on, true)
-        team(info, ['standby', 'off'], 'death-event-off1')
-        team(info, ['standby', 'on', '--reason', 'fresh G2 after restart'], 'death-event-g2')
+        await team(info, ['standby', 'off'], 'death-event-off1')
+        await team(info, ['standby', 'on', '--reason', 'fresh G2 after restart'], 'death-event-g2')
         await replay(info, original, 'late original event')
         await until(() => lastBatch(info)?.phase === 'observed', 'late real event observes unknown batch')
         assert.equal(lastBatch(info).outcome.standby, 'generation-ambiguous')
@@ -645,11 +686,11 @@ try {
         if (point === 'after-call') {
           plan.gateN = plan.requests
           plan.gate = new Promise(resolve => { info.releaseBusy = resolve })
-          control(info, 'busy')
+          await control(info, 'busy')
           await until(() => requests(info).length === plan.gateN + 1, 'after-call busy turn')
         }
-        team(info, ['standby', 'on', '--reason', point], `${point}-g1`)
-        addReal(info, `P444_DEATH_${point}`, point)
+        await team(info, ['standby', 'on', '--reason', point], `${point}-g1`)
+        await addReal(info, `P444_DEATH_${point}`, point)
         await until(() => existsSync(info.done), `${point} process death`)
         assert.equal(lastBatch(info).phase, 'intent'); assert.equal(snapshot(info.state).standby.on, true)
         assert(!events(info).some(e => e.type === 'custom_start' && e.customType === 'team-reminder'), 'no observation was manufactured')
@@ -679,18 +720,18 @@ try {
       const info = await start(name, async ({ n, res }) => sse(res, { name, ...final(`${action} response ${n}`) }), { deferFirstResponse: true })
       try {
         await until(() => requests(info).length === 1 && events(info).some(e => e.type === 'agent_settled'), `${action} initial response`)
-        const added = team(info, ['remind', 'add', '--after', '1h', '--message', `before ${action}`], `add-before-${action}`)
+        const added = await team(info, ['remind', 'add', '--after', '1h', '--message', `before ${action}`], `add-before-${action}`)
         assert.equal(added.status, 0)
         const before = readFileSync(join(info.state, 'reminders/state.json'), 'utf8')
-        tmux('rename-window', '-t', info.pane, 'not-pm')
-        tmux('send-keys', '-t', info.pane, '-l', `/p442-control ${action}`); tmux('send-keys', '-t', info.pane, 'Enter')
+        await tmux('rename-window', '-t', info.pane, 'not-pm')
+        await tmux('send-keys', '-t', info.pane, '-l', `/p442-control ${action}`); await tmux('send-keys', '-t', info.pane, 'Enter')
         await until(() => events(info).filter(e => e.type === 'session_start').length >= 2, `${action} replacement session`)
         const current = events(info).filter(e => e.type === 'session_start').at(-1)
         assert.equal(current.reminderTools[0]?.exposure, 'hidden')
         assert.equal(current.activeTools.length, 0)
         const evidencePath = join(info.state, 'remind-tool/current.json')
         if (existsSync(evidencePath)) assert.equal(json(evidencePath).status, 'hidden')
-        assert(!/PM 提醒工具\s+.*ready/.test(doctor(info)), 'doctor is not ready in the same replacement, without a 20s wait')
+        assert(!/PM 提醒工具\s+.*ready/.test(await doctor(info)), 'doctor is not ready in the same replacement, without a 20s wait')
         assert.equal(readFileSync(join(info.state, 'reminders/state.json'), 'utf8'), before)
       } finally { await stop(info) }
     })
@@ -701,7 +742,7 @@ try {
       const info = await start('noentry', async ({ n, res }) => sse(res, { name: 'noentry', ...final('no entry') }), { invalid: 'no-entry', deferFirstResponse: true })
       try {
         await until(() => events(info).some(e => e.type === 'agent_settled'), 'no-entry response')
-        assert.match(doctor(info), /PM 提醒工具\s+.*unknown evidence:ENOENT/)
+        assert.match(await doctor(info), /PM 提醒工具\s+.*unknown evidence:ENOENT/)
         assert(!existsSync(join(info.state, 'reminders/state.json')))
       } finally { await stop(info) }
     })
@@ -711,7 +752,7 @@ try {
       })
       try {
         await until(() => existsSync(join(info.state, 'remind-tool/current.json')) && events(info).some(e => e.type === 'agent_settled'), 'config mismatch settles')
-        assertConfigMismatch(info)
+        await assertConfigMismatch(info)
       } finally { await stop(info) }
     })
     await test('flip: deleting config-error evidence turns the named visibility assertion red', async () => {
@@ -727,7 +768,7 @@ try {
       try {
         await until(() => events(info).some(e => e.type === 'agent_settled'), 'config error flip settles')
         let failure
-        try { assertConfigMismatch(info) } catch (e) { failure = e }
+        try { await assertConfigMismatch(info) } catch (e) { failure = e }
         assert.match(failure?.message ?? '', /mismatched config leaves visible error evidence/,
           'removing the write must fail the named error-evidence assertion')
         console.log(`EXPECTED RED config-error evidence: ${failure.message.split('\n')[0]}`)
@@ -747,18 +788,14 @@ try {
         await until(() => existsSync(join(info.state, 'remind-tool/current.json')), 'bootstrap error evidence')
         const record = json(join(info.state, 'remind-tool/current.json'))
         assert.equal(record.status, 'error'); assert.equal(record.exposure, 'hidden')
-        assert.match(doctor(info), /PM 提醒工具\s+.*error controlled direct registration failure/)
+        assert.match(await doctor(info), /PM 提醒工具\s+.*error controlled direct registration failure/)
         assert(!existsSync(join(info.state, 'reminders/state.json')))
       } finally { await stop(info) }
     })
   }
 } finally {
   server.closeAllConnections(); await new Promise(resolve => server.close(resolve))
-  const remaining = spawnSync('tmux', ['-S', socket, 'list-sessions'], { env: base, encoding: 'utf8' })
-  if (remaining.status === 0) tmux('kill-server')
-  else assert.match(remaining.stderr, /no server running|error connecting/, 'only the private server may already be gone')
-  if (!process.env.P442_KEEP) rmSync(temporary, { recursive: true, force: true })
-  else console.log(`kept private fixture root=${temporary}`)
 }
+await stopPoint()
 console.log(`remind-tool-real: passed=${passed} failed=${failed} evidence=${evidence}`)
 if (failed) process.exitCode = 1
