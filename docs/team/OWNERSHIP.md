@@ -22,7 +22,8 @@
 | `docs/team/reviews/P478.md`、`docs/team/reviews/P478-verify.log` | PM（V180已接受） | 合并版 24ea698b 定点通过，临时写权及 P478 实现写权收回 |
 | `docs/team/reviews/P480.md`、`docs/team/reviews/P480-verify.log` | PM（V181已接受） | 合并版 3b44b960 文件核对、语法检查通过，收回临时及 P480 实现写权 |
 | `openspec/changes/help-perf-entry-without-measurement/**` | PM（P482方案已接受） | 规划固定；实施者只可勾 `tasks.md` 的 1.x，不准改规格 |
-| `skills/teamsmith/tests/help-surface.sh` | agent:dev-bob（P483） | 只替换 perf 帮助检查的旧测量；不改正式 CLI、测量或其它检查 |
+| `skills/teamsmith/tests/help-surface.sh` | agent:dev-bob（P483候选冻结） | 固定 `645ec4b3`，未经新返修不得修改 |
+| `docs/team/reviews/P483.md`、`docs/team/reviews/P483-verify.log` | agent:verify（V183临时） | 只允许原生工具写候选和合并后的定点记录，其余主检出只读 |
 | 其余 `skills/teamsmith/scripts/panel/src/**` 及对应README/config/SKILL设置说明 | agent:dev（默认维护权） | P471/V177已完成，P474不授写 |
 | `openspec/changes/archive/2026-11-17-pulse-project-settings-simplify/**` | PM（A13已接受） | 已验9/9七工件原样归档，临时写权收回，不再授实现写入 |
 | `openspec/changes/archive/2026-11-16-routing-parameter-check-dedup/**` | PM（A12已接受） | 已验6/6的五工件原样归档，临时写权收回 |
