@@ -1,10 +1,10 @@
 # V185 · 两份提醒测试的清理、保留和中断复验
 
-agent: verify · status: PASS（候选定点补验） · time: 2026-11-20T09:43:59Z
+agent: verify · status: PASS（合并版定点核对完成） · time: 2026-11-20T09:48:41Z
 
 branch: `task/V185-reminder-test-temp-roots-verify` · PR/MR: -
 
-**当前结论：接受候选 `fcd7eab6` 的定点补验。** 两处读取结果与内核一致。真实 Pi 的父进程变为 1 后，原进程身份仍被正确识别；实际观察到 Pi 退出时工作目录尚在，之后才删除目录。入口返回 `143`，命名证据不变，独立私有终端仍正常。其余四项沿用首轮原件；两轮历史 FAIL 均保留。接受候选不等于完成合并后核对。
+**当前结论：接受候选 `fcd7eab6` 的定点补验。** 两处读取结果与内核一致。真实 Pi 的父进程变为 1 后，原进程身份仍被正确识别；实际观察到 Pi 退出时工作目录尚在，之后才删除目录。入口返回 `143`，命名证据不变，独立私有终端仍正常。其余四项沿用首轮原件；两轮历史 FAIL 均保留。合并版 `191e8097` 的七份测试文件、五份规格变更文件、语法及调用入口也已核对通过，未重跑行为。
 
 **首轮结论：不合并 `f7db9e77`。** 五项中四项通过；真实 Pi 收到 TERM 后，私有终端关闭、指定场景日志保留，但 Pi 的退出回调在原工作目录被删除后重建了它。运行返回 `143`，工作目录仍在。故障测试的中断没有这个问题：真实入队写完，驱动自己以 `143` 退出，未开始故障注入，工作目录消失。
 
@@ -155,3 +155,24 @@ v185-candidate-r3 exit=0, wall=20.4s
 - `tmp-hygiene.sh:169–177,795–816,1217` 中，这个读值用于列表的 owner 状态说明；占用判定仍看 `_occupants_of`，未改扫描或清扫分支。旧版本曾写入的 `start=` 并不等于内核刻度，本次不声称旧标记兼容或已检验清扫；没有运行扫描、清扫或碰其它运行的目录。
 
 **最终评估：** 实施清单仍为 `2/7`，未代勾 2.x；合并前核验范围内，证据为首轮四项实跑 + 第三轮 2.3 及两函数读数，不是一次完整重跑。CRITICAL 0 · WARNING 0 · SUGGESTION 0；下一步仅在 PM 合并后核合并版同一性、语法和接入，无需重跑场景。`/var/tmp/v185-r3.fNjRnD/` 与 `formal-candidate/` 保留本次原始命令、stdout/stderr/rc、时序与原生 PASS 记录；前两轮原件及各自的正式 FAIL 原样保留。本轮本人工作树的同一 ledger-ban 命令 `files=2964 hits=0`、rc=0（`ledger-ban.log`）。
+
+## 合并版定点核对 · `191e8097` · 2026-11-20T09:48:41Z
+
+**PASS，复验交付完成。** PM 固定检出 `/var/tmp/p486-merged-191e8097.qNIrjX` 绑定 `191e80974eca1a633f7affd9d66bea110d2384cb`，核对前后干净。这次只做以下静态检查，沿用候选的行为原件。
+
+| 核对 | 结果 |
+|---|---|
+| 七份测试文件 | 两份 Node 驱动、三个提醒 shell、`lib/tmp-root.sh` 和 `tmp-hygiene.sh` 逐一与 `fcd7eab6` 比较：工作文件字节、Git blob 和 mode 相同；两份 `node --check`、五份 `bash -n` 各 rc=0。 |
+| 五份 OpenSpec 变更文件 | `.openspec.yaml`、proposal、design、tasks 和 verification delta 的字节、blob 和 mode 均相同；没有勾选新项目或重跑候选的 OpenSpec strict。 |
+| 所有指定接入 | 恢复入口仍 `exec node` 并前置 `recovery,withdrawal`；`smoke.sh:25169–25177,25232–25240,25262–25268` 的普通、恢复、对抗入口及显式 `$TMP/p442`、`$TMP/p443`、`$TMP/p444` 与 `P442_KEEP=1` 均匹配。真实驱动以实际启动回执登记场景，owner 读同一身份函数、等 Pi 退出再回收；两处读取仍用 `${20}`，`tmp-hygiene.sh` 的列表判断仍调用自己的 `_proc_start`。 |
+
+```text
+$ TMPDIR=/var/tmp OPENSPEC_TELEMETRY=0 TEAM_GATES='bash /var/tmp/v185-merged.CZhXL8/check.sh' \
+    bash skills/teamsmith/scripts/team review P486 \
+    --dir /var/tmp/p486-merged-191e8097.qNIrjX --branch 191e80974eca1a633f7affd9d66bea110d2384cb
+checkout=191e80974 clean · executor=verify · queued=0s · ran=0s（工具按整秒计）· PASS
+merged check passed: 7 files, 5 change artifacts, all original entry connections verified by source; no behavioral sample, process probe, or cleanup executed
+v185-merged exit=0, wall=16.0s
+```
+
+原生命令、逐文件输出与记录保存于 `/var/tmp/v185-merged.CZhXL8/`；`formal-merged/` 的两份文件已与中央输出逐字节核对。首轮、第二轮、第三轮候选原件各自保留；未重跑 2.1–2.5、进程读数、扫描、清扫、完整 smoke 或性能检查。没有修改实现、规格勾选或 PM 的结案记录。本轮在本人任务工作树重新扫描报告，ledger-ban `files=2964 hits=0`、rc=0（`ledger-ban.log`）。

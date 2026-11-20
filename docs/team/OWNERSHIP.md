@@ -5,10 +5,8 @@
 
 | 路径 | Owner | 说明 |
 |---|---|---|
-| `skills/teamsmith/tests/remind-tool-real.{sh,mjs}` | agent:dev-bob（P486 返修候选冻结） | 固定 `f18c60e4`，不再改退出顺序 |
-| `skills/teamsmith/tests/lib/tmp-root.sh`、`skills/teamsmith/tests/tmp-hygiene.sh` | agent:dev-bob（P486 读数修订已冻结） | 固定 `fcd7eab6`，未经新返修不得修改 |
-| `skills/teamsmith/tests/remind-adversarial-real.sh`、`skills/teamsmith/tests/remind-adversarial-faults.{sh,mjs}` | agent:dev-bob（P486 已通过部分冻结） | 保持 `f7db9e77`，不重复执行或改动 |
-| `docs/team/reviews/P486.md`、`docs/team/reviews/P486-verify.log` | agent:verify（V185 临时） | 只允许原生工具写候选和合并后的定点记录；其余主检出只读 |
+| `skills/teamsmith/tests/remind-tool-real.mjs` | agent:dev（默认维护权恢复） | P486 实施临时写权已收回，合并版 `191e8097` 接受；其余受影响测试文件回到默认归属 |
+| `docs/team/reviews/P486.md`、`docs/team/reviews/P486-verify.log` | PM（V185已接受） | 合并版 191e8097 已核字节、语法及接入，收回临时写权 |
 | `skills/teamsmith/tests/**` | agent:dev | 本轮P471仅现有panel-p21.sh/panel-strings.mjs的设置相关断言替换；P473上述单文件除外，其它范围未授 |
 | `.github/workflows/gates.yml` | agent:dev（P326 临时） | 仅任务书明授的CI入口，不提高60分钟上限；冻结交付后归还PM |
 | `ci/collect-scene.sh` | PM | P324已合入，临时写权收回；当前无实现任务改此文件 |
@@ -26,7 +24,7 @@
 | `docs/team/reviews/P480.md`、`docs/team/reviews/P480-verify.log` | PM（V181已接受） | 合并版 3b44b960 文件核对、语法检查通过，收回临时及 P480 实现写权 |
 | `docs/team/reviews/P483.md`、`docs/team/reviews/P483-verify.log` | PM（V183已接受） | 合并版 282b9dc7 定点核对通过，收回 V183 写权及 P483 实施写权 |
 | `openspec/changes/archive/2026-11-20-help-perf-entry-without-measurement/**`、`openspec/specs/verification/spec.md` | PM（A14已接受） | 五份工件原样移动且仅目标需求同步，收回归档临时写权 |
-| `openspec/changes/reminder-test-temp-root-ownership/**` | PM（P485 方案已接受） | 规划固定，P486 只勾 `tasks.md` 的 1.x，不改其他内容或正式规格 |
+| `openspec/changes/reminder-test-temp-root-ownership/**`、对应日期归档目录、`openspec/specs/verification/spec.md` | agent:dev3（A15 临时） | 仅用原生工具同步已验证的要求并归档，不改其它正文或代码 |
 | 其余 `skills/teamsmith/scripts/panel/src/**` 及对应README/config/SKILL设置说明 | agent:dev（默认维护权） | P471/V177已完成，P474不授写 |
 | `openspec/changes/archive/2026-11-17-pulse-project-settings-simplify/**` | PM（A13已接受） | 已验9/9七工件原样归档，临时写权收回，不再授实现写入 |
 | `openspec/changes/archive/2026-11-16-routing-parameter-check-dedup/**` | PM（A12已接受） | 已验6/6的五工件原样归档，临时写权收回 |
