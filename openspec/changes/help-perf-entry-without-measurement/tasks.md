@@ -5,8 +5,8 @@
 
 ## 2. Independent verification of the same requirement
 
-- [ ] 2.1 On a frozen independent checkout, run one healthy sample and exactly the two named fault samples below. Capture the candidate SHA, actual command, exit status and named verdict for each, and show the actual receipt and six-face outcome where applicable. A setup error, timeout or unrelated finding is not an intended red.
-- [ ] 2.2 Cite unchanged coverage by diff rather than rerunning it. Keep the old claim source-attributed, the new executed verdicts and other checks distinct. After merge, the same verifier checks the relevant files match the verified candidate and checks the narrow integration; don't repeat the three samples or unaffected suites unless an evidence premise changed. Report the unobserved real-measurement write boundary explicitly.
+- [x] 2.1 On a frozen independent checkout, run one healthy sample and exactly the two named fault samples below. Capture the candidate SHA, actual command, exit status and named verdict for each, and show the actual receipt and six-face outcome where applicable. A setup error, timeout or unrelated finding is not an intended red.
+- [x] 2.2 Cite unchanged coverage by diff rather than rerunning it. Keep the old claim source-attributed, the new executed verdicts and other checks distinct. After merge, the same verifier checks the relevant files match the verified candidate and checks the narrow integration; don't repeat the three samples or unaffected suites unless an evidence premise changed. Report the unobserved real-measurement write boundary explicitly.
 
 Run from the independent checkout. For the healthy sample set `tree` to the frozen checkout root. For each fault, make a separate disposable directory that contains the candidate's `skills/teamsmith/` at that relative path. Set `tree` to that directory's root, not to `skills/teamsmith/` itself. In each fault copy edit only the `perf` arm in `$tree/skills/teamsmith/scripts/team`. Use the existing keep option to inspect the per-run evidence; clean only the private directories created for these samples after collecting it.
 
