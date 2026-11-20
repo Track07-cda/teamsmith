@@ -6,7 +6,7 @@
 | 路径 | Owner | 说明 |
 |---|---|---|
 | `skills/teamsmith/tests/remind-tool-real.{sh,mjs}` | agent:dev-bob（P486 返修候选冻结） | 固定 `f18c60e4`，不再改退出顺序 |
-| `skills/teamsmith/tests/lib/tmp-root.sh`、`skills/teamsmith/tests/tmp-hygiene.sh` | agent:dev-bob（P486 定点返修） | 仅更正两处读取进程启动刻度的同一错误，不改其余清理逻辑 |
+| `skills/teamsmith/tests/lib/tmp-root.sh`、`skills/teamsmith/tests/tmp-hygiene.sh` | agent:dev-bob（P486 读数修订已冻结） | 固定 `fcd7eab6`，未经新返修不得修改 |
 | `skills/teamsmith/tests/remind-adversarial-real.sh`、`skills/teamsmith/tests/remind-adversarial-faults.{sh,mjs}` | agent:dev-bob（P486 已通过部分冻结） | 保持 `f7db9e77`，不重复执行或改动 |
 | `docs/team/reviews/P486.md`、`docs/team/reviews/P486-verify.log` | agent:verify（V185 临时） | 只允许原生工具写候选和合并后的定点记录；其余主检出只读 |
 | `skills/teamsmith/tests/**` | agent:dev | 本轮P471仅现有panel-p21.sh/panel-strings.mjs的设置相关断言替换；P473上述单文件除外，其它范围未授 |
