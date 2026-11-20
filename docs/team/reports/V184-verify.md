@@ -6,7 +6,9 @@ branch: `task/V184-reminder-test-temp-roots-proposal-review` · PR/MR: -
 
 reviewed: `227b04f6823196512170b64a136ffe0adfbea511`
 
-**结论：退回 P485 修订，不进入实施。** 默认工作目录应复用现有 `tmp-root.sh`，调用者指定的日志和要求保留的 `run-*` 不搬、不删。这个方向对；当前方案却把本可不动的恢复入口列为必改，把停止驱动误当成停止了它正在执行的命令，并安排了几组重复验收。OpenSpec 1.16.0 严格校验通过；本轮没有运行行为样本。
+**当前结论：修订版 `2022af63` 仍须补一处再实施。** R1、R2、R4 已闭合；R3 已明确先等现有命令完成才删目录，但没有让故障驱动在同步命令返回后必然回到事件循环处理 TERM，验收也只查外层返回非零。见末节定点复看。两轮 OpenSpec 1.16.0 严格校验均通过，均未运行行为样本。
+
+**首轮结论（`227b04f6`）：退回 P485 修订。** 默认工作目录应复用现有 `tmp-root.sh`，调用者指定的日志和要求保留的 `run-*` 不搬、不删。首稿把本可不动的恢复入口列为必改，把停止驱动误当成停止了它正在执行的命令，并安排了几组重复验收。以下保留首轮判据及证据。
 
 ## 交付及 OpenSpec 评估
 
@@ -87,6 +89,37 @@ ledger rc=0
 
 Ledger ban 在本人任务工作树对报告执行；上面只遮蔽家目录中的用户名。
 
-## 最终判定
+## 首轮判定
 
-CRITICAL 3 · WARNING 1 · SUGGESTION 0。请 PM 退回 dev 只修 R1–R4，再独立核差异。当前未执行实施样本、真实 Pi、提醒、smoke、完整 OpenSpec 或目录清理工具；旧测试回执只用来核已有调用及取证依赖。变异翻转不适用本轮（方案审阅）。未修改提案、实现、正式规格或看板；仅本人报告在本地任务分支提交，不推送。
+CRITICAL 3 · WARNING 1 · SUGGESTION 0。请 PM 退回 dev 只修 R1–R4，再独立核差异。首轮未执行实施样本、真实 Pi、提醒、smoke、完整 OpenSpec 或目录清理工具；旧测试回执只用来核已有调用及取证依赖。变异翻转不适用本轮（方案审阅）。未修改提案、实现、正式规格或看板；仅本人报告在本地任务分支提交，不推送。
+
+## 修订版定点复看 · 2026-11-20T08:47:41Z
+
+**REWORK：只剩 R3 的同步返回点。** PM 固定的独立检出为 `/var/tmp/p485-review-2022af63.0qvXfz`，`HEAD=2022af63e68a9b70f1df624fe5c153d1d05d46c8`。相对 `227b04f6` 仅 design、proposal、delta、tasks 和作者报告改动；现行实现、正式规格及 CI 无差异。
+
+| 首轮项 | 本次结果 |
+|---|---|
+| R1 | **闭合。** 新 `design.md:8–25` 只列五个文件。恢复 shell 原 `exec node` 直接进入已有选择项的驱动；真实 Pi 和故障的直接 Node 入口各复用自己的 shell 生命周期，但不附带 shell 专属比较。§69 的指纹差异、驱动原码和成功输出规则保持。 |
+| R2 | **闭合。** `design.md:44–50` 把 `LC_ALL=C` 放在长度判断及 helper 调用两处，`tmp_root_socket_dir tmux s` 的输入与实际 `<返回目录>/s` 相符，短回退只用 `/var/tmp`。运行与收尾用同一绝对 `-S`，`tasks.md:27–35` 用活 pane 实读 `#{socket_path}`，长路径包含多字节而不冒称默认 CI 超 107 字节。保留证据不意味着保留辅助 socket。 |
+| R3 | **一处未闭合。** `design.md:54–71` 已消除先发强制停止再删目录、INT 直接回收的旧路径；owner 等驱动退出，再按精确 socket 收私有服务，最后回收 `W`，不删显式 `E` 或保留的 `E/run-*`。其余问题如下。 |
+| R4 | **闭合。** 新 delta 只写本次证据归属，未再承诺一套通用根目录/信号规则；`tasks.md:17–55` 只留一个真实成功、故障同例两次完成态、两种有不同风险的中断、对抗 shell 一种短回执方法。恢复及三处 smoke 调用用源码核，回执在真实路径选择之后、启动资源之前，不用等价入口或零场景。 |
+
+### R3 剩余：注册回调不是保证有机会处理 TERM
+
+- `design.md:59–64` 依赖「控制返回事件循环后从回调退出」，没有安排同步命令结束后何时让出执行。故障驱动的 `await delay(1100)` 位于 `remind-tick` **之前**（`remind-adversarial-faults.mjs:52–59`）。`remind-tick` 的 `spawnSync` 返回后，`await admit(repo)` 只接续已完成 Promise；随即可以执行注入 helper 的 `spawnSync`、原 authority 的同步恢复（`:101–119`），再经 `await runCase` 的 Promise 继续下个 `setup` 或到结尾（`:150–163`）。这些 `await` 并不保证让 I/O 事件循环处理信号。当前结尾**没有** `process.exit()`，只有 `process.exitCode = 1`；但最终一个用例可在这一串 Promise 后直接走普通汇总和退出，没有安排可执行 TERM 回调的下一轮。更早的准备阶段也不能拿后面的定时等待当保证。等待整个驱动使已发生的写入不和删除并发，但不保证驱动在活动命令完成后真正接到停机请求。
+- `tasks.md:36–44` 已能证明发出 TERM 时真实 `remind-tick` 在途，并且释放后实际完成准入写入；仍可能假绿：owner 记下 TERM、驱动继续跑注入和恢复并普通退出，最后 owner 自己返回非零且删了根，现有观察照样满足。
+- **最小修法：** 在同步调用返回后、开始下一段会写文件的调用或普通完成汇总前，明确留一次真正的事件循环处理机会（例如已知同步段后的 `setImmediate`，不是 `await` 一个已完成的 Promise）；停机回调设中断结果并阻止继续，不在这个处理点前调用 `process.exit()`。保留 owner 的等待和原清理顺序。不加进程登记表。在同一 2.4 样本的真实准入回执之后，要求 **驱动自身**记录已处理中断或返回约定的中断码，且未进入随后注入步骤；不用另增信号样本。这样父 shell 的非零结果不能代替子驱动的停机证据。
+
+```text
+$ git -C "$review2" diff --check 227b04f6..HEAD
+rc=0 (无输出)
+$ git -C "$review2" diff --exit-code 227b04f6..HEAD -- skills .github ci openspec/specs
+rc=0 (无输出)
+$ OPENSPEC_TELEMETRY=0 "$HOME/.bun/bin/openspec" --version
+1.16.0
+$ (cd "$review2" && OPENSPEC_TELEMETRY=0 "$HOME/.bun/bin/openspec" validate reminder-test-temp-root-ownership --strict)
+Change 'reminder-test-temp-root-ownership' is valid
+rc=0
+```
+
+当前计数 CRITICAL 1 · WARNING 0 · SUGGESTION 0。只退回 R3 的两处联动文字（设计与原样本判据），不重开已闭合三项。按复看任务书只跑单变更严格校验及差异检查，不重跑首轮公开记录扫描、不执行任何样本；本地提交仍只含本报告。
