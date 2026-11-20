@@ -6,7 +6,7 @@ category: analysis
 phase: opsx-propose
 change: help-perf-entry-without-measurement
 specs: verification, help-surface
-deltas: specs/verification/spec.md
+deltas: verification
 branch: task/P482-help-perf-entry-proposal
 ---
 
