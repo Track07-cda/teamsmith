@@ -1,10 +1,14 @@
 # V182 · 帮助测试与性能测量分开的方案审阅
 
-agent: verify · status: REWORK（仅方案） · time: 2026-11-20T07:33:27Z
+agent: verify · status: ACCEPT（仅方案） · time: 2026-11-20T07:39:11Z
 
 branch: `task/V182-help-perf-entry-proposal-review` · PR/MR: -
 
-**方向可行，先修两处文字再实施。** 方案能删掉帮助测试中的一次无效测量，并保留真实 `team perf --host` 的调用交接和临时项目不变检查。但两条故意改坏的验收样本按当前任务清单会选错目录，在启动 CLI 前一起退出；规格中另有一处封闭的例外清单遗漏了本次替换。两处都只需修方案，不需要改产品或增加测试。
+**接受修订 `2f162fc3`。** 两处必修均已解决；依据见文末。此结论只适用于方案，未执行行为验收。
+
+## 首轮审阅（保留）
+
+2026-11-20T07:33:27Z · REWORK。**方向可行，先修两处文字再实施。** 方案能删掉帮助测试中的一次无效测量，并保留真实 `team perf --host` 的调用交接和临时项目不变检查。但两条故意改坏的验收样本按当前任务清单会选错目录，在启动 CLI 前一起退出；规格中另有一处封闭的例外清单遗漏了本次替换。两处都只需修方案，不需要改产品或增加测试。
 
 ## Deliverables
 
@@ -74,4 +78,26 @@ ledger_rc=0
 
 ## Decisions and deviations
 
-只写本报告并在任务分支本地提交，不推送、不改正式审阅记录。请 PM 将第 1、2 项交 P482 作者修订；独立行为验收仍留给实施后的一次定点验证。
+只写本报告并在任务分支本地提交，不推送、不改正式审阅记录。首轮将第 1、2 项交 P482 作者修订；独立行为验收仍留给实施后的一次定点验证。
+
+## 返修复核 · ACCEPT
+
+- **第 1 项关闭。** `tasks.md` 分别要求：正常样本用冻结检出根；两个故障各用一个独立复制根，根下保留 `skills/teamsmith/`，只改 `$tree/skills/teamsmith/scripts/team` 的 `perf` 分支。这个路径正好与首轮核过的 `help-surface.sh:59–62,118–119` 一致，不再多拼一层目录。两张样本的判据未变：无交接要有 `rc=0`、无记录；写状态要有有效的交接记录、预期状态和变化的 `state` 指纹。
+- **第 2 项关闭。** verification delta 只在原反例的封闭清单中补上 `the single perf help claim replacement`；漏掉仍须执行的 CLI 检查仍会使对比失败，不新增其他例外。
+
+```text
+$ git -C "$S" rev-parse HEAD  # S=/var/tmp/p482-review-2f162fc3.6yTRnt
+2f162fc3815a6e27d509ddf081173110a72b010c
+$ git --no-optional-locks -C "$S" status --porcelain=v1
+[无输出；clean_rc=0]
+$ git -C "$S" diff --check "$OLD..$NEW" -- "$D/tasks.md" "$D/specs/verification/spec.md"
+rework_diff_check_rc=0
+$ git -C "$S" diff --no-ext-diff "$OLD..$NEW" -- "$D/tasks.md" "$D/specs/verification/spec.md"
+[仅任务清单的复制目录与两条样本文字、规格例外清单的一处变动]
+$ (cd "$S" && export PATH="$HOME/.bun/bin:$PATH" OPENSPEC_TELEMETRY=0 TMPDIR=/var/tmp && openspec --version && openspec validate help-perf-entry-without-measurement --strict)
+1.16.0
+Change 'help-perf-entry-without-measurement' is valid
+change_strict_rc=0
+```
+
+`OLD`、`NEW` 分别为首轮 `79cd6a73` 和本轮 `2f162fc3` 的完整提交，`D=openspec/changes/help-perf-entry-without-measurement`。只复核这两处和本变更结构，未重跑首轮或执行样本。本轮 CRITICAL 0 · WARNING 0 · SUGGESTION 0；真实测量全程是否写调用项目仍未验证。
