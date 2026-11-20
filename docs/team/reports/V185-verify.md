@@ -4,7 +4,9 @@ agent: verify · status: REWORK · time: 2026-11-20T09:19:26Z
 
 branch: `task/V185-reminder-test-temp-roots-verify` · PR/MR: -
 
-**结论：不合并 `f7db9e77`。** 五项中四项通过；真实 Pi 收到 TERM 后，私有终端关闭、指定场景日志保留，但 Pi 的退出回调在原工作目录被删除后重建了它。运行返回 `143`，工作目录仍在。故障测试的中断没有这个问题：真实入队写完，驱动自己以 `143` 退出，未开始故障注入，工作目录消失。
+**当前结论：`f18c60e4` 仍不可合并。** 定点补验发现，返修把父进程号误当成 Pi 的启动时间。关闭终端后 Pi 被重新托管，测试误以为 Pi 已退出，开始删目录时 Pi 仍在运行；目录仍然留下。首轮其余四项未重跑，结果及原件保留。见文末补验。
+
+**首轮结论：不合并 `f7db9e77`。** 五项中四项通过；真实 Pi 收到 TERM 后，私有终端关闭、指定场景日志保留，但 Pi 的退出回调在原工作目录被删除后重建了它。运行返回 `143`，工作目录仍在。故障测试的中断没有这个问题：真实入队写完，驱动自己以 `143` 退出，未开始故障注入，工作目录消失。
 
 ## 交付
 
@@ -94,4 +96,29 @@ CRITICAL 1 · WARNING 0 · SUGGESTION 0。候选不可接受；真实 Pi TERM �
 
 ## Decisions and deviations
 
-未额外重跑行为样本。2.3 断言失败后仅从同次原件做字节、目录出生时间与进程表核对，保留正式 FAIL；未删除这次遗留目录和其它原件。
+首轮未额外重跑行为样本。2.3 断言失败后仅从同次原件做字节、目录出生时间与进程表核对，保留正式 FAIL；未删除这次遗留目录和其它原件。
+
+## 第二轮 · `f18c60e4` 定点补验 · 2026-11-20T09:35:32Z
+
+**2.3 仍失败。** 实际启动回执和场景都记录 Pi PID `896846`。TERM 只发给入口 PID `896335`。短 socket `/var/tmp/.t-1000.MgJ3EA/s` 已删除，独立私有终端 `has-session` 明确执行并返回 `0`，命名证据 `session-start` 与 `requests.jsonl` 的前后字节相同，入口仍返回 `143`。但回收前从 `/proc` 读到同一 Pi 为 `R`，删除后目录仍在，stderr 点名 `tmp-root: 删不掉 …`。Pi 稍后由 pidfd 确认退出，事后六个记录 PID 都不在。这不是准备错误或私有终端串用。
+
+```text
+$ TMPDIR=/var/tmp OPENSPEC_TELEMETRY=0 TEAM_GATES='/usr/bin/python3 /var/tmp/v185-r2.vuWv1H/run.py' \
+    bash skills/teamsmith/scripts/team review P486 \
+    --dir /var/tmp/p486-review-f18c60e4.Cirxdv --branch f18c60e4f84337c8e954ccf3429f7d0092a78d63
+checkout clean · HEAD=f18c60e4f · executor=verify · queued=1s · ran=2s · FAIL
+v185-candidate-r2 exit=1, wall=15.0s
+```
+
+| 实际顺序（UTC 09:34:27） | 原件 |
+|---|---|
+| `.814905` 确认 Pi 活着，场景回执、`pm.pid.spawn`、实际 cwd 均吻合；内核启动刻度 `88466366`，PPID `896844`；随后仅向入口发 TERM | `23/observer.jsonl`、`23/launched-scenes`、`23/real-pi-spawn-receipt`、`23/socket-identity.stdout` |
+| `.856347` 当前实现记下 `896846:8968440`；`.861201` 关闭 tmux 返回；`.864481` 等待函数返回成功 | `23/lifetime.tsv`，采自实际 shell 变量和原有调用返回，不新增等待 |
+| `.868476` 原回收调用之前，同一 Pi 的真实状态仍为 `R`，启动刻度仍是 `88466366`；`.914057` 回收返回但目录仍在 | `23/lifetime.tsv`、`23/stderr` |
+| `.922002` pidfd **观察到** 该 Pi 已退出，此时 `/proc` 暂为 `Z`、PPID `1`，启动刻度不变；工作目录仍在 | `23/observer.jsonl`、`23/rc`、`23/independent-still-live.rc` |
+
+**根因：** `tests/lib/tmp-root.sh:125–134` 先检查 `${20}`，实际却用 `"$20"` 输出；Bash 将它当成 `$2` 后接 `0`。去掉 `/proc/<pid>/stat` 的 PID 与进程名后，第 2 列是父进程号，第 20 列才是开始刻度。返修 `remind-tool-real.sh:22,42–46` 将此值作稳定身份：首次记下 `8968440`，Pi 在 tmux 退出后改由 PID 1 托管，前后读值便会不同，虽然同一 Pi 仍在。用同一候选中的真实函数只读核对本次新 shell 的 `/proc`，得到 `parent=1069276 actual_tick=88472958 helper=10692760 parent_plus_zero=10692760`；命令 rc=0（`23/proc-reader-contrast.stdout`），不是另一组 Pi 或提醒场景。进程和文件时间观察只取自 `/proc`、pidfd 与原回收边界，无固定等待代替退出判定。
+
+**范围及静态回执：** `f7db9e77..f18c60e4` 只有两份真实 Pi 测试及首轮作者报告；`a4904676..f18c60e4` 只改两份测试；`f18c60e4..a76a9ede` 只改作者报告。候选前后干净，差异检查、`bash -n`、`node --check`、OpenSpec 1.16.0 单变更 `--strict` 均 rc=0（`static/`）。2.2、2.4 故障入口字节不变；2.5 的回执在启动任何 Pi 前返回，没有新的场景身份供收尾等待；2.1 的普通场景仍先等 Pi 落 `done` 或确认 Pi 已停止才关 session（`remind-tool-real.mjs:195–220`），新逻辑只读该场景已有的启动回执，正常完成路径不依赖此时 Pi 还活着。2.1、2.2、2.4、2.5 沿用首轮原件，未作为 `f18c60e4` 重新实跑。
+
+**BLOCKED:** F1 仍未闭合。请 PM 让实现者保证实际比较的是内核启动刻度，而不是父进程号；如改共用函数，先明确其他调用受影响的范围，再决定必要的定点验证。两个版本的正式 FAIL 和报告均保留于各自证据根的 `formal-candidate/`；返修原件在 `/var/tmp/v185-r2.vuWv1H/`。未改候选、共享脚本、规格勾选或首轮原件。本人工作树在本轮报告定稿前重跑上述 ledger-ban 命令，`files=2964 hits=0`、rc=0（`ledger-ban.log`）。
