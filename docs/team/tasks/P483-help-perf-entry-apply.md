@@ -2,7 +2,7 @@
 id: P483
 title: 去掉帮助检查中的无效性能测量并验证命令交接
 agent: dev-bob
-category: routine
+category: code
 phase: opsx-apply
 change: help-perf-entry-without-measurement
 specs: verification, help-surface
