@@ -1267,7 +1267,7 @@ The correctness gate SHALL distinguish a product-only checkout, which deliberate
 
 Only a check whose named prerequisite is one of those deliberately absent internal surfaces SHALL skip on a product-only checkout. Each such attribution MUST print `SKIP（条件不满足）`, the affected check and missing prerequisite, be counted as a skip rather than a pass, and reach the gate's output and per-section/run accounting. Missing product files, unavailable required tools, a failed executed assertion, and corruption of a present internal surface MUST retain their existing failure/degradation rules; the checkout classification MUST NOT swallow them. An executed check's verdict MUST rest on evidence the subject itself carries: when the call's command word is the wrapped command itself (`tmux`), an isolation wrapper defined in one file MUST NOT certify a mutation call made by another file, while a dedicated wrapper name defined alongside the caller MAY keep its directory-level meaning; a check MUST NOT be reported as satisfied on evidence the subject does not have. A run with prerequisite skips and no failures SHALL exit 0, without claiming the skipped checks passed; a real failure alongside skips MUST still exit non-zero.
 
-The same correctness command SHALL run on both shapes, with no second public suite. The product's static checks, skill loading, published-spec validation, container-build checks and every ledger-independent fixture MUST remain eligible exactly as before (including the existing FAST/full and tool-premise rules). A fixture that provisions its own ledger MUST still run in the product-only checkout. For an internal checkout, except for the three route-page control replacements, the reply-observer duplicate-execution retirement, the routing-argv repeat replacements, the routing-parameter replacements and the selected-settings display replacements specified below, every pre-existing assertion MUST still execute with its original verdict and at least its pre-change per-section pass count under identical run settings; replacing an existing assertion with a new one MUST NOT satisfy that coverage comparison. CI's correctness step MUST retain its blocking failure semantics, and it SHALL run the product floor the way `verification#CI runs the two gates separately and performance does not block` states: a failing applicable product assertion in that step fails the job, and the selection it makes is disclosed in the output tail rather than presented as the full gate.
+The same correctness command SHALL run on both shapes, with no second public suite. The product's static checks, skill loading, published-spec validation, container-build checks and every ledger-independent fixture MUST remain eligible exactly as before (including the existing FAST/full and tool-premise rules). A fixture that provisions its own ledger MUST still run in the product-only checkout. For an internal checkout, except for the three route-page control replacements, the reply-observer duplicate-execution retirement, the routing-argv repeat replacements, the routing-parameter replacements, the selected-settings display replacements and the perf help claim replacement specified below, every pre-existing assertion MUST still execute with its original verdict and at least its pre-change per-section pass count under identical run settings; replacing an existing assertion with a new one MUST NOT satisfy that coverage comparison. CI's correctness step MUST retain its blocking failure semantics, and it SHALL run the product floor the way `verification#CI runs the two gates separately and performance does not block` states: a failing applicable product assertion in that step fails the job, and the selection it makes is disclosed in the output tail rather than presented as the full gate.
 
 The route-page replacement exception is the three complete nested walks in the route-page controls for a column-zero
 command line, an undeclared command-page usage and an unread group level, as specified by
@@ -1381,6 +1381,28 @@ not rerun or claimed as new. No new FAST/full/61b run, screenshot matrix or wait
 this narrow replacement; post-merge evidence uses same-verifier identity and necessary short integration unless
 the evidence premise changed. All unrelated coverage obligations and prior exceptions above remain intact.
 
+The perf help claim exception SHALL replace only the bounded measurement attempt for `team perf --host` in
+§51's `help-surface.sh` `claims` group, keeping the original initialized calling-project fixture and its six
+fingerprints: state, documents, configuration, worktrees/local branches, installed skills and meetings.
+The check SHALL execute the real CLI from that project and SHALL substitute only the measurement target
+in private source. Evidence of the handoff SHALL be one complete, test-owned record outside the calling
+project containing the actual argument vector (exactly `--host`), the actual working directory (the scratch
+calling project) and a distinguishable recorder exit status that the CLI returns. A missing, incomplete,
+duplicate or mismatched record, an early return without handoff, a timeout, an unexpected status or a
+changed fingerprint MUST NOT pass. The replacement SHALL count its one executed verdict, not claim the
+old attempt ran or add an alternate execution or skip.
+
+This check observes the handoff and the six faces for that one invocation, as required for the applicable
+effect by `help-surface#Every behaviour a help page states is declared and probed`. It SHALL NOT run the
+real performance program, invent readings, or claim that the real measurement's setup and execution are
+covered by the calling-project observations. The existing independent real measurement remains unchanged
+under `verification#The performance suite is separate, self-describing, and its numbers are reference-only`;
+it does not establish the dropped observation about the real measurement's effect on the calling project.
+`team smoke --select 0`, all other help claims and formal timeout settings SHALL remain unchanged.
+One non-author verification SHALL record the normal sample and two faults below without an author repeat
+or another run of the real measurement. The replaced attempt is source-attributed; no historical per-call
+duration, fixed time saving or whole-suite result SHALL be inferred from the focused samples.
+
 #### Scenario: The release export skips only unavailable internal checks
 
 - **GIVEN** a clean product-only tree exported from committed HEAD by `bash docs/team/tools/publish-public.sh`, with the gate's required tools available
@@ -1413,11 +1435,12 @@ the evidence premise changed. All unrelated coverage obligations and prior excep
 
 - **GIVEN** pre-change and post-change independent internal checkouts with identical tools and FAST settings
 - **WHEN** `TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh </dev/null` runs in each
-- **THEN** every pre-existing assertion outside the three named route-page replacements, the identified reply-observer retired executions, the named routing-argv retired executions, the routing-parameter retired executions and the explicit selected-settings display inventory is present in the post-change executed assertion inventory with its original verdict, each unaffected section's pass count is at least its baseline, and no new checkout-prerequisite skip appears
+- **THEN** every pre-existing assertion outside the three named route-page replacements, the identified reply-observer retired executions, the named routing-argv retired executions, the routing-parameter retired executions, the explicit selected-settings display inventory and the single perf help claim replacement is present in the post-change executed assertion inventory with its original verdict, each unaffected section's pass count is at least its baseline, and no new checkout-prerequisite skip appears
 - **AND** this FAST run does not produce the route-page replacement evidence; that separate source-attributed baseline, retained non-FAST record/manual undeclared-usage receipt and explicit non-FAST `routes.sh pages` inventory are judged by the named scenario below, without relaxing any retained assertion or count obligation
 - **AND** reply-observer replacement evidence comes from its focused absence sample and normal §62 run, with only the named duplicate executions retired and with parent/child counts kept separate
 - **AND** evidence for the preceding routing-argv replacement batch comes from its short actual-shell samples and its already accepted final complete 61b integration run, with only that batch's named repeats retired; its first CORE's normal real callers remain exercised and no first-order speedup is inferred. A later routing-parameter batch supplies its newly affected evidence under the scenarios below and cites that accepted record for unchanged coverage, not a new complete 61b run
 - **AND** the selected-settings batch excludes only its named obsolete display inventory, retains the required behavior through its mapped focused UI/flip evidence and unchanged-coverage sources, and does not pad replacement passes or require another FAST/full run as payment for that narrow exception
+- **AND** the perf help claim exception excludes just the old bounded `perf` assertion from comparison; its replacement is judged by the three focused samples below, with neither another complete run nor a fabricated old pass
 - **AND** a scratch mutation that replaces any retained internal assertion with a prerequisite skip still fails the inventory/count comparison, even if new assertions keep the aggregate pass total unchanged
 
 #### Scenario: Partial internal trees and broken installs remain red
@@ -1473,7 +1496,7 @@ the evidence premise changed. All unrelated coverage obligations and prior excep
   CLI claim, counts FAST/smoke output as the sample evidence, or labels a retired nested walk as an executed pass
 - **WHEN** that evidence is compared with the named replacement scope and executed assertion inventory
 - **THEN** it fails the coverage comparison even if the reported total equals or exceeds the baseline;
-  only the three specified route-page complete-walk replacements, the separately named reply-observer retirement, the routing-argv retirement, the routing-parameter retirement and the selected-settings display replacement inventory specified above are allowed
+  only the three specified route-page complete-walk replacements, the separately named reply-observer retirement, the routing-argv retirement, the routing-parameter retirement, the selected-settings display replacement inventory and the single perf help claim replacement specified above are allowed
 
 #### Scenario: Routing argv replacements detect the original resplitting errors
 
@@ -1606,6 +1629,25 @@ the evidence premise changed. All unrelated coverage obligations and prior excep
   not described as equivalent preservation of every old assertion or as a fixed number of seconds saved
 - **AND** author static evidence, non-author executed results and post-merge byte checks are distinguished;
   focused evidence cannot be presented as a complete normal suite, complete 61b or measured §61 speedup
+
+#### Scenario: The perf help claim observes a handoff, not a measurement
+
+- **GIVEN** the existing initialized scratch calling project and a private entry source with its measurement target replaced by a short recorder
+- **WHEN** the focused help claim invokes `team perf --host` from that project
+- **THEN** one receipt records exactly one argument, `--host`, the actual scratch project's working directory and the recorder's expected nonzero status, which the CLI returns
+- **AND** the six fingerprints are unchanged, the help claim passes by naming the handoff and unchanged project, and no measurement is run or printed
+
+#### Scenario: The perf help claim rejects a success that never hands off
+
+- **GIVEN** a disposable copy of the same entry source whose `perf` route returns 0 before invoking the target without changing the calling project
+- **WHEN** the same focused help claim runs
+- **THEN** the help fixture exits nonzero and names the missing `perf` handoff; unchanged project fingerprints and CLI exit 0 do not make it pass
+
+#### Scenario: The perf help claim rejects a handoff that changes the calling project
+
+- **GIVEN** another disposable copy whose `perf` route writes a state file in the scratch calling project before invoking the same recorder
+- **WHEN** the same focused help claim runs
+- **THEN** the receipt and CLI status still establish a valid handoff, but the help fixture exits nonzero and names the calling project's changed state face
 
 ### Requirement: The gate lock's holder record names its kind, its owner, its elapsed time and its bound
 
