@@ -6,7 +6,7 @@ branch: `task/V184-reminder-test-temp-roots-proposal-review` · PR/MR: -
 
 reviewed: `227b04f6823196512170b64a136ffe0adfbea511`
 
-**当前结论：修订版 `2022af63` 仍须补一处再实施。** R1、R2、R4 已闭合；R3 已明确先等现有命令完成才删目录，但没有让故障驱动在同步命令返回后必然回到事件循环处理 TERM，验收也只查外层返回非零。见末节定点复看。两轮 OpenSpec 1.16.0 严格校验均通过，均未运行行为样本。
+**当前结论：接受最终提案 `cc692739`，四项修订均闭合。** 最后一处明确同步命令返回后先处理停止请求、再决定是否继续写入；仍用原样本区分子驱动真正停止和仅外层返回非零。OpenSpec 1.16.0 严格校验与差异检查通过。只接受方案，未运行行为样本。
 
 **首轮结论（`227b04f6`）：退回 P485 修订。** 默认工作目录应复用现有 `tmp-root.sh`，调用者指定的日志和要求保留的 `run-*` 不搬、不删。首稿把本可不动的恢复入口列为必改，把停止驱动误当成停止了它正在执行的命令，并安排了几组重复验收。以下保留首轮判据及证据。
 
@@ -122,4 +122,21 @@ Change 'reminder-test-temp-root-ownership' is valid
 rc=0
 ```
 
-当前计数 CRITICAL 1 · WARNING 0 · SUGGESTION 0。只退回 R3 的两处联动文字（设计与原样本判据），不重开已闭合三项。按复看任务书只跑单变更严格校验及差异检查，不重跑首轮公开记录扫描、不执行任何样本；本地提交仍只含本报告。
+该修订版计数 CRITICAL 1 · WARNING 0 · SUGGESTION 0。只退回 R3 的两处联动文字（设计与原样本判据），不重开已闭合三项。按复看任务书只跑单变更严格校验及差异检查，不重跑首轮公开记录扫描、不执行任何样本；本地提交仍只含本报告。
+
+## 最后一处定点复看 · 2026-11-20T08:53:29Z
+
+**ACCEPTED（方案）。** PM 的固定检出 `/var/tmp/p485-review-cc692739.S6DWjm` 干净，`HEAD=cc692739068e026b93a38dc5c03438de777cf429`。`2022af63..cc692739` 只改 `design.md` 的 R3 段、`tasks.md` 原 2.4 和作者报告，未重开 R1、R2、R4。
+
+- **设计闭合。** `design.md:59–67` 指定同步命令成功或失败都先 `await setImmediate`，再检查停止请求，早于下一次写入、调用或普通汇总。它点名 `remind-tick` 之后、构建或启动故障注入之前，补上当前源码 `await admit(repo)` 与后续同步操作之间缺的事件循环回合；并要求走专门的 INT/TERM 130/143 路径，不让现有场景 `catch` 把中断当作普通测试失败，不允许在让出前 `process.exit()`。相对上一版，既保留等待活动命令结束后才删工作目录，也补上了停止后续写入的判据。
+- **原样本闭合。** `tasks.md:36–45` 在原 2.4 的同一外部回执流中，依次确认真实准入写入、子驱动走 TERM 分支且退出，随后注入入口与普通汇总均未出现，再确认子进程及工作目录消失。注入入口记录放在工作目录之外，删除目录不会把反证一起删掉；仅外层返回非零不再能通过。没有新增样本或业务场景。
+
+```text
+$ git -C "$review3" diff --check 2022af63..HEAD
+rc=0 (无输出)
+$ (cd "$review3" && OPENSPEC_TELEMETRY=0 "$HOME/.bun/bin/openspec" validate reminder-test-temp-root-ownership --strict)
+Change 'reminder-test-temp-root-ownership' is valid
+rc=0
+```
+
+最终计数 CRITICAL 0 · WARNING 0 · SUGGESTION 0。只做此次差异与单变更严格校验；未运行中断样本、真实 Pi 或完整测试，未改方案或实现。实施及行为复验由 PM 另行安排。

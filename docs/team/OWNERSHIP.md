@@ -5,7 +5,7 @@
 
 | 路径 | Owner | 说明 |
 |---|---|---|
-| `skills/teamsmith/tests/remind-tool-real.mjs` | agent:dev（P473已关闭，默认维护权恢复） | 一行测试修复cea2b7f2已接受，P473临时写权收回；P471不因此扩到此文件 |
+| `skills/teamsmith/tests/remind-tool-real.{sh,mjs}`、`skills/teamsmith/tests/remind-adversarial-real.sh`、`skills/teamsmith/tests/remind-adversarial-faults.{sh,mjs}` | agent:dev-bob（P486 临时） | 仅五文件的测试目录和退出处理；不改其他提醒测试、共用工具或产品 |
 | `skills/teamsmith/tests/**` | agent:dev | 本轮P471仅现有panel-p21.sh/panel-strings.mjs的设置相关断言替换；P473上述单文件除外，其它范围未授 |
 | `.github/workflows/gates.yml` | agent:dev（P326 临时） | 仅任务书明授的CI入口，不提高60分钟上限；冻结交付后归还PM |
 | `ci/collect-scene.sh` | PM | P324已合入，临时写权收回；当前无实现任务改此文件 |
@@ -23,7 +23,7 @@
 | `docs/team/reviews/P480.md`、`docs/team/reviews/P480-verify.log` | PM（V181已接受） | 合并版 3b44b960 文件核对、语法检查通过，收回临时及 P480 实现写权 |
 | `docs/team/reviews/P483.md`、`docs/team/reviews/P483-verify.log` | PM（V183已接受） | 合并版 282b9dc7 定点核对通过，收回 V183 写权及 P483 实施写权 |
 | `openspec/changes/archive/2026-11-20-help-perf-entry-without-measurement/**`、`openspec/specs/verification/spec.md` | PM（A14已接受） | 五份工件原样移动且仅目标需求同步，收回归档临时写权 |
-| `openspec/changes/reminder-test-temp-root-ownership/**` | agent:dev（P485） | 仅两份提醒测试的方案，不授权修改测试、实现或正式规格 |
+| `openspec/changes/reminder-test-temp-root-ownership/**` | PM（P485 方案已接受） | 规划固定，P486 只勾 `tasks.md` 的 1.x，不改其他内容或正式规格 |
 | 其余 `skills/teamsmith/scripts/panel/src/**` 及对应README/config/SKILL设置说明 | agent:dev（默认维护权） | P471/V177已完成，P474不授写 |
 | `openspec/changes/archive/2026-11-17-pulse-project-settings-simplify/**` | PM（A13已接受） | 已验9/9七工件原样归档，临时写权收回，不再授实现写入 |
 | `openspec/changes/archive/2026-11-16-routing-parameter-check-dedup/**` | PM（A12已接受） | 已验6/6的五工件原样归档，临时写权收回 |
