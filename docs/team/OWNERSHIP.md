@@ -26,8 +26,9 @@
 | `openspec/changes/archive/2026-11-20-help-perf-entry-without-measurement/**`、`openspec/specs/verification/spec.md` | PM（A14已接受） | 五份工件原样移动且仅目标需求同步，收回归档临时写权 |
 | `openspec/changes/archive/2026-11-20-reminder-test-temp-root-ownership/**`、`openspec/specs/verification/spec.md` | PM（A15 已接受） | 一条已验证要求同步，五份工件原样移动，收回临时写权 |
 | `openspec/changes/archive/2026-11-23-pm-autonomy-guidance/**`、`openspec/specs/init-skill/spec.md` | PM（A16 已接受） | 一条已验证的文字要求同步，收回临时写权 |
-| `skills/teamsmith/templates/AGENTS.section.md.tmpl`、`skills/teamsmith/templates/pm-prompt.md.tmpl`、`skills/teamsmith/SKILL.md` | PM（P488 已接受） | 合并版 d26f0ef6 已核文字与权限，收回实施写权 |
-| `skills/teamsmith/tests/loop-inventory.tsv` | agent:dev-bob（P489） | 只补两处已有等待登记，不改测试、实现或扫描判据 |
+| `skills/teamsmith/templates/AGENTS.section.md.tmpl`、`skills/teamsmith/templates/pm-prompt.md.tmpl`、`skills/teamsmith/SKILL.md` | PM（P488 已接受） | 合并版 d26f0ef6 已核文字与权限；仅下列 P490 首句暂交开发者 |
+| `skills/teamsmith/tests/loop-inventory.tsv` | PM（P489 已接受） | 合并版 26/0，收回临时写权 |
+| `skills/teamsmith/templates/pm-prompt.md.tmpl` 的升级说明首句 | agent:dev2（P490 临时） | 仅恢复与迁移文档一致的现有短语，不改权限与其它文字 |
 | 其余 `skills/teamsmith/scripts/panel/src/**` 及对应README/config/SKILL设置说明 | agent:dev（默认维护权） | P471/V177已完成，P474不授写 |
 | `openspec/changes/archive/2026-11-17-pulse-project-settings-simplify/**` | PM（A13已接受） | 已验9/9七工件原样归档，临时写权收回，不再授实现写入 |
 | `openspec/changes/archive/2026-11-16-routing-parameter-check-dedup/**` | PM（A12已接受） | 已验6/6的五工件原样归档，临时写权收回 |

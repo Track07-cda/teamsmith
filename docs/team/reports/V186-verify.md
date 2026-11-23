@@ -4,7 +4,7 @@ agent: verify · status: BLOCKED · time: 2026-11-23 UTC
 
 branch: `task/V186-release-048-meta-freshness` · PR/MR: -
 
-**0.4.8 尚不能放行。** P489 的两行修复已独立复验：§0e 26/0，原失败三项均恢复，两个故意加错的对照仍报错；这不是完整自检通过记录。11 月 23 日首轮实际运行全部六段测试自检，结果 **214 通过、3 失败、3 跳过，exit 1**；11 月 13 日的上一次通过记录已超过 7 天。三个失败都是 §0e 的同一问题：提醒测试新增一处有上限的等待，现有检查将内外两层循环都计入，但清单仍是 86 项。没有证据显示提醒产品功能因此失效，也没有把这次运行改记为通过。发布用完整产品检查目前也没有通过记录；V174 当时的 5139/2 原样保留。
+**0.4.8 尚不能放行。** 最终冻结 `2201a79d` 的完整自检 **216 通过、1 失败、3 跳过，exit 1**。P489 在最终源上通过（§0e 26/0）；新失败是模型路由 §61b 的正常对照返回非零，后续 31 个故意改坏的对照未进入。原日志只保留失败名称，看不到正常对照内哪条断言失败，不能归因于产品、文案或运行环境。11 月 13 日的上一次通过记录仍已超过 7 天。首轮 `2508dec1` 的原始 214/3 与 V174 完整产品检查的 5139/2 均原样保留。
 
 ## Deliverables
 
@@ -100,7 +100,7 @@ N/A — `change: -`，本单只做发布基础设施验证，不写规范。最�
 - CRITICAL 1（§0e 一因三红）；WARNING 1（0.4.8 未取得完整产品通过或另获组合证据验收）；SUGGESTION 0。未执行发布静态、安装、参考性能、最终标签、模型或完整产品检查；均不记为通过。
 - Flip evidence：本单不改实现，没有修复后证据。三个失败和两条故意加入故障的预期红均保存在原日志；不把故意变异有红当作还原通过。
 - Ledger ban（本人分支的发布账本）：`TMPDIR=/var/tmp bash skills/teamsmith/tests/ledger-ban.sh --names-file "$(git rev-parse --path-format=absolute --git-common-dir)/../.pi/team/forbidden-names.txt"` → `scope=published files=2976 hits=0 names=ok user=resolved`，rc=0。
-- **BLOCKED（首轮）:** P486 后 §0e 清单不同步，原 RED 保留。P489 候选定点已通过，发布仍须等待最终冻结候选的原生 GREEN。
+- **BLOCKED（首轮）:** P486 后 §0e 清单不同步，原 RED 保留。P489 候选与最终发布树的 §0e 均已通过；当前阻塞见末节。
 
 ## P489 修复后定点 · 2026-11-23T10:43Z
 
@@ -126,3 +126,49 @@ TMPDIR=/var/tmp OPENSPEC_TELEMETRY=0 TEAM_META=1 bash /var/tmp/p489-review.B4F56
 外层作业 `v186-p489-0e` 62.6 秒，exit 0；50/0 含自动带入的四个前导段 `0,0b,0c,0d`，未运行其余 136 键，含 `36,38m,40,51m,61b` 和产品检查。项目共享原始尾部 `.pi/team/state/bg/v186-p489-0e.log` 的 SHA-256 为 `14fc2917812a61164f0adc1c0e4ded117ea3a420b9e266cb0f79f3d8bc266557`；后台工具标明早期输出超过保留上限，上述结果和两组对照均在保留内容中。首轮完整日志与 `history.tsv` 的 RED 未覆盖；定点没有写出 GREEN。
 
 两条登记分别与 `remind-tool-real.sh:37` 和 `:39` 相符。清理先把实际进程身份保存为 `writers`，再以 `"$writers"` 调用等待函数，外层靠固定字符串输入读到 EOF 停止，不读不断刷新的文件；内层检查同一进程身份，并在共同的 `deadline=$((SECONDS + 10))` 到达时返回，截止不按每个身份重置。定点证明原有清单检查恢复且仍能抓错，不是重新测量真实 Pi。PM 可接收 P489 定点；待修复合入且真正发布内容冻结后，再运行原生完整自检一次。
+
+## 最终候选的提醒事件路径 · 只读比对
+
+最终冻结 `2201a79de982859c0953421831c36095caf78e72`。相对首轮 `2508dec1`，账本之外的内容为两行循环清单、PM 指导及规格归档、README/CHANGELOG 和版本落点；`common.sh` 唯一执行文件差异是 `TEAM_VERSION` 从 0.4.7 到 0.4.8。相对 P489 定点 `7ee3db91`，`skills/teamsmith/tests/` 按 Git 对象无文件差异；最终自检仍从真正发布源实跑，不用定点结果代替。
+
+- V174 的 §69 先运行故障矩阵，再以 `P442_EVIDENCE`、`P442_KEEP=1` 启动 `tests/remind-adversarial-real.sh`；在最终源 `smoke.sh:25247–25274` 比对到同一入口、相同两个参数及真实组 `passed=7 failed=0` 要求。最终对抗 shell 改为调用 `remind_tool_real_prepare`、`remind_tool_real_run --select=adversarial,death`，由 `remind-tool-real.sh:132–171` 给 Node 传私有目录、socket、Pi 路径和场景清单，并传回进程退出码；Node `remind-tool-real.mjs:41` 从同一个 `--select=` 读取场景组。P486 改变了实际运行入口和清理，而非取消该场景。
+- 最终 `remind-tool-real.mjs:577–605` 仍先跑实际 PM 启动（同文件 143–175）、让无关轮次保持忙碌，设置 G1/提醒并确认只有 `intent` 且无事件，随后执行真实待命 off/on 到 G2、放行忙碌轮次。P473 引入的两步等待仍在：`observed` → 同一场景 `events.jsonl` 中的 `custom_start/team-reminder`，然后断言 `generation-ambiguous`、待命仍开、代数为 2，并写 receipt。P486 在改为 await 后仍等 off/on 各自返回 0 才放行；读取的事件文件和状态内容不变。`git diff 532c8b47..2201a79d` 显示该 provider、生产提醒/状态脚本及扩展无差异；实际 PM 启动的 `common.sh` 只有版本常量变动。
+- **尚缺新驱动的同一事件实跑。** P486 为私有 Pi 加了新的启动回执、外层进程管理、同步命令后的信号交接以及 `until` 的停止检查；这些能改变测试运行时序，虽未改变正常事件判定，却不能用源码或 V185 的进程清理样本证明 `event-after` 已在新入口跑通。V176 可复用来证明旧即时读取问题与 P473 判据有效，不可冒称最终源执行过。若 PM 对 0.4.8 选择组合验收，最小补证为最终源通过实际 shell/Node 交接只跑原 `event-after`、验真实事件与 G2 结果；若最终完整产品检查已执行 §69 并通过，则不重复。本轮只读，没有启动此场景。
+
+## 最终冻结候选的完整自检 · RED
+
+执行者 verify，在干净独立检出 `/var/tmp/rel048-final-meta.8H1YrI` 执行一次；首尾均是 detached `2201a79de982859c0953421831c36095caf78e72`，工作树无变更。
+
+```bash
+TMPDIR=/var/tmp OPENSPEC_TELEMETRY=0 bash /var/tmp/rel048-final-meta.8H1YrI/skills/teamsmith/tests/meta-suite.sh --snapshot=2201a79de982859c0953421831c36095caf78e72 </dev/null
+```
+
+| 段 | 秒 | 通过 / 失败 / 跳过 |
+|---|---:|---:|
+| 0 / 0b / 0c / 0d（前导） | 0 / 0 / 3 / 0 | 3/0/0 · 3/0/0 · 9/0/0 · 9/0/0 |
+| 0e 循环清单 | 50 | 26 / 0 / 0 |
+| 36 选段与分段 | 856 | 121 / 0 / 3 |
+| 38m 设置检查 | 75 | 2 / 0 / 0 |
+| 40 临时目录 | 56 | 42 / 0 / 0 |
+| 51m 命令用法 | 297 | 1 / 0 / 0 |
+| 61b 模型路由 | 306 | **0 / 1 / 0** |
+
+```text
+✓ P70 循环清单：干净树绿（88 行清单 / 88 个 while+sleep 循环，配平 88 个）
+✓ P70 翻转（循环）还原：绿
+✓ P313 翻转（盲区）还原：绿
+✗ 61b 路由翻转变异有失败（rc=1；RESULT pass=2 fail=1 selected=flip）
+    FAIL flip-baseline-green
+== 选段结果 ==  ✓ 216  ✗ 1
+快照运行结束：committed=2201a79de982859c0953421831c36095caf78e72 rc=1
+```
+
+后台 `v186-final-meta-048` 实际退出 1，墙钟 1653.7 秒；原生总计 1649 秒，10 段有收口。§36 的三次跳过仍是缺机器生成的 `.pi/skills`，36⑧ `147/0/0`、36⑨ `21/0/0`。这是 P489 在最终发布源的实际通过记录，不是全套通过。
+
+原件：共享 `.pi/team/state/meta-suite/2026-11-23T10-46-59Z.log`（SHA-256 `726b795aa5fd8fd79ab59251a849c72b2f6fc7117671d77d861e2806992bf911`），后台 `.pi/team/state/bg/v186-final-meta-048.log`。原生 `history.tsv` 新增 `2026-11-23T10:46:59Z RED … 1649 10 c715864b`；上轮 `09:59:12Z RED` 和过期的 `11-13 GREEN` 都在，没有手改。没有保留临时测试现场。
+
+### 失败定位和未证实边界
+
+- `task-model-routing.sh:1430–1442` 先对未改的源执行一组正常检查（`policy,machine,init,config,upgrade,dispatch,resume,transaction,limits,preview,sid-readers,pm,heal,adopt,updatecheck,boundary`）；`flip-baseline-green` 断言该子进程返回 0。随后 31 个故意改坏的对照只在该值为 0 时启动；因此此次未执行它们，不能把本次 §61b 当作有效翻转证据。日志没有外层挂住消息或命名的子运行 1800 秒超时，306 秒也低于两种上限；不能据此猜某个内部步骤未超时。
+- 细节本应在内部 `flip-baseline.log`；`smoke.sh:24896–24899` 的外层失败输出只摘父级 `FAIL` 行，删掉现场后留下的原件无法指出哪个正常子组失败、失败诊断或子进程的确切退出值。首轮的同段实际记录是 31 条故意改坏均报错并还原（`RESULT pass=216 fail=0 selected=flip`）。两次路由测试脚本逐字节未变，但最终源有版本与 PM 指导模板变化，不能据此认定只是偶发问题，也不能将失败归到其中任何一项。
+- **BLOCKED:** PM 请安排路由测试归属人先在 `2201a79d` 的隔离执行环境中复用原正常组，并保留完整子进程日志、每组失败和退出回执；在有证据前不改判、不盲重跑完整自检。未运行产品全量、§69 或新样本；最终是否采用组合产品验收仍待独立决定。
