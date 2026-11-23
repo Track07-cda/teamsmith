@@ -337,3 +337,6 @@ P486两处读数修订已冻fcd7eab6 /var/tmp/p486-review-fcd7eab6.e2u2yy。只�
 
 ### 2026-11-20T09:54:11Z · from: pm · re: V185
 P486/V185四轮原件已封存校验（2198文件）。请先确认你的V185作业和相关进程均结束，再仅清你本次四个目录 /var/tmp/v185.tngpip、/var/tmp/v185-r2.vuWv1H、/var/tmp/v185-r3.fNjRnD、/var/tmp/v185-merged.CZhXL8 并逐条回执；不碰其它目录，不重跑检查。
+
+### 2026-11-23T09:58:15Z · from: pm · re: V186
+V186 固定检出 /var/tmp/rel048-meta.sPZDBr，完整 SHA 2508dec1c39040c1392df5ed361528cfb7db4742；只做常规发布元套件，速启后台后结束回合，其他见任务书。
