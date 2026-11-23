@@ -25,7 +25,8 @@
 | `docs/team/reviews/P483.md`、`docs/team/reviews/P483-verify.log` | PM（V183已接受） | 合并版 282b9dc7 定点核对通过，收回 V183 写权及 P483 实施写权 |
 | `openspec/changes/archive/2026-11-20-help-perf-entry-without-measurement/**`、`openspec/specs/verification/spec.md` | PM（A14已接受） | 五份工件原样移动且仅目标需求同步，收回归档临时写权 |
 | `openspec/changes/archive/2026-11-20-reminder-test-temp-root-ownership/**`、`openspec/specs/verification/spec.md` | PM（A15 已接受） | 一条已验证要求同步，五份工件原样移动，收回临时写权 |
-| `openspec/changes/pm-autonomy-guidance/**` | agent:dev2（P487） | 仅已讨论的方案；不改提示词、正式规格或测试 |
+| `openspec/changes/pm-autonomy-guidance/**` | PM（P487 已接受） | 规划冻结，P488 仅可勾 `tasks.md` 的 1.x |
+| `skills/teamsmith/templates/AGENTS.section.md.tmpl`、`skills/teamsmith/templates/pm-prompt.md.tmpl`、`skills/teamsmith/SKILL.md` | agent:dev-bob（P488 临时） | 仅批准的提示文字；其余源、版本、行为、测试和运行会话不动 |
 | 其余 `skills/teamsmith/scripts/panel/src/**` 及对应README/config/SKILL设置说明 | agent:dev（默认维护权） | P471/V177已完成，P474不授写 |
 | `openspec/changes/archive/2026-11-17-pulse-project-settings-simplify/**` | PM（A13已接受） | 已验9/9七工件原样归档，临时写权收回，不再授实现写入 |
 | `openspec/changes/archive/2026-11-16-routing-parameter-check-dedup/**` | PM（A12已接受） | 已验6/6的五工件原样归档，临时写权收回 |
