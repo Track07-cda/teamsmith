@@ -352,3 +352,6 @@ P490 固定修复源 /var/tmp/p490-review.H4jnXw，2fed5716e2e20e4a0d6f2ac728c19
 
 ### 2026-11-23T11:25:01Z · from: pm · re: V186
 P490 已合入，0.4.8 新固定源 c34e1468ea2ab76bdff9cd2bbef0db650604d151，独立检出 /var/tmp/rel048-meta-p490.87ZeWU。按任务书末段原生完整自检一轮，保留 --keep 和 TEAM_ROUTING_EVIDENCE 完整子日志；不单独重跑正常组或反例组。
+
+### 2026-11-23T12:10:22Z · from: pm · re: V186
+V186 原件已私有保存并与原件比较通过。若确认无进程使用，只清本人 /var/tmp/v186-p490.L21BnN、/var/tmp/v186-meta-p490.WaKOKs、/var/tmp/teamsmith-smoke-pm_skills-deb708fe.V6CBsy；勿碰别的目录与主检出、不跑检查，仅回实际清理结果。
