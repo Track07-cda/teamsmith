@@ -4,7 +4,7 @@ agent: verify · status: BLOCKED · time: 2026-11-23 UTC
 
 branch: `task/V186-release-048-meta-freshness` · PR/MR: -
 
-**0.4.8 尚不能放行。** 11 月 23 日真实运行了全部六段测试自检，结果 **214 通过、3 失败、3 跳过，exit 1**；11 月 13 日的上一次通过记录已超过 7 天。三个失败都是 §0e 的同一问题：提醒测试新增一处有上限的等待，现有检查将内外两层循环都计入，但清单仍是 86 项。没有证据显示提醒产品功能因此失效，也没有把这次运行改记为通过。发布用完整产品检查目前也没有通过记录；V174 当时的 5139/2 原样保留。
+**0.4.8 尚不能放行。** P489 的两行修复已独立复验：§0e 26/0，原失败三项均恢复，两个故意加错的对照仍报错；这不是完整自检通过记录。11 月 23 日首轮实际运行全部六段测试自检，结果 **214 通过、3 失败、3 跳过，exit 1**；11 月 13 日的上一次通过记录已超过 7 天。三个失败都是 §0e 的同一问题：提醒测试新增一处有上限的等待，现有检查将内外两层循环都计入，但清单仍是 86 项。没有证据显示提醒产品功能因此失效，也没有把这次运行改记为通过。发布用完整产品检查目前也没有通过记录；V174 当时的 5139/2 原样保留。
 
 ## Deliverables
 
@@ -100,4 +100,29 @@ N/A — `change: -`，本单只做发布基础设施验证，不写规范。最�
 - CRITICAL 1（§0e 一因三红）；WARNING 1（0.4.8 未取得完整产品通过或另获组合证据验收）；SUGGESTION 0。未执行发布静态、安装、参考性能、最终标签、模型或完整产品检查；均不记为通过。
 - Flip evidence：本单不改实现，没有修复后证据。三个失败和两条故意加入故障的预期红均保存在原日志；不把故意变异有红当作还原通过。
 - Ledger ban（本人分支的发布账本）：`TMPDIR=/var/tmp bash skills/teamsmith/tests/ledger-ban.sh --names-file "$(git rev-parse --path-format=absolute --git-common-dir)/../.pi/team/forbidden-names.txt"` → `scope=published files=2976 hits=0 names=ok user=resolved`，rc=0。
-- **BLOCKED:** PM 请交 P486 测试归属人修复原 §0e 清单不同步，经独立定点确认后为新冻结提交取得原生 GREEN。保留这次 RED。尚未收到最终候选，无发布动作。
+- **BLOCKED（首轮）:** P486 后 §0e 清单不同步，原 RED 保留。P489 候选定点已通过，发布仍须等待最终冻结候选的原生 GREEN。
+
+## P489 修复后定点 · 2026-11-23T10:43Z
+
+在 PM 固定的 `/var/tmp/p489-review.B4F56X` 上实际执行以下命令，固定检出前后都是干净的 `7ee3db91b6b6852d06a1661b650aa08d2923df04`。`git diff 7ee3db91^ 7ee3db91` 仅 `tests/loop-inventory.tsv` 增两行；`53471f5b` 另只加作者报告。测试执行和判定代码均未改。
+
+```bash
+TMPDIR=/var/tmp OPENSPEC_TELEMETRY=0 TEAM_META=1 bash /var/tmp/p489-review.B4F56X/skills/teamsmith/tests/smoke.sh --select 0e --snapshot=7ee3db91b6b6852d06a1661b650aa08d2923df04 </dev/null
+```
+
+```text
+✓ P70 循环清单：干净树绿（88 行清单 / 88 个 while+sleep 循环，配平 88 个）
+✓ P70 翻转（循环）：新 while+sleep → 红
+✓ P70 翻转（循环）：点名 file:line
+✓ P70 翻转（循环）还原：绿
+✓ P313 翻转（盲区）：tmp-hygiene.sh 里塞未登记的 while+sleep → 红
+✓ P313 翻转（盲区）：点名 tmp-hygiene.sh 的 file:line
+✓ P313 翻转（盲区）还原：绿
+#5 0e · … · 参考 用时 49s · ✓26 ✗0 SKIP0 · ticks 26
+== 选段结果 ==  ✓ 50  ✗ 0
+快照运行结束：committed=7ee3db91b6b6852d06a1661b650aa08d2923df04 rc=0
+```
+
+外层作业 `v186-p489-0e` 62.6 秒，exit 0；50/0 含自动带入的四个前导段 `0,0b,0c,0d`，未运行其余 136 键，含 `36,38m,40,51m,61b` 和产品检查。项目共享原始尾部 `.pi/team/state/bg/v186-p489-0e.log` 的 SHA-256 为 `14fc2917812a61164f0adc1c0e4ded117ea3a420b9e266cb0f79f3d8bc266557`；后台工具标明早期输出超过保留上限，上述结果和两组对照均在保留内容中。首轮完整日志与 `history.tsv` 的 RED 未覆盖；定点没有写出 GREEN。
+
+两条登记分别与 `remind-tool-real.sh:37` 和 `:39` 相符。清理先把实际进程身份保存为 `writers`，再以 `"$writers"` 调用等待函数，外层靠固定字符串输入读到 EOF 停止，不读不断刷新的文件；内层检查同一进程身份，并在共同的 `deadline=$((SECONDS + 10))` 到达时返回，截止不按每个身份重置。定点证明原有清单检查恢复且仍能抓错，不是重新测量真实 Pi。PM 可接收 P489 定点；待修复合入且真正发布内容冻结后，再运行原生完整自检一次。
