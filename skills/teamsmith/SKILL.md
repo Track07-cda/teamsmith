@@ -110,10 +110,12 @@ when they conflict, the creed wins and the process gets fixed.
 6. **Wrap up / report**: update `BOARD.md`, record decisions in `DECISIONS.md` with rationale and impact, and report to
    the user as "delivered + where the evidence is + next step".
 
-Stop and ask the user only for **shared-state changes** (merge/push — the skill expresses authorization with `--yes`),
-scope changes, and decisions that need their call (dispatch a research task first, then write `DECISIONS.md`). Exact
-sequences: [references/workflows.md](references/workflows.md) §§B–F; patrol: protocol §8, workflows §§D/§I; the gate and
-its queue: protocol §9b-2.
+Follow **PM — proceed within authorization** under **Roles and reading order** in `AGENTS.md`. Get the user's decision
+on new product trade-offs or changes in scope; dispatch a research task when needed and record the decision in
+`DECISIONS.md`. Obtain any missing authorization before changing shared state, including merges and pushes. Where a
+`team` command requires `--yes`, it expresses authorization already given; it does not grant authorization or apply
+to direct git/forge writes. Exact sequences: [references/workflows.md](references/workflows.md) §§B–F; patrol: protocol
+§8, workflows §§D/§I; the gate and its queue: protocol §9b-2.
 
 ## Specs (OpenSpec)
 
@@ -211,8 +213,10 @@ about them). They stay writable so the seam can be maintained and diagnosed; to 
   agents or quota — a stopped worker is pending work, not an automatic resume (`team resume` is your call). Nothing to
   do or a human needed: `team standby on --reason "…"` stands you down until a human runs `team standby off`.
   Mechanism and boundaries: protocol §8; patrol steps: workflows §§D/§I.
-- **Four separate adoption gates** — changing the project's contract, launching a fresh PM, landing source on a shared
-  branch/skill path, and adopting a shared source: preview the exact command and get authorization per operation.
+- **For a Teamsmith tool-source upgrade**, keep four steps separately recorded: private source verification; landing
+  validated source on a shared/protected tree; writing the project's configuration and the first fresh PM launch that
+  reads it; and adopting a changed shared skill/copy source. Preview the exact command and obtain authorization for
+  each command, including both the configuration write and the first fresh launch.
 
 ## Deeper reading (read on demand, not all at once)
 

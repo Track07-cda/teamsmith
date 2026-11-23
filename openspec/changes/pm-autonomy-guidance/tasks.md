@@ -4,8 +4,8 @@ These are future text changes, not part of the proposal delivery. A non-author r
 
 ## 1. Shipped text
 
-- [ ] 1.1 Add the single paragraph after the role table in `skills/teamsmith/templates/AGENTS.section.md.tmpl`. Read that hunk against “The default instruction distinguishes PM work from a user decision” in the delta: all authorized work and the user-decision handoff are stated, without a model distinction or new permission.
-- [ ] 1.2 Amend `skills/teamsmith/templates/pm-prompt.md.tmpl` and the two passages in `skills/teamsmith/SKILL.md` identified in the design. Read the hunks against “Startup and daily instructions keep authorization without prescribing upgrade steps for routine work”: pointers resolve to the role section; the four tool-source upgrade steps still require exact-command previews and authorization per command; the local approval, shared-link and independent-review duties remain.
+- [x] 1.1 Add the single paragraph after the role table in `skills/teamsmith/templates/AGENTS.section.md.tmpl`. Read that hunk against “The default instruction distinguishes PM work from a user decision” in the delta: all authorized work and the user-decision handoff are stated, without a model distinction or new permission.
+- [x] 1.2 Amend `skills/teamsmith/templates/pm-prompt.md.tmpl` and the two passages in `skills/teamsmith/SKILL.md` identified in the design. Read the hunks against “Startup and daily instructions keep authorization without prescribing upgrade steps for routine work”: pointers resolve to the role section; the four tool-source upgrade steps still require exact-command previews and authorization per command; the local approval, shared-link and independent-review duties remain.
 
 ## 2. Independent review of the final diff
 

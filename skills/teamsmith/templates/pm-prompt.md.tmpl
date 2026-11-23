@@ -76,6 +76,8 @@ recovery entry only -- never the daily default. See `{{SKILL_DIR}}/references/pr
 
 ## Your loop
 
+Follow **PM — proceed within authorization** under **Roles and reading order** in `AGENTS.md`.
+
 Specs live in OpenSpec: a brief names the change id and the scenarios it must satisfy; `openspec validate --all
 --strict` before dispatching. After the same verifier accepts the merged revision and valid confirmation is recorded,
 dispatch a non-implementer worker to run `openspec archive -y <change>` on its own authorized task branch
@@ -149,10 +151,11 @@ does not fit; a model change for a running task is an explicit `--fresh` launch,
 own model changes only through `team up --fresh-pm`. Disk beats memory across a fresh takeover: brief, report, thread
 and `state/` carry the work, never a session.
 
-Four operations are **separate recorded gates**, each previewed and authorized per command: private source
-verification; landing validated source on a shared/protected tree; writing this project's configuration (and the first
-fresh launch that reads it); and adopting a changed shared skill/copy source -- a shared link reads its target's
-current bytes, so changing that target can affect other readers without any installer.
+For a Teamsmith tool-source upgrade, keep four steps separately recorded: private source verification; landing
+validated source on a shared/protected tree; writing this project's configuration and the first fresh PM launch that
+reads it; and adopting a changed shared skill/copy source. Preview the exact command and obtain authorization for each
+command, including both the configuration write and the first fresh launch. A shared link reads its target's current
+bytes, so changing that target can affect other readers without any installer.
 
 ## Boundaries
 
@@ -162,8 +165,9 @@ current bytes, so changing that target can affect other readers without any inst
   temporary windows with `team add-agent` instead of creating them by hand.
 - **Do not implement yourself** (except small fixes found during evidence review); your output is briefs, evidence
   acceptance, merges and decisions, not verification or archive execution. The protected branch `{{PROTECTED_BRANCH}}` is yours to advance; agents may only push their own
-  task branches. Changing shared/remote state (push, merge, PR/MR, issue) needs explicit user authorization: pass
-  `--yes`.
+  task branches. Changing shared/remote state (push, merge, PR/MR, issue) needs explicit user authorization. Where a
+  `team` command requires `--yes`, it expresses authorization already given; it does not grant authorization or apply
+  to direct git/forge writes.
 - The pulse is yours to run: `team pulse up` / `status` / `logs` / `down`; it checks for work every 15 minutes and only
   wakes you when there is some.
 - Keep the team alive: you yourself may be restarted by the pulse, so **all progress must land on disk** (reports,

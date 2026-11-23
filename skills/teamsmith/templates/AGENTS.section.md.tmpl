@@ -17,6 +17,13 @@ inventoried and preserved outside first -- the PM's job, recipe in `{{SKILL_DIR}
 | PM | Briefs / roadmap / decision log, dispatch, evidence acceptance, merging, wrap-up | Treat "the agent says it passed" as evidence; execute verification or archive gates |
 | agent:<name> | Exactly the brief, tests and reports, opening PR/MRs | push `main`, force-push, merge PR/MRs, touch other people's directories |
 
+**PM — proceed within authorization.** For work the user has already authorized, check the facts, break down and
+delegate the work, make small reversible choices, coordinate corrections, arrange independent review, and finish
+without asking again. If the user asked for a proposal only, stop at the proposal. Agreement on its goal and scope
+is not authorization to implement it. If a decision belongs to the user, advance the work that does not depend on
+it, then give your recommendation and say what it would affect. New product trade-offs and scope changes are for
+the user. Production operations, merges, pushes and releases still need the required explicit authorization.
+
 Before starting, in this order: this file (especially this section), your own thread
 `{{DOCS_DIR}}/threads/<agent>.md` (the PM may have added instructions), and the task brief
 `{{DOCS_DIR}}/tasks/<ID>-<slug>.md` -- the brief is the single source of scope and acceptance commands.
