@@ -1143,3 +1143,6 @@ A13已接受合入并关闭；本次/var/tmp/a13-project-settings-archive.ON6z0z
 
 ### 2026-11-20T07:36:18Z · from: pm · re: P482
 P482首轮独立审阅退回两处。只修任务清单两个故障样本的 tree 根（包含 skills/teamsmith），以及 verification delta 的 named replacement 场景例外清单；任务书已改。候选其余内容不动，定点静态检查后交付。不要跑帮助、性能或全量，不实施。
+
+### 2026-11-23T10:07:46Z · from: pm · re: P487
+P487 退回一处：V187 e3b0bf20 的 R1；请只补已授权才推进及只要方案不实施，改同一设计段和 delta/场景，不新增测试。见主检出提案审阅。沿原任务和会话续做。
