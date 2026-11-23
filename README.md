@@ -57,13 +57,13 @@ than replaced (`--force` replaces only an entry recognised as this skill).
 ### As a Pi package (no global CLI)
 
 ```bash
-pi install git:git@github.com:Track07-cda/teamsmith@v0.4.7      # user level: every project
-pi install -l git:git@github.com:Track07-cda/teamsmith@v0.4.7   # project level: recorded in .pi/settings.json
+pi install git:git@github.com:Track07-cda/teamsmith@v0.4.8      # user level: every project
+pi install -l git:git@github.com:Track07-cda/teamsmith@v0.4.8   # project level: recorded in .pi/settings.json
 ```
 
 - **Pin a released tag**: `@v<version>`, the version `team version` prints. Latest tag:
   `git tag --sort=-v:refname | head -1`.
-- The `git@github.com:` form (or `ssh://git@github.com/Track07-cda/teamsmith@v0.4.7`) uses your SSH key and works
+- The `git@github.com:` form (or `ssh://git@github.com/Track07-cda/teamsmith@v0.4.8`) uses your SSH key and works
   whether or not you have a token; the shorthand `git:github.com/Track07-cda/teamsmith@v0.4.7` takes the HTTPS
   route, so it works anonymously on the public repository and asks for credentials if your access is private.
 - The clone lands in `~/.pi/agent/git/<host>/<path>` (user level) or `.pi/git/<host>/<path>` (project level); the
