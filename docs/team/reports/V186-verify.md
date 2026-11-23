@@ -4,7 +4,7 @@ agent: verify · status: BLOCKED · time: 2026-11-23 UTC
 
 branch: `task/V186-release-048-meta-freshness` · PR/MR: -
 
-**0.4.8 尚不能放行。** 最终冻结 `2201a79d` 的完整自检 **216 通过、1 失败、3 跳过，exit 1**。P489 在最终源上通过（§0e 26/0）；新失败是模型路由 §61b 的正常对照返回非零，后续 31 个故意改坏的对照未进入。原日志只保留失败名称，看不到正常对照内哪条断言失败，不能归因于产品、文案或运行环境。11 月 13 日的上一次通过记录仍已超过 7 天。首轮 `2508dec1` 的原始 214/3 与 V174 完整产品检查的 5139/2 均原样保留。
+**0.4.8 尚不能放行。** 最终冻结 `2201a79d` 的完整自检 **216 通过、1 失败、3 跳过，exit 1**。P489 在最终源上通过（§0e 26/0）；新失败是模型路由 §61b 的正常对照返回非零，后续 31 个故意改坏的对照未进入。原日志未保留正常对照内的具体失败项。后续 P490 独立证实旧候选缺文案关键短语，修复后初始化分组 68/0；不能证明这是历史失败的唯一原因，也没有取得新的完整自检通过记录。11 月 13 日的上一次通过记录仍已超过 7 天。首轮 `2508dec1` 的原始 214/3 与 V174 完整产品检查的 5139/2 均原样保留。
 
 ## Deliverables
 
@@ -171,4 +171,29 @@ TMPDIR=/var/tmp OPENSPEC_TELEMETRY=0 bash /var/tmp/rel048-final-meta.8H1YrI/skil
 
 - `task-model-routing.sh:1430–1442` 先对未改的源执行一组正常检查（`policy,machine,init,config,upgrade,dispatch,resume,transaction,limits,preview,sid-readers,pm,heal,adopt,updatecheck,boundary`）；`flip-baseline-green` 断言该子进程返回 0。随后 31 个故意改坏的对照只在该值为 0 时启动；因此此次未执行它们，不能把本次 §61b 当作有效翻转证据。日志没有外层挂住消息或命名的子运行 1800 秒超时，306 秒也低于两种上限；不能据此猜某个内部步骤未超时。
 - 细节本应在内部 `flip-baseline.log`；`smoke.sh:24896–24899` 的外层失败输出只摘父级 `FAIL` 行，删掉现场后留下的原件无法指出哪个正常子组失败、失败诊断或子进程的确切退出值。首轮的同段实际记录是 31 条故意改坏均报错并还原（`RESULT pass=216 fail=0 selected=flip`）。两次路由测试脚本逐字节未变，但最终源有版本与 PM 指导模板变化，不能据此认定只是偶发问题，也不能将失败归到其中任何一项。
-- **BLOCKED:** PM 请安排路由测试归属人先在 `2201a79d` 的隔离执行环境中复用原正常组，并保留完整子进程日志、每组失败和退出回执；在有证据前不改判、不盲重跑完整自检。未运行产品全量、§69 或新样本；最终是否采用组合产品验收仍待独立决定。
+- **BLOCKED（当轮）:** 原始证据不足以定位正常组中的具体失败；不盲重跑完整自检。后续改为只对照找到的文案断言并在修复候选执行原初始化分组，见下节。未运行产品全量、§69 或提醒事件样本；最终是否采用组合产品验收另行决定。
+
+## P490 定点复验 · 2026-11-23T11:22Z
+
+**候选定点通过。** `2201a79d` 与候选 `2fed5716e2e20e4a0d6f2ac728c19d30c9ed29c9` 的测试目录无差异。修复提交只换 `skills/teamsmith/templates/pm-prompt.md.tmpl:154` 的短语；相对原发布源其余差异是账本。`2eb41d19` 只加作者报告。对照前后两处检出均干净。
+
+1. 从两棵冻结树的 `task-model-routing.sh:921` 分别解析同一行 `init-guidance-separate-gates`，执行它实际使用的 `bash -c`，只将 `$SKILL` 指向各自检出；两处命令体逐字相同。该条件要求 `references/migration.md` 和 `templates/pm-prompt.md.tmpl` 同时含 `separate recorded gates`。修前 `2201a79d` **rc=1**，候选 **rc=0**。两版 migration 未变；修复只把模板的措辞改回原检查要求，没有修改检查。
+2. 文案仍限 Teamsmith 工具来源升级；四项操作仍依次是私有源验证、落入共享或受保护的树、写当前项目配置并首次用它启动新的 PM、采用变更后的共享技能或副本来源。逐条预览命令并取得授权的要求未变，特别是写配置和首次启动各自授权；共享链接读取当前目标字节的提醒未变。两版原文比对直接见模板同段。
+3. 只在 `/var/tmp/p490-review.H4jnXw` 执行原有初始化分组一次：
+
+```bash
+TMPDIR=/var/tmp OPENSPEC_TELEMETRY=0 TEAM_ROUTING_EVIDENCE=/var/tmp/v186-p490.L21BnN/evidence bash /var/tmp/p490-review.H4jnXw/skills/teamsmith/tests/task-model-routing.sh --select init </dev/null
+```
+
+```text
+PASS init-private-shared-source-unchanged
+PASS init-private-link-intact
+PASS init-guidance-shared-effect
+PASS init-guidance-separate-gates
+PASS init-guidance-ownership-not-model
+RESULT pass=68 fail=0 selected=init
+```
+
+实测作业 `v186-p490-init` 20.2 秒，命令和作业均 exit 0。`/var/tmp/v186-p490.L21BnN/` 保留 `command.txt`、`init.stdout`（71 行，SHA-256 `6fa9b06a268c0e10b6c2b548e8dbfcfb91ddc9934c7b53e2eaed91974e04cfed`）、`init.stderr`（空）、`init.rc`、两次原条件回执，以及脚本从私有临时树导出的 904 个普通文件。后台尾部另存 `.pi/team/state/bg/v186-p490-init.log`。
+
+原条件反例证明 `2201a79d` 的正常对照至少有一条本会失败的条件；当时内层日志已失，不能证明它是唯一历史原因。候选没有跑其余正常组、31 个故意改坏的对照、完整自检、模型或已有项目启动。原 RED 未覆盖；交 PM 接受定点并重新冻结，等待新的完整自检实证。

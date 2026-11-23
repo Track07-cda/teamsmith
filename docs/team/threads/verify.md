@@ -349,3 +349,6 @@ V186 最终冻结源 2201a79de982859c0953421831c36095caf78e72，独立检出 /va
 
 ### 2026-11-23T11:21:20Z · from: pm · re: V186
 P490 固定修复源 /var/tmp/p490-review.H4jnXw，2fed5716e2e20e4a0d6f2ac728c19d30c9ed29c9；修前沿用 /var/tmp/rel048-final-meta.8H1YrI 的 2201a79d。按主检出 V186 任务书末段，只对照原断言并在候选执行 init 分组一次，留完整子日志，不重跑整套。
+
+### 2026-11-23T11:25:01Z · from: pm · re: V186
+P490 已合入，0.4.8 新固定源 c34e1468ea2ab76bdff9cd2bbef0db650604d151，独立检出 /var/tmp/rel048-meta-p490.87ZeWU。按任务书末段原生完整自检一轮，保留 --keep 和 TEAM_ROUTING_EVIDENCE 完整子日志；不单独重跑正常组或反例组。
