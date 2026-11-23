@@ -1,10 +1,10 @@
 # V186 · 0.4.8 发布前测试自检
 
-agent: verify · status: BLOCKED · time: 2026-11-23 UTC
+agent: verify · status: PASS（发布测试自检） · time: 2026-11-23 UTC
 
 branch: `task/V186-release-048-meta-freshness` · PR/MR: -
 
-**0.4.8 尚不能放行。** 最终冻结 `2201a79d` 的完整自检 **216 通过、1 失败、3 跳过，exit 1**。P489 在最终源上通过（§0e 26/0）；新失败是模型路由 §61b 的正常对照返回非零，后续 31 个故意改坏的对照未进入。原日志未保留正常对照内的具体失败项。后续 P490 独立证实旧候选缺文案关键短语，修复后初始化分组 68/0；不能证明这是历史失败的唯一原因，也没有取得新的完整自检通过记录。11 月 13 日的上一次通过记录仍已超过 7 天。首轮 `2508dec1` 的原始 214/3 与 V174 完整产品检查的 5139/2 均原样保留。
+**0.4.8 的发布测试自检已通过。** 合入 P489、P490 的冻结候选 `c34e1468` 于 `2026-11-23T11:25:36Z` 产生新的原生 GREEN：**217 通过、0 失败、3 跳过，exit 0**。§61b 正常对照 1569/0；后续 31 个故意改坏的对照按名报错并恢复。该记录满足 7 天内实跑自检的要求；不等于完整产品测试通过或发布放行。前两轮 `2508dec1` 214/3、`2201a79d` 216/1 和 V174 完整产品检查 5139/2 均原样保留。
 
 ## Deliverables
 
@@ -196,4 +196,43 @@ RESULT pass=68 fail=0 selected=init
 
 实测作业 `v186-p490-init` 20.2 秒，命令和作业均 exit 0。`/var/tmp/v186-p490.L21BnN/` 保留 `command.txt`、`init.stdout`（71 行，SHA-256 `6fa9b06a268c0e10b6c2b548e8dbfcfb91ddc9934c7b53e2eaed91974e04cfed`）、`init.stderr`（空）、`init.rc`、两次原条件回执，以及脚本从私有临时树导出的 904 个普通文件。后台尾部另存 `.pi/team/state/bg/v186-p490-init.log`。
 
-原条件反例证明 `2201a79d` 的正常对照至少有一条本会失败的条件；当时内层日志已失，不能证明它是唯一历史原因。候选没有跑其余正常组、31 个故意改坏的对照、完整自检、模型或已有项目启动。原 RED 未覆盖；交 PM 接受定点并重新冻结，等待新的完整自检实证。
+原条件反例证明 `2201a79d` 的正常对照至少有一条本会失败的条件；当时内层日志已失，不能证明它是唯一历史原因。候选没有跑其余正常组、31 个故意改坏的对照、完整自检、模型或已有项目启动。原 RED 未覆盖；PM 随后接收定点并重新冻结，完整自检证据如下。
+
+## 合入 P490 后的冻结候选 · 完整自检 GREEN
+
+固定检出 `/var/tmp/rel048-meta-p490.87ZeWU` 前后皆为干净的 detached `c34e1468ea2ab76bdff9cd2bbef0db650604d151`。相对上一冻结源 `2201a79d`，唯一非账本差异是 PM 指引模板的一行措辞；该模板与已通过定点核对的 `2fed5716` 逐字节相同。收取时本地 `main` 相对受检 SHA 只有 8 处 `docs/team/` 记录变化，受检发布内容无差异；本轮判定仍绑定实际执行的 `c34e1468`，不是在后续 SHA 上重跑。
+
+```bash
+TMPDIR=/var/tmp OPENSPEC_TELEMETRY=0 TEAM_ROUTING_EVIDENCE=/var/tmp/v186-meta-p490.WaKOKs/routing bash /var/tmp/rel048-meta-p490.87ZeWU/skills/teamsmith/tests/meta-suite.sh --keep --snapshot=c34e1468ea2ab76bdff9cd2bbef0db650604d151 </dev/null
+```
+
+作业 `v186-merged-p490-meta` 退出 0、墙钟 2044.8 秒；原生记录 `2026-11-23T11:25:36Z`、2038 秒、10 段、判据 `c715864b`。六段及四个前导均实际执行：
+
+| 段 | 秒 | 通过 / 失败 / 跳过 |
+|---|---:|---:|
+| 0 / 0b / 0c / 0d（前导） | 0 / 1 / 2 / 1 | 3/0/0 · 3/0/0 · 9/0/0 · 9/0/0 |
+| 0e 循环清单 | 49 | 26 / 0 / 0 |
+| 36 选段与分段 | 853 | 121 / 0 / 3 |
+| 38m 设置检查 | 76 | 2 / 0 / 0 |
+| 40 临时目录 | 56 | 42 / 0 / 0 |
+| 51m 命令用法 | 297 | 1 / 0 / 0 |
+| 61b 模型路由 | 698 | 1 / 0 / 0 |
+
+```text
+PASS init-guidance-separate-gates
+RESULT pass=1569 fail=0 selected=policy,machine,init,config,upgrade,dispatch,resume,transaction,limits,preview,sid-readers,pm,heal,adopt,updatecheck,boundary
+✓ 61b 路由翻转变异：31 条臂按名变红并还原（RESULT pass=216 fail=0 selected=flip）
+== 选段结果 ==  ✓ 217  ✗ 0
+快照运行结束：committed=c34e1468ea2ab76bdff9cd2bbef0db650604d151 rc=0
+```
+
+正常对照实际 rc=0、306 秒，完整 `flip-baseline.log` 有 13,372 行，记录了 P490 对应检查通过。该子记录和翻转组 216/0 不叠加到外层 217/0。§36 的三项跳过仍是检出未生成 `.pi/skills`；36⑧ 147/0/0、36⑨ 21/0/0。§40 明示因本轮使用 `--keep` 而留下现场，不将保留判为泄漏；该条件不计为跳过，段落 42/0。
+
+| 原件 | 保留位置 / 校验 |
+|---|---|
+| 原生完整日志和 history | 共享 `.pi/team/state/meta-suite/2026-11-23T11-25-36Z.log`，SHA-256 `41e86774642bb3316affb98699c6cf0fb093bfea8d66ea306acf1a4ea0a38b17`；`history.tsv` 新增 `2026-11-23T11:25:36Z GREEN … 2038 10 c715864b`，先前两条 RED 仍在 |
+| 实际命令、stdout、stderr、rc 和检出状态 | `/var/tmp/v186-meta-p490.WaKOKs/`，`meta.stderr` 为空；收取尾部在共享 `.pi/team/state/bg/v186-merged-p490-meta.log` |
+| §61b 子日志 | `/var/tmp/v186-meta-p490.WaKOKs/routing/teamsmith-task-model-routing-pm_skills-deb708fe.HCfbY8/`，含 46 份 `flip-*.log` 和 31 份变异回执；`flip-baseline.log` SHA-256 `e0fc17c66de20595fceeb4d57eed815925965855495f038b8aaa8eb4e8d0b158` |
+| §61b 外层原件 | `/var/tmp/teamsmith-smoke-pm_skills-deb708fe.V6CBsy/p238-routing-flip.log`，480 行，SHA-256 `b323622eb514a177416985bbd4d3c3ba8b1729ffeb33220dc46a4c39c1792470` |
+
+未重跑 §61b 或 init，未更改判定或历史，原件留给 PM 保存。此更新关闭 V186 新鲜度要求和 P490 合并版复验；不覆盖产品全量、提醒事件现场缺口、打包、安装或推送发布。
