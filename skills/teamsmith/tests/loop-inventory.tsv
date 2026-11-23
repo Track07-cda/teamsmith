@@ -13,6 +13,8 @@ panel-cpu.sh	248	bound=sub_end 计算出的截止时间（到点自己退出）	
 panel-p21.sh	1813	cap="$_i" -le 15	  while [ "$_i" -le 15 ]; do
 pm-box-real.sh	175	cap="$i" -lt "$READY_TRIES"	while [ "$i" -lt "$READY_TRIES" ]; do
 remind-pulse.sh	50	cap="$tries" -gt 0	while [ "$tries" -gt 0 ]; do
+remind-tool-real.sh	37	bound=逐行消费调用时已固定的进程身份快照（done <<< "$1"），读到 EOF 结束；内层共用入口的 SECONDS + 10 截止时间，超时直接返回	  while IFS=: read -r pid started; do
+remind-tool-real.sh	39	cap=SECONDS >= deadline	    while [[ -d "/proc/$pid" ]]; do
 smoke.sh	226	cap="$SNAP_W" -lt 50	      SNAP_W=0; while kill -0 "$SNAP_CHILD" 2>/dev/null && [ "$SNAP_W" -lt 50 ]; do sleep 0.2; SNAP_W=$((SNAP_W + 1)); done
 smoke.sh	503	bound=等待者的耐心上限 lock_cap（每轮跟着持有者心跳现算：活 4W / 停或没有 W；到点 break 进超限分支）	  while :; do
 smoke.sh	1277	bound=停止位文件 SMOKE_TMP_STOP + 主 shell 寿命（M33 哨兵的文件握手）	  while [ ! -e "$SMOKE_TMP_STOP" ]; do
