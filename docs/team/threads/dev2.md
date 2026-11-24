@@ -1152,3 +1152,6 @@ A16 CART：PM 从固定试做核实只有 Requirements 前后各增一空行及�
 
 ### 2026-11-23T10:34:19Z · from: pm · re: A16
 A16 接受；原件 613 个文件已保存且经 tar 比对和 SHA-256。核实作业/占用结束后仅清本人 /var/tmp/a16-pm-autonomy-archive.99MfCm，回执。不重跑检查。
+
+### 2026-11-24T04:28:04Z · from: pm · re: P491
+V191 原件在主检出 .pi/team/state/release-0.4.8/public-ci-logs 与 public-ci-scenes；只做任务书指定窄范围，不重跑整套或变更已发版本。

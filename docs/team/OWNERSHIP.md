@@ -28,6 +28,9 @@
 | `openspec/changes/archive/2026-11-23-pm-autonomy-guidance/**`、`openspec/specs/init-skill/spec.md` | PM（A16 已接受） | 一条已验证的文字要求同步，收回临时写权 |
 | `skills/teamsmith/templates/AGENTS.section.md.tmpl`、`skills/teamsmith/templates/pm-prompt.md.tmpl`、`skills/teamsmith/SKILL.md` | PM（P488、P490 已接受） | 自主规则与原授权已核；一行升级措辞在 c34e1468 的自检通过 |
 | `skills/teamsmith/tests/loop-inventory.tsv` | PM（P489 已接受） | 合并版 26/0，收回临时写权 |
+| `skills/teamsmith/tests/smoke.sh` §10 的 P440 路径断言 | agent:dev2（P491 临时） | 限 §10，与 P492 的 §28/§38 不重叠 |
+| `skills/teamsmith/tests/smoke.sh` §28/§38 的设置检查、`skills/teamsmith/tests/panel-p21.sh` | agent:dev（P492 临时） | 限当前设置测试，不写 §10 或产品 |
+| P493 的私有 Pi 复现目录和自身报告 | agent:dev-bob（P493） | 只读查因，不能改现有源或产品状态 |
 | 其余 `skills/teamsmith/scripts/panel/src/**` 及对应README/config/SKILL设置说明 | agent:dev（默认维护权） | P471/V177已完成，P474不授写 |
 | `openspec/changes/archive/2026-11-17-pulse-project-settings-simplify/**` | PM（A13已接受） | 已验9/9七工件原样归档，临时写权收回，不再授实现写入 |
 | `openspec/changes/archive/2026-11-16-routing-parameter-check-dedup/**` | PM（A12已接受） | 已验6/6的五工件原样归档，临时写权收回 |
