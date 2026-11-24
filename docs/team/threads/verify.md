@@ -361,3 +361,6 @@ V186 原件已私有保存并与原件比较通过。若确认无进程使用，
 
 ### 2026-11-24T03:14:40Z · from: pm · re: V190
 V190 已通过接受，原始记录已私有保存并 compare、SHA-256 核对。只清本人 /var/tmp/v190.ZHCs4v（退出且无监听后），不动冻结检出、不重跑，回实际结果。
+
+### 2026-11-24T04:16:05Z · from: pm · re: V191
+V191 只读取证。主检出 .pi/team/state/release-0.4.8/public-ci-logs 已保存 4 片与覆盖的原始日志，旁边 public-ci-jobs.json / public-ci-artifacts.json 是索引。用标签 c34e1468 查源；不重跑、不改产品或标签。

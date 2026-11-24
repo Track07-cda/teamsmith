@@ -6,4 +6,4 @@
 
 npm 已暂存 `teamsmith@0.4.8`、tag `latest`、public，退出 0，编号 `fd3cd9fc-344c-472a-b682-b404309fca06`。实际提交的就是本地标签逐文件相同、已实际安装的唯一原始 tarball（287 个文件，SHA-256 `cbd40e453c13d9a802ea126fcf1cf08c1e55a4e2bad384e36f037cfd508c2198`）；服务回执 SHA-1 `c58a0ba7ef9ca897b725d279efe5a5e3df09ff63` 与原件一致，未重打包。批准前 `latest` 实查 0.4.7。用户随后回复 `approved`；从官方 registry 实查 `latest` 和指定版本均为 0.4.8，从官方元数据提供的 tarball 地址实际下载，3,028,591 字节与验收原件逐字节相同、文件数 287，SHA-256、registry SHA-1 与 SHA-512 integrity 全部一致。远端 `main` 和 `v0.4.8` 解引用仍为 `c34e1468`。原始表述与核对回执保留于私有发布目录 `registry-verified.json`。
 
-GitHub 公开检查 [45318204605](https://github.com/Track07-cda/teamsmith/actions/runs/45318204605) 已在 `main` 的相同提交真实触发，批准后回读仍 `in_progress`，尚无通过结论；单独跟进，不将 npm 可下载当作公开检查已通过。
+GitHub 公开检查 [45318204605](https://github.com/Track07-cda/teamsmith/actions/runs/45318204605) 已在 `main` 的相同提交真实触发，批准后曾回读 `in_progress`；04:13Z 已完成、结论 `failure`。四个分片外层分别为 1941/3、2455/9、1285/2、1992/11（有重复执行的依赖段，不能加作 25 个独立缺陷），覆盖作业因矩阵 `failure` 亦失败。原日志定位 §10 复验地址、§28/§38 Pulse 设置相关、§67 提醒 doctor 四段；尚不能全归为检查误报。五个 job 日志及原始 JSON 私有保留，V191 只读查因。没有重触发 CI、调整已发标签或撤回 npm。
