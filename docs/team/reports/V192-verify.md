@@ -62,3 +62,7 @@ ledger-ban rc=0
 ## Decisions and deviations
 
 任务书允许在宿主看不到固定检出时建私有副本，已按上文核对来源。首次会话恢复前没有测试启动，本次只运行一次 §10。未更改产品、测试、包或标签；报告仅本地提交，原件等 PM 收取后再清理。
+
+## 合并版本回执
+
+2026-11-24T04:39:14Z，独立检出 `/var/tmp/p491-merged.qqCfBg` 的 HEAD 为 `e32c3bcb25f72348c7f11404fe1c56bfc28bb4a3`；`git status --porcelain=v1 --untracked-files=all` 无输出。`cmp` 比对该检出的 `skills/teamsmith/tests/smoke.sh` 与实际跑过 §10 的 `725e7ed2` 私有副本，退出码 0。两份文件的 SHA-256 均为 `820d82660d05b1bef474cfd90e3d4bf8fa0d2a2e3d6c0c5cf9475310cc2bfe3b`。原始回执：`docs/team/reports/V192-verify/ci-layout.sUJA7S/merged-byte-receipt.log`。只核了该文件及检出状态，没有在合并版本重跑 §10；候选原件仍保留。

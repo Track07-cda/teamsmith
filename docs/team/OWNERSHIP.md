@@ -28,7 +28,7 @@
 | `openspec/changes/archive/2026-11-23-pm-autonomy-guidance/**`、`openspec/specs/init-skill/spec.md` | PM（A16 已接受） | 一条已验证的文字要求同步，收回临时写权 |
 | `skills/teamsmith/templates/AGENTS.section.md.tmpl`、`skills/teamsmith/templates/pm-prompt.md.tmpl`、`skills/teamsmith/SKILL.md` | PM（P488、P490 已接受） | 自主规则与原授权已核；一行升级措辞在 c34e1468 的自检通过 |
 | `skills/teamsmith/tests/loop-inventory.tsv` | PM（P489 已接受） | 合并版 26/0，收回临时写权 |
-| `skills/teamsmith/tests/smoke.sh` §10 的 P440 路径断言 | agent:dev2（P491 临时） | 限 §10，与 P492 的 §28/§38 不重叠 |
+| `skills/teamsmith/tests/smoke.sh` §10 的 P440 路径断言 | PM（P491 已验收） | 候选 47/0、合并版字节一致，收回临时写权 |
 | `skills/teamsmith/tests/smoke.sh` §28/§38 的设置检查、`skills/teamsmith/tests/panel-p21.sh` | agent:dev（P492 临时） | 限当前设置测试，不写 §10 或产品 |
 | `skills/teamsmith/tests/remind-tool-real.mjs` 中两例诊断启动 | agent:dev-bob（P494 临时） | 限 `pm`/`noentry` 与必要共用段，不动产品 |
 | 其余 `skills/teamsmith/scripts/panel/src/**` 及对应README/config/SKILL设置说明 | agent:dev（默认维护权） | P471/V177已完成，P474不授写 |
