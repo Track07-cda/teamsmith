@@ -321,8 +321,8 @@ open_secondary() { # commands|records
   local label="项目命令"
   [ "$1" = records ] && label="模型记录"
   filter_to "$label"
-  keys Enter
-  pty_wait_frame - "打开 $label" "╭─ $label" || bad "没有打开 $label"
+  pty_key_when "进入 $label" "› $label" Enter || { bad "未聚焦 $label"; return 1; }
+  pty_wait_frame - "打开 $label" "╭─ $label" || { bad "没有打开 $label"; return 1; }
   _p21_filter=""
 }
 
@@ -482,25 +482,24 @@ scn_settings() {
   server_up settings
   policy_new 'routine=example/one analysis=example/two verify=example/three' 'example/pm' || bad "策略准备失败"
   start_panel
-  local pref_before; pref_before="$(sha "$state/panel.conf")"
-  open_view
-  cap_to view
-  assert_match "$tmp/$current/view.txt" '› routine +example/one' "默认先显示实际类别"
-  assert_has "$tmp/$current/view.txt" "自动检查" "默认有自动检查用途组"
-  assert_not "$tmp/$current/view.txt" "身份与账本布局" "全表不再占据首屏"
-  assert_not "$tmp/$current/view.txt" "立即生效" "普通行没有逐行生效徽章"
-  assert_not "$tmp/$current/view.txt" "未设 · 默认" "普通行直接给有效值"
-  assert_not "$tmp/$current/view.txt" "result=" "设置不显示审计"
-  local stats r u d gap
-  cap_visible_to default-count
-  stats="$(settings_window_stats "$tmp/$current/default-count.txt")"
+  local pref_before height stats r u d gap
+  pref_before="$(sha "$state/panel.conf")"
+  height="$(tmux -L "$sock" display-message -p -t "$sess:panel" '#{pane_height}')"
+  open_view || return 1
+  stats="$(wait_settings_frame "$height" default-count '项目设置' routine)" || { bad "未读到完整的默认设置帧"; return 1; }
   read -r r u d gap <<<"$stats"
+  local default_frame="$tmp/$current/default-count.txt"
+  assert_match "$default_frame" '› routine +example/one' "默认先显示实际类别"
+  assert_has "$default_frame" "自动检查" "默认有自动检查用途组"
+  assert_not "$default_frame" "身份与账本布局" "全表不再占据首屏"
+  assert_not "$default_frame" "立即生效" "普通行没有逐行生效徽章"
+  assert_not "$default_frame" "未设 · 默认" "普通行直接给有效值"
+  assert_not "$default_frame" "result=" "设置不显示审计"
   assert_eq "C3默认可选行=10（包含两个入口）" "$((r+u+d))" "10"
   assert_eq "打开设置没有写偏好" "$(sha "$state/panel.conf")" "$pref_before"
   filter_to TEAM_PULSE_INTERVAL
-  wait_row interval "有效值与必要生效提示" "检查间隔" "900" "team pulse restart" || bad "检查间隔未显示"
-  cap_visible_to filter-fill
-  stats="$(settings_window_stats "$tmp/$current/filter-fill.txt")"
+  wait_row interval "有效值与必要生效提示" "检查间隔" "900 秒" "team pulse restart" || { bad "检查间隔未显示"; return 1; }
+  stats="$(wait_settings_frame "$height" filter-fill '项目设置' '检查间隔')" || { bad "未读到完整的过滤设置帧"; return 1; }
   read -r r u d gap <<<"$stats"
   assert_eq "过滤短列表只一行" "$((r+u+d))" "1"
   [ "$gap" -le 1 ] && ok "短列表空白在卡片里" || bad "短列表卡片未填高"
@@ -521,9 +520,8 @@ scn_settings() {
   assert_eq "单击不改配置" "$(sha "$(cfg)")" "$before"
   y="$(cap_now | grep -n '› 项目命令' | head -1 | cut -d: -f1)"
   [ -n "$y" ] && click_at 8 "$y"
-  wait_row commands "第二击打开命令" "╭─ 项目命令" "验收命令" || bad "命令入口未打开"
-  cap_visible_to commands-count
-  stats="$(settings_window_stats "$tmp/$current/commands-count.txt")"
+  wait_row commands "第二击打开命令" "╭─ 项目命令" "验收命令" || { bad "命令入口未打开"; return 1; }
+  stats="$(wait_settings_frame "$height" commands-count '项目命令' '安装命令')" || { bad "未读到完整的项目命令帧"; return 1; }
   read -r r u d gap <<<"$stats"
   assert_eq "项目命令只有3项" "$((r+u+d))" "3"
   keys Escape
@@ -557,7 +555,7 @@ scn_settings() {
   assert_has "$tmp/$current/unknown.txt" "只能改项目配置文件" "未知键完整修复路线仍可达"
   assert_no_match "$tmp/$current/unknown.txt" '^│ [› ] TEAM_HAND_ADDED +hand' "未知键不是配置行"
   # 长列表用实际类别而非恢复全表；每个高度只观察同一列表。
-  local map='routine=example/one' i h want_count prev_rows
+  local map='routine=example/one' i h want_count prev_rows=''
   for i in $(seq 1 60); do map="$map cat$i=example/model$i"; done
   policy_new "$map" 'example/pm' || bad "长类别准备失败"
   python3 - "$(cfg)" <<'PYCFG'
@@ -569,16 +567,16 @@ PYCFG
   open_view
   want_count=68
   for h in 45 33 30 25; do
-    resize_panel 120 "$h" || bad "resize失败"
-    if wait_settings_frame "$h" "height$h"; then
-      stats="$(settings_window_stats "$tmp/$current/height$h.txt")"; read -r r u d gap <<<"$stats"
-      assert_eq "$h行：可见+上下隐藏=当前68操作" "$((r+u+d))" "$want_count"
+    resize_panel 120 "$h" || { bad "$h行resize失败"; continue; }
+    if stats="$(wait_settings_frame "$h" "height$h" '项目设置' routine)"; then
+      read -r r u d gap <<<"$stats"
+      assert_eq "$h行：可见$r + 上方隐藏$u + 下方隐藏$d = 当前68操作" "$((r+u+d))" "$want_count"
       [ "$gap" -le 1 ] && ok "$h行卡片填高" || bad "$h行卡片未填高"
       [ "$h" = 45 ] && prev_rows="$r"
-      if [ "$h" = 30 ]; then
+      if [ "$h" = 30 ] && [ -n "$prev_rows" ]; then
         [ "$((prev_rows-r))" -ge 8 ] && ok "45比30至少多8行" || bad "窗口没有随高度增长"
       fi
-    else bad "$h行完整设置帧未落定"; fi
+    else bad "$h行完整设置帧未落定（卡片、焦点或设置键栏未读到）"; fi
   done
   # 同批英文窄屏：只走入口与返回，不重复整套。
   conf_set "lang=en" "page=1" "activity=1" "mouse=1" "density=comfortable"
@@ -706,99 +704,127 @@ PYCFG
   if wait_picker_quick TEAM_PM_MODEL "不存在的条目"; then bad "缺条目仍被当作已到达"; else ok "等待须命中实际条目"; fi
   leave_picker TEAM_PM_MODEL || bad "长词表退出失败"
 
-  open_secondary commands
-  filter_to TEAM_GATES; gap0="$(argv_count)"; keys Enter
-  wait_editor TEAM_GATES "true" || bad "命令原值未打开"
+  open_secondary commands || return 1
+  filter_to TEAM_GATES
+  wait_row gates-row "命令页的验收命令" "╭─ 项目命令" "› 验收命令" "true" || { bad "未聚焦验收命令"; return 1; }
+  gap0="$(argv_count)"; keys Enter
+  wait_editor TEAM_GATES "true" || { bad "命令原值未打开"; return 1; }
   argv_since "$gap0" "$tmp/$current/command-open.log"
   assert_eq "命令自由输入打开零读取" "$(argv_reads "$tmp/$current/command-open.log")" "0"
-  leave_editor TEAM_GATES || bad "命令取消失败"
-  filter_to TEAM_REVIEW_TIMEOUT; keys Enter
-  wait_picker TEAM_REVIEW_TIMEOUT "30 · 当前" || bad "危险选项未打开"
+  leave_editor TEAM_GATES || { bad "命令取消失败"; return 1; }
+  filter_to TEAM_REVIEW_TIMEOUT
+  wait_row timeout-row "命令页的验收最长时间" "╭─ 项目命令" "› 验收最长时间" "30 秒" || { bad "危险测试的初值或焦点不正确"; return 1; }
+  keys Enter
+  wait_picker TEAM_REVIEW_TIMEOUT "› 30 秒 · 当前" || { bad "危险的当前选项未打开"; return 1; }
   before="$(sha "$(cfg)")"; audit0="$(audit_lines)"; gap0="$(argv_count)"
-  pick_option "30 · 当前" || bad "危险当前值不存在"
-  wait_cap danger "危险：" || bad "危险未要求确认"
+  keys Enter
+  wait_row danger "危险当前值需要额外确认" "╭─ 验收最长时间" "› 30 秒 · 当前" "危险：" "Enter 确认" || { bad "危险未要求确认"; return 1; }
   assert_eq "危险首次accept不写" "$(sha "$(cfg)")" "$before"
   assert_eq "危险首次accept无审计" "$(audit_lines)" "$audit0"
   argv_since "$gap0" "$tmp/$current/danger.log"
+  assert_has "$tmp/$current/danger.log" "config set TEAM_REVIEW_TIMEOUT 30 --actor panel --dry-run --fingerprint $before" "危险首次accept验证原值和指纹"
   assert_not "$tmp/$current/danger.log" "--yes" "危险首次accept没有yes"
-  keys Enter
-  wait_cap danger-saved "已保存验收最长时间" || bad "危险确认未保存"
-  assert_match "$(argv_log)" 'config set TEAM_REVIEW_TIMEOUT 30 --actor panel --yes --fingerprint [0-9a-f]{64} --allow-danger' "危险值仍带allow-danger"
-  filter_clear; keys Escape; sleep 0.4
+  gap0="$(argv_count)"; keys Enter
+  wait_row danger-saved "额外确认后返回命令页" "╭─ 项目命令" "已保存验收最长时间" || { bad "危险确认未保存"; return 1; }
+  argv_since "$gap0" "$tmp/$current/danger-write.log"
+  assert_has "$tmp/$current/danger-write.log" "config set TEAM_REVIEW_TIMEOUT 30 --actor panel --yes --fingerprint $before --allow-danger" "危险确认使用原指纹及allow-danger"
+  assert_eq "危险确认只调用一次writer" "$(grep -cF 'config set TEAM_REVIEW_TIMEOUT ' "$tmp/$current/danger-write.log")" "1"
+  assert_eq "危险确认只增一条审计" "$(audit_lines)" "$((audit0+1))"
+  assert_match "$(cfg)" "^TEAM_REVIEW_TIMEOUT='30'\$" "危险确认后仍为30秒"
+  filter_clear; keys Escape
+  wait_row choices-main "命令页返回项目设置" "╭─ 项目设置" "› 项目命令" || { bad "规则测试未返回设置入口"; return 1; }
 
-  # 所有字段修改只留草稿；完整旧/新确认后一次写回，重复、原序和其它token必须保留。
-  filter_to TEAM_MODEL_LIMITS; keys Enter
-  wait_row rules "规则字段入口" "模型同时运行任务数" "example/m0" "example/*" "添加限制" || bad "规则列表未打开"
-  before="$(sha "$(cfg)")"; audit0="$(audit_lines)"
+  # 规则从主设置的可选行打开；字段修改只留草稿，完整旧/新确认后才写回。
+  filter_to TEAM_MODEL_LIMITS
+  wait_row limits-row "主设置的模型规则" "╭─ 项目设置" "› 模型同时运行任务数" || { bad "未聚焦模型规则"; return 1; }
   keys Enter
-  wait_row fields "模型数量字段" "适用模型" "同时运行数量" "删除限制" || bad "未显示两个字段"
-  keys Down; sleep 0.3; keys Enter
-  wait_editor 同时运行数量 "2" || bad "数量字段没有原值"
+  wait_row rules "规则字段入口" "╭─ 模型同时运行任务数" "› example/m0" "example/*" "添加限制" || { bad "规则列表未打开"; return 1; }
+  before="$(sha "$(cfg)")"; audit0="$(audit_lines)"; gap0="$(argv_count)"
+  keys Enter
+  wait_row fields "模型数量字段" "╭─ 编辑限制" "适用模型" "同时运行数量" "删除限制" || { bad "未显示两个字段"; return 1; }
+  keys Down
+  pty_key_when "打开数量字段" '› 同时运行数量' Enter || { bad "未聚焦数量字段"; return 1; }
+  wait_editor 同时运行数量 "2" || { bad "数量字段没有原值"; return 1; }
   keys C-u; sleep 0.3; type_text -1; sleep 0.3; keys Enter
-  wait_cap count-invalid "请输入非负整数" || bad "数量字段非法值未保留"
+  wait_cap count-invalid "请输入非负整数" || { bad "数量字段非法值未保留"; return 1; }
   assert_eq "字段非法配置不变" "$(sha "$(cfg)")" "$before"
   keys C-u; sleep 0.3; type_text 0; sleep 0.3; keys Enter
-  wait_row unlimited "0的业务标签" "此项不限制" || bad "0未显示此项不限制"
+  wait_row unlimited "0的业务标签" "╭─ 编辑限制" "此项不限制" || { bad "0未显示此项不限制"; return 1; }
   assert_eq "字段完成仍未写" "$(sha "$(cfg)")" "$before"
-  keys Escape; sleep 0.4
-  focus_row '› 保存' || bad "保存行不可达"
+  keys Escape
+  wait_row rules-back "字段返回规则列表" "╭─ 模型同时运行任务数" "添加限制" || { bad "字段未返回规则列表"; return 1; }
+  focus_row '› 保存' || { bad "保存行不可达"; return 1; }
   keys Enter
-  wait_row rules-confirm "完整旧新规则" "原值" "新值" "example/*" "此项不限制" || bad "完整规则确认未显示"
+  wait_row rules-confirm "完整旧新规则" "╭─ 模型同时运行任务数" "原值" "新值" "example/*" "此项不限制" || { bad "完整规则确认未显示"; return 1; }
   assert_eq "整组确认阶段不写" "$(sha "$(cfg)")" "$before"
+  assert_eq "整组确认阶段无审计" "$(audit_lines)" "$audit0"
   keys Enter
-  wait_cap rules-written "已保存模型同时运行任务数" || bad "完整规则未保存"
+  wait_row rules-written "规则保存后返回主设置" "╭─ 项目设置" "已保存模型同时运行任务数" || { bad "完整规则未保存"; return 1; }
   assert_match "$(cfg)" "^TEAM_MODEL_LIMITS='example/m0=0 example/\*=1 example/m0=4'$" "只改一个token，重复及顺序保留"
   assert_eq "完整规则只审计一行" "$(audit_lines)" "$((audit0+1))"
-  assert_match "$(argv_log)" 'config set TEAM_MODEL_LIMITS .* --actor panel --yes --fingerprint [0-9a-f]{64}' "完整键writer带CAS与actor"
+  argv_since "$gap0" "$tmp/$current/rules-write.log"
+  local value='example/m0=0 example/*=1 example/m0=4'
+  assert_has "$tmp/$current/rules-write.log" "config set TEAM_MODEL_LIMITS $value --actor panel --dry-run --fingerprint $before" "完整新值经原指纹验证"
+  assert_has "$tmp/$current/rules-write.log" "config set TEAM_MODEL_LIMITS $value --actor panel --yes --fingerprint $before" "完整新值经原指纹写入"
+  assert_eq "完整规则一次验证一次写入" "$(grep -cF 'config set TEAM_MODEL_LIMITS ' "$tmp/$current/rules-write.log")" "2"
   # 添加/删除/取消与冲突：不另写每模型文件，也不碰原配置。
-  filter_to TEAM_MODEL_LIMITS; keys Enter
-  wait_row rules-again "规则重新打开" "添加限制" || bad "规则未重开"
+  filter_to TEAM_MODEL_LIMITS
+  pty_key_when "重开模型规则" "› 模型同时运行任务数" Enter || { bad "重开前未聚焦模型规则"; return 1; }
+  wait_row rules-again "规则重新打开并读到保存结果" "╭─ 模型同时运行任务数" "此项不限制" "添加限制" || { bad "规则未重开或未读到保存结果"; return 1; }
   before="$(sha "$(cfg)")"; audit0="$(audit_lines)"
-  focus_row '› 添加限制'; keys Enter
-  wait_row added "新增草稿字段" "适用模型" "同时运行数量" || bad "新增字段未打开"
+  focus_row '› 添加限制' || { bad "添加限制行不可达"; return 1; }
   keys Enter
-  wait_picker 适用模型 "example/m0" || bad "适用模型picker未打开"
+  wait_row added "新增草稿字段" "╭─ 编辑限制" "› 适用模型" "同时运行数量" || { bad "新增字段未打开"; return 1; }
+  keys Enter
+  wait_picker 适用模型 "example/m0" || { bad "适用模型picker未打开"; return 1; }
   for i in $(seq 1 35); do wheel_at down 20 12; done
-  wait_row model-other "长词表中的其它适用模型" "› 其它适用模型" || bad "其它适用模型不可达"
+  wait_row model-other "长词表中的其它适用模型" "› 其它适用模型" || { bad "其它适用模型不可达"; return 1; }
   keys Enter
-  wait_editor 适用模型 || bad "表达式输入未打开"
+  wait_editor 适用模型 || { bad "表达式输入未打开"; return 1; }
   type_text 'example/new*'; sleep 0.3; keys Enter
-  wait_row added-model "新增表达式只改草稿" "example/new*" || bad "表达式草稿未显示"
-  focus_row '› 删除限制'; keys Enter
-  wait_row deleted "删除返回列表" "添加限制" || bad "删除未返回列表"
+  wait_row added-model "新增表达式只改草稿" "╭─ 编辑限制" "example/new*" || { bad "表达式草稿未显示"; return 1; }
+  focus_row '› 删除限制' || { bad "删除限制行不可达"; return 1; }
+  keys Enter
+  wait_row deleted "删除返回列表" "╭─ 模型同时运行任务数" "添加限制" '!example/new*' || { bad "删除未返回列表"; return 1; }
   keys Escape
-  wait_row rules-cancel "整组取消" "╭─ 项目设置" || bad "整组取消未返回"
+  wait_row rules-cancel "整组取消" "╭─ 项目设置" "› 模型同时运行任务数" || { bad "整组取消未返回"; return 1; }
   assert_eq "新增删除取消保留字节" "$(sha "$(cfg)")" "$before"
   assert_eq "新增删除取消无审计" "$(audit_lines)" "$audit0"
   keys Enter
-  wait_row rules-stale "冲突规则列表" "添加限制" || bad "冲突规则未打开"
+  wait_row rules-stale "冲突规则列表" "╭─ 模型同时运行任务数" "添加限制" || { bad "冲突规则未打开"; return 1; }
   printf '# other writer\n' >> "$(cfg)"
   local other; other="$(sha "$(cfg)")"
-  focus_row '› 保存'; keys Enter
-  wait_cap rules-stale-confirm "设置已被修改，未保存" || bad "规则旧指纹未提示冲突"
+  focus_row '› 保存' || { bad "冲突样本的保存行不可达"; return 1; }
   keys Enter
-  wait_cap rules-stale-result "设置已被修改，未保存" || bad "规则冲突未保留"
+  wait_row rules-stale-confirm "旧指纹确认页" "╭─ 模型同时运行任务数" "── 原值" "── 新值" "设置已被修改，未保存" || { bad "规则旧指纹未提示冲突"; return 1; }
+  keys Enter
+  wait_row rules-stale-result "旧指纹写入被拒并返回规则列表" "╭─ 模型同时运行任务数" "添加限制" '!── 原值' "设置已被修改，未保存" || { bad "规则冲突未保留"; return 1; }
   assert_eq "规则CAS保住另一个写者字节" "$(sha "$(cfg)")" "$other"
+  assert_eq "规则冲突只增一条审计" "$(audit_lines)" "$((audit0+1))"
   assert_match "$(audit_log)" 'result=conflict actor=panel key=TEAM_MODEL_LIMITS' "规则冲突有原审计"
   assert_not "$(argv_log)" "pulse restart" "设置未执行重启命令"
   # 同批英文窄屏只走字段/非法/返回，不重复完整保存场景。
   conf_set "lang=en" "page=1" "activity=1" "mouse=1" "density=comfortable"
   start_panel
-  resize_panel 70 25 || bad "英文表单resize失败"
-  open_view Models
-  filter_to TEAM_MODEL_LIMITS; keys Enter
-  wait_row en-rules "英文规则入口" "Add limit" || bad "英文规则未打开"
+  resize_panel 70 25 || { bad "英文表单resize失败"; return 1; }
+  open_view Models || return 1
+  filter_to TEAM_MODEL_LIMITS
+  pty_key_when "英文规则行" "› Concurrent tasks by model" Enter || { bad "未聚焦英文规则"; return 1; }
+  wait_row en-rules "英文规则入口" "╭─ Concurrent tasks by model" "Add limit" || { bad "英文规则未打开"; return 1; }
   before="$(sha "$(cfg)")"
   keys Enter
-  wait_row en-fields "英文规则字段" "Applicable model" "Simultaneous quantity" || bad "英文规则字段缺失"
-  keys Down; sleep 0.3; keys Enter
-  wait_editor "Simultaneous quantity" || bad "英文数量字段未打开"
+  wait_row en-fields "英文规则字段" "╭─ Edit limit" "Applicable model" "Simultaneous quantity" || { bad "英文规则字段缺失"; return 1; }
+  keys Down
+  pty_key_when "打开英文数量字段" '› Simultaneous quantity' Enter || { bad "未聚焦英文数量字段"; return 1; }
+  wait_editor "Simultaneous quantity" || { bad "英文数量字段未打开"; return 1; }
   keys C-u; sleep 0.3; type_text -1; sleep 0.3; keys Enter
-  wait_cap en-invalid "Enter a non-negative integer" || bad "英文真实字段错误未显示"
+  wait_cap en-invalid "Enter a non-negative integer" || { bad "英文真实字段错误未显示"; return 1; }
   keys Escape
-  wait_row en-field-back "英文字段返回" "Applicable model" "Simultaneous quantity" || bad "英文字段未返回"
-  keys Escape; sleep 0.4; keys Escape
-  wait_row en-cancel "英文草稿取消" "╭─ Project settings" || bad "英文草稿未取消"
+  wait_row en-field-back "英文字段返回" "Applicable model" "Simultaneous quantity" '!╭─ Simultaneous quantity' || { bad "英文字段未返回"; return 1; }
+  keys Escape
+  wait_row en-rules-back "返回英文规则列表" "╭─ Concurrent tasks by model" "Add limit" || { bad "未返回英文规则列表"; return 1; }
+  keys Escape
+  wait_row en-cancel "英文草稿取消" "╭─ Project settings" || { bad "英文草稿未取消"; return 1; }
   assert_eq "英文非法与取消保留原字节" "$(sha "$(cfg)")" "$before"
 }
 
@@ -1421,50 +1447,51 @@ resize_panel() { # <cols> <rows>
   return 1
 }
 
-cap_visible_to() { tmux -L "$sock" capture-pane -p -t "$sess:panel" > "$tmp/$current/${1:-visible}.txt" 2>/dev/null; }
-
-# P32：等新行高下的**完整**一帧。只等「settle」不够：缩完 tmux 立刻按新尺寸裁剪旧帧，而 Ink 还没重画，
-# 两张连续捕获可能一致却是旧内容。所以判据是结构：可见帧行数等于新 pane 高度、且能认出卡片的
-# 上/下边框与键栏（settings_window_stats 的两个非 -1），并把那帧写进 <cap name>.txt。
-wait_settings_frame() { # <rows> <cap name> → 0 = 帧按新行高画完整
-  local rows="$1" name="${2:-height}" i a b st lines r u d g
+# P32：缩完 tmux 可能裁剪旧画面；两次截图一致还不够。保留可见帧，只有当前设置卡片、焦点和
+# 专用键栏都完整时才返回可见/隐藏行数及卡片外空行；读不到就返回失败，不产生行数。
+wait_settings_frame() { # <rows> <cap name> <title> <focused label>
+  local rows="$1" file="$tmp/$current/$2.txt" title="$3" focus="$4" i a b stats
   for i in $(seq 1 30); do
-    a="$(cap_now | sed -E 's/[0-9]{2}:[0-9]{2}:[0-9]{2}/HH:MM:SS/g')"
+    a="$(cap_now | sed -E 's/[0-9]{2}:[0-9]{2}:[0-9]{2}/HH:MM:SS/g')" || continue
     sleep 0.25
-    b="$(cap_now)"
+    b="$(cap_now)" || continue
+    printf '%s\n' "$b" > "$file"
     [ "$(printf '%s\n' "$b" | sed -E 's/[0-9]{2}:[0-9]{2}:[0-9]{2}/HH:MM:SS/g')" = "$a" ] || continue
-    lines="$(printf '%s\n' "$b" | wc -l)"
-    printf '%s\n' "$b" > "$tmp/$current/$name.txt"
-    st="$(settings_window_stats "$tmp/$current/$name.txt")"
-    IFS=' ' read -r r u d g <<<"$st"
-    [ "$lines" = "$rows" ] || continue
-    [ "${r:-0}" -ge 0 ] && [ "${g:-0}" -ge 0 ] && return 0
+    if stats="$(settings_window_stats "$file" "$rows" "$title" "$focus")"; then
+      printf '%s\n' "$stats"
+      return 0
+    fi
   done
   return 1
 }
 
-# P32：一帧里视图的**行数记账**：窗口里画出的行数、上下两条隐藏计数、以及内容结尾（卡片下边框）到
-# 键栏之间的空白行数。打印 "<rows> <hidden_up> <hidden_down> <gap>"（认不出来打印 "-1 -1 -1 -1"）。
-settings_window_stats() { # <capture file>
-  python3 - "$1" <<'PY'
-import re,sys
-lines=open(sys.argv[1],encoding='utf-8',errors='replace').read().splitlines()
-titles=('项目设置','Project settings','项目命令','Project commands','模型记录','Model records','模型同时运行任务数','Concurrent tasks by model','编辑限制','Edit limit')
-top=next((i for i,l in enumerate(lines) if any(l.lstrip().startswith('╭─ '+t) for t in titles)),-1)
-bot=next((i for i,l in enumerate(lines) if i>top and l.lstrip().startswith('╰')),-1)
-foot=next((i for i,l in enumerate(lines) if i>bot and ('写信' in l or 'compose' in l)),-1)
-if min(top,bot,foot)<0:
-    print('-1 -1 -1 -1'); sys.exit()
-rows=up=down=0
-for l in lines[top+1:bot]:
-    text=l.strip('│ ').rstrip()
-    m=re.fullmatch(r'([↑↓])(\d+)',text)
+settings_window_stats() { # <file> <height> <title> <focus> → visible above below gap
+  python3 - "$@" <<'PY'
+import re, sys
+path, height, title, focus = sys.argv[1:]
+with open(path, encoding='utf-8') as f:
+    lines = [line.rstrip() for line in f]
+if len(lines) != int(height):
+    sys.exit(1)
+top = next((i for i, l in enumerate(lines) if re.fullmatch(r'╭─ ' + re.escape(title) + r' ─+╮', l)), -1)
+bot = next((i for i, l in enumerate(lines) if i > top and re.fullmatch(r'╰─+╯', l)), -1)
+keys = r'Esc 返回 · ↑/↓ 行 · Enter (?:编辑|打开) · / 筛选|Esc back · ↑/↓ rows · Enter (?:edit|open) · / filter'
+foot = next((i for i, l in enumerate(lines) if i > bot and re.fullmatch(keys, l.strip())), -1)
+body = lines[top + 1:bot]
+if not (0 <= top < bot < foot) or not all(l.startswith('│') and l.endswith('│') for l in body):
+    sys.exit(1)
+if not any(l.startswith(f'│ › {focus} ') for l in body):
+    sys.exit(1)
+rows = up = down = 0
+for line in body:
+    text = line[1:-1].strip()
+    m = re.fullmatch(r'([↑↓])(\d+)', text)
     if m:
-        if m[1]=='↑': up=int(m[2])
-        else: down=int(m[2])
-    elif re.match(r'^│ [› ] ',l) and text:
-        rows+=1
-print(rows,up,down,foot-bot-1)
+        if m[1] == '↑': up = int(m[2])
+        else: down = int(m[2])
+    elif re.match(r'^│ [› ] [^\s│]', line):
+        rows += 1   # cursor column; headings, hint text and blank fill use different prefixes
+print(rows, up, down, foot - bot - 1)
 PY
 }
 
@@ -1522,13 +1549,16 @@ scn_groups() {
   mkdir -p "$scratch/skills/teamsmith"
   cp -a "$skill/scripts" "$scratch/skills/teamsmith/scripts"
   cp -a "$skill/templates" "$skill/references" "$scratch/skills/teamsmith/"
-  python3 - "$scratch/skills/teamsmith/scripts/lib/cmd-config.sh" <<'PYCFG'
-import sys
+  python3 - "$scratch/skills/teamsmith/scripts/lib/cmd-config.sh" <<'PYCFG' || { bad "未能在副本里准备 CLI 分组变更"; return 1; }
+import re, sys
 p=sys.argv[1]; s=open(p).read()
 gates='TEAM_GATES|apply|cmd||plain||-|||workflow'; assert gates in s
 s=s.replace(gates,'TEAM_GATES|refuse|cmd||plain||-|change acceptance in config||meeting')
+s, moved = re.subn(r'^(TEAM_PULSE_INTERVAL\|[^\n]+)\|panel$', r'\1|meeting', s, flags=re.M)
+assert moved == 1, '预期仅修改检查间隔的 CLI 分组'
 anchor='TEAM_INSTALL_CMD|apply|cmd||plain||-|||workflow'; assert anchor in s
-s=s.replace(anchor,'TEAM_ZZZ_TEST|apply|text||plain|zzz|-|||meeting\n'+anchor)
+assert '|p492-hidden\n' not in s
+s=s.replace(anchor,'TEAM_ZZZ_TEST|apply|text||plain|zzz|-|||p492-hidden\n'+anchor)
 # 取消fixture标记也不能使未精选键变成操作。
 s=s.replace('fixture-only: 只在测试套件里用（磁盘读数夹具）','')
 open(p,'w').write(s)
@@ -1540,7 +1570,10 @@ exec bash "$scratch/skills/teamsmith/scripts/team" "\$@"
 EOF
   chmod +x "$tmp/$current-scratch-wrapper.sh"
   P21_CLI="$tmp/$current-scratch-wrapper.sh" start_panel
-  open_view
+  open_view || return 1
+  wait_row changed-groups "CLI 分组变化后的设置首页" "╭─ 项目设置" "› custom" "自动检查" "检查间隔" || { bad "修改 CLI 分组后的设置首页未读到"; return 1; }
+  assert_heading_rule "$tmp/$current/changed-groups.txt" "自动检查" "模型同时运行任务数" "检查间隔" "CLI 分组变化不移动检查间隔"
+  assert_eq "未展示的 CLI 分组不增加用途标题" "$(grep -c '^│ ── ' "$tmp/$current/changed-groups.txt")" "2"
   for k in TEAM_ZZZ_TEST TEAM_DISK_STATS_FILE; do
     filter_to "$k"; cap_to "$k"
     assert_no_match "$tmp/$current/$k.txt" '^│ [› ] [^│]*[^[:space:]│]' "新键或取消标记不会自动显示（$k）"
@@ -1586,7 +1619,7 @@ PY
   # ② 视图里的滚轮：一格一行、焦点不动、顶部计数行跟随（先下滚 3 格，再上滚回顶部）。
   open_view
   cap_to wheel-before
-  assert_match "$tmp/$current/wheel-before.txt" '› routine +kimi-coding/k3-256k' "视图开屏焦点在第一行（identity 第一条）"
+  assert_match "$tmp/$current/wheel-before.txt" '› routine +kimi-coding/k3-256k' "视图开屏焦点在第一个任务类别"
   wheel_at down 20 10 3
   local i
   for i in $(seq 1 20); do
@@ -1664,9 +1697,9 @@ PY
   else
     bad "没能把焦点移到routine 行"
   fi
-  # 类别 picker 的标题是「选择类别 <category> 的模型」（没有 ` · KEY` 后缀），用 pty_wait_frame 等它。
+  # 类别 picker 的首屏用类别作标题，并标明当前模型。
   if pty_wait_frame "$tmp/$current/cat-picker.txt" "类别 picker" "╭─ routine" "· 当前"; then
-    ok "类别 picker 打开（标题 + 自由输入项）"
+    ok "类别 picker 打开（标题 + 当前项）"
   else
     bad "类别 picker 没有打开"
   fi

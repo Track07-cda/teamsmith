@@ -14389,40 +14389,26 @@ else
   bad "28-a i18n：字符串表断言失败"; tail -3 "$TMP/p28-strings.log"
 fi
 
-# ---- 28-a2 契约键标签（M49）：`lib/cmd-config.sh` 的 schema 每个键在 zh/en 两张表里都有非空
-# 标签，且没有表里的标签指着一个 schema 已不存在的键（两个方向都查）。翻转有两条：① 从**两张表**
-# 各删一条标签（键集合仍一致 → 只有这条断言能抓住）；② 从 schema 删一行（标签变成陈旧 → 反向断言抓住）。
-P28_LBL="$TMP/p28-labels"; rm -rf "$P28_LBL"
-mkdir -p "$P28_LBL/skills/teamsmith/scripts/panel" "$P28_LBL/skills/teamsmith/scripts/lib"
+# ---- 28-a2 精选设置双语标签：复用 28-a 的正常结果，两张表同时删标签验证检查能点名。
+# 完整 CLI schema 及分组元数据由 §33 config-cli.sh 覆盖，不要求未展示的键或分组有界面标签。
+P28_LBL="$TMP/p28-labels"
+mkdir -p "$P28_LBL/skills/teamsmith/scripts/panel"
 cp -r "$SKILL_DIR/scripts/panel/src" "$P28_LBL/skills/teamsmith/scripts/panel/src"
-cp "$SKILL_DIR/scripts/lib/cmd-config.sh" "$P28_LBL/skills/teamsmith/scripts/lib/"
-"$JS_RUNNER" "$P28_TESTS/panel-strings.mjs" "$P28_LBL" >"$TMP/p28-labels.log" 2>&1
-P28_LBL_RC=$?
-if [ "$P28_LBL_RC" -eq 0 ] && grep -q 'contract-key labels' "$TMP/p28-labels.log"; then
-  ok "28-a2 契约键标签：schema 的每个键在 zh/en 两张表里都有标签（$(grep -oE '[0-9]+ schema keys' "$TMP/p28-labels.log" | head -1)）"
-else
-  bad "28-a2 契约键标签：断言失败"; tail -3 "$TMP/p28-labels.log"
-fi
-sed -i '/^  label_TEAM_PULSE_INTERVAL:/d' \
-  "$P28_LBL/skills/teamsmith/scripts/panel/src/strings/zh.ts" \
-  "$P28_LBL/skills/teamsmith/scripts/panel/src/strings/en.ts"
-"$JS_RUNNER" "$P28_TESTS/panel-strings.mjs" "$P28_LBL" >"$TMP/p28-labels-flip.log" 2>&1
-P28_LBL_FLIP_RC=$?
-if [ "$P28_LBL_FLIP_RC" -ne 0 ] && grep -q 'TEAM_PULSE_INTERVAL' "$TMP/p28-labels-flip.log"; then
-  ok "28-a2 翻转①：两张表都删掉 label_TEAM_PULSE_INTERVAL 后断言非 0 且点名该键"
-else
-  bad "28-a2 翻转①：删掉的标签没被抓住（rc=$P28_LBL_FLIP_RC）"; tail -3 "$TMP/p28-labels-flip.log"
-fi
-rm -rf "$P28_LBL/skills/teamsmith/scripts/panel/src"
-cp -r "$SKILL_DIR/scripts/panel/src" "$P28_LBL/skills/teamsmith/scripts/panel/src"
-sed -i '/^TEAM_MEETING_KNOCK|/d' "$P28_LBL/skills/teamsmith/scripts/lib/cmd-config.sh"
-"$JS_RUNNER" "$P28_TESTS/panel-strings.mjs" "$P28_LBL" >"$TMP/p28-labels-stale.log" 2>&1
-P28_LBL_STALE_RC=$?
-if [ "$P28_LBL_STALE_RC" -ne 0 ] && grep -q 'TEAM_MEETING_KNOCK' "$TMP/p28-labels-stale.log"; then
-  ok "28-a2 翻转②：schema 删掉一行后，留下的标签被抓住（点名 TEAM_MEETING_KNOCK）"
-else
-  bad "28-a2 翻转②：陈旧的标签没被抓住（rc=$P28_LBL_STALE_RC）"; tail -3 "$TMP/p28-labels-stale.log"
-fi
+for p28_label in label_TEAM_PULSE_INTERVAL settingsChecks; do
+  for p28_lang in zh en; do
+    p28_strings="skills/teamsmith/scripts/panel/src/strings/$p28_lang.ts"
+    sed "/^  $p28_label:/d" "$SRC_ROOT/$p28_strings" > "$P28_LBL/$p28_strings"
+  done
+  p28_flip="$TMP/p28-labels-$p28_label.log"
+  "$JS_RUNNER" "$P28_TESTS/panel-strings.mjs" "$P28_LBL" >"$p28_flip" 2>&1
+  p28_rc=$?
+  if [ "$p28_rc" -eq 1 ] && grep -qE "zh: missing .* $p28_label$" "$p28_flip" &&
+      grep -qE "en: missing .* $p28_label$" "$p28_flip"; then
+    ok "28-a2 翻转：两张表删掉 $p28_label，检查点名两种语言"
+  else
+    bad "28-a2 删掉的标签没有被双语检查捕获（$p28_label，rc=$p28_rc）"; tail -5 "$p28_flip"
+  fi
+done
 
 # ---- 28-b 调色板对比度 ≥ 4.5:1；翻转 = 把 dark.text 压到与背景同色
 "$JS_RUNNER" "$P28_TESTS/panel-contrast.mjs" "$P28_PANEL" >"$TMP/p28-contrast.log" 2>&1
@@ -20832,11 +20818,8 @@ fi
 # 现场），判据上属二阶 —— 验的是夹具的判据会不会咬人，不是产品行为。38-b/f/h/i 这些真 pty 腿仍然
 # 每次跑（它们才是产品行为），所以 §38 一侧只剩一条指向这里的注释。
 
-# 38-d 静默回归钉（M65/D11，FAST 照跑）：交互路径不许再出现「打开前先读一次」的 awaited API，
-# 且唯一带读取窗口判据的行为夹具还在。38-b（真 pty）只在完整门禁跑；这两条便宜钉保证有人把
-# 「开行前先读一次」加回来、或把读取窗口断言删掉时 FAST 也会红。今天 38-d 的红侧是段内这几条 grep
-# 与 panel-choices.sh 的 F-A/F-D（P410 起在 §38m 的元套件里每轮实跑）；原本点名的 W-A（断掉无读取 →
-# choices 变红）随 panel-flip-m54.sh 在 P354 退役，这一面今天没有活翻转（见 docs/team/reports/M55-dev3.md）。
+# 38-d（M65/D11，FAST 照跑）：没有等待配置重读的交互路径。真实读取次数由 38-b 的 argv 记录检查；
+# 这里保留 FAST 下的读取调用点检查，不依赖行为夹具的描述文字。
 if [ -f "$SKILL_DIR/scripts/panel/src/App.tsx" ]; then
   if grep -qE '(^|[^A-Za-z])refreshSettings\(' "$SKILL_DIR/scripts/panel/src/App.tsx"; then
     bad "38-d 交互路径又出现 awaited 读取（App.tsx 调了 refreshSettings）"
@@ -20847,92 +20830,27 @@ if [ -f "$SKILL_DIR/scripts/panel/src/App.tsx" ]; then
 else
   bad "38-d 缺 scripts/panel/src/App.tsx"
 fi
-if [ -f "$SKILL_DIR/tests/panel-p21.sh" ]; then
-  assert_has "$SKILL_DIR/tests/panel-p21.sh" "按键→帧之间零读取" "38-d choices 段还带着读取窗口判据（行为面在 38-b / W-A）"
-  assert_has "$SKILL_DIR/tests/panel-p21.sh" "argv_reads" "38-d 读取窗口判据用 config list/__panel-data 的 argv 面"
-else
-  bad "38-d 缺 tests/panel-p21.sh"
-fi
 
-# 38-e P30 钉子（FAST 照跑）：pty 行为面（settings / groups / wheel 三个场景）在完整门禁里跑（38-f 就是
-# 那个调用点），
-# FAST 用三条便宜的**结构钉 + 红侧**保证有人把行为改回去时门禁也会红：
-#   ① 字符串表的「schema 行第 10 列 token ⇄ group_<token> 标签」双向相等（删标签 / 加陈旧标签都红）；
-#   ② 视图的分组只从**记录**读（layout.ts 没有类分组表、没有键→域表，标题按 token 查表）；
-#   ③ 鼠标分支在设置视图里**消费**滚轮（在页面滚动之前 return —— 用户报的「滚轮偷偷滚页面」）。
-# 红侧一律在 scratch 副本上翻转（同 28-a2 的模式），工作树一个字节不动。
-P38E_LBL="$TMP/p38e-labels"; rm -rf "$P38E_LBL"
-mkdir -p "$P38E_LBL/skills/teamsmith/scripts/panel" "$P38E_LBL/skills/teamsmith/scripts/lib"
-cp -r "$SKILL_DIR/scripts/panel/src" "$P38E_LBL/skills/teamsmith/scripts/panel/src"
-cp "$SKILL_DIR/scripts/lib/cmd-config.sh" "$P38E_LBL/skills/teamsmith/scripts/lib/"
-"$JS_RUNNER" "$P28_TESTS/panel-strings.mjs" "$P38E_LBL" >"$TMP/p38e-labels-green.log" 2>&1
-if [ $? -eq 0 ] && grep -q 'contract-group labels' "$TMP/p38e-labels-green.log"; then
-  ok "38-e 组标签：schema 行的 group token 与 zh/en 的 group_<token> 双向相等（$(grep -oE '[0-9]+ schema group tokens' "$TMP/p38e-labels-green.log" | head -1)）"
-else
-  bad "38-e 组标签：绿侧就红了"; tail -3 "$TMP/p38e-labels-green.log"
-fi
-sed -i '/^  group_workflow:/d' \
-  "$P38E_LBL/skills/teamsmith/scripts/panel/src/strings/zh.ts" \
-  "$P38E_LBL/skills/teamsmith/scripts/panel/src/strings/en.ts"
-"$JS_RUNNER" "$P28_TESTS/panel-strings.mjs" "$P38E_LBL" >"$TMP/p38e-labels-red.log" 2>&1
-P38E_RC=$?
-if [ "$P38E_RC" -ne 0 ] && grep -q 'group_workflow' "$TMP/p38e-labels-red.log"; then
-  ok "38-e 翻转①：两张表都删掉 group_workflow → 断言非 0 且点名该 token"
-else
-  bad "38-e 翻转①：删掉的组标签没被抓住（rc=$P38E_RC）"; tail -3 "$TMP/p38e-labels-red.log"
-fi
-rm -rf "$P38E_LBL/skills/teamsmith/scripts/panel/src"
-cp -r "$SKILL_DIR/scripts/panel/src" "$P38E_LBL/skills/teamsmith/scripts/panel/src"
-sed -i "/^  settingsGroupUngrouped:/i\\  group_zzz: 'zzz'," \
-  "$P38E_LBL/skills/teamsmith/scripts/panel/src/strings/zh.ts" \
-  "$P38E_LBL/skills/teamsmith/scripts/panel/src/strings/en.ts"
-"$JS_RUNNER" "$P28_TESTS/panel-strings.mjs" "$P38E_LBL" >"$TMP/p38e-labels-stale.log" 2>&1
-P38E_RC=$?
-if [ "$P38E_RC" -ne 0 ] && grep -q 'group_zzz' "$TMP/p38e-labels-stale.log"; then
-  ok "38-e 翻转②：加一个没有 schema 行使用的 group_zzz → 断言非 0 且点名陈旧标签"
-else
-  bad "38-e 翻转②：陈旧的组标签没被抓住（rc=$P38E_RC）"; tail -3 "$TMP/p38e-labels-stale.log"
-fi
-# ② 视图分组只读记录：没有类分组表、没有键→域表，标题按 token 查表。
-p38e_group_pin() { # <tree> → 0 = 分组只从记录读
-  local f="$1/skills/teamsmith/scripts/panel/src/layout.ts"
-  [ -f "$f" ] || return 1
-  ! grep -qE 'settingsGroupApply|settingsGroupRestart|settingsGroupRefuse' "$f" &&
-    grep -qE 'k\.group' "$f" &&
-    grep -qF 'group_${token}' "$f"
-}
-# ③ 滚轮在设置视图里被消费（分派点必须早于页面滚动的分派点）。
-p38e_wheel_pin() { # <tree> → 0 = 设置在页面前面消费滚轮
-  local f="$1/skills/teamsmith/scripts/panel/src/App.tsx" a b
+# 38-e（FAST 照跑）：鼠标分支先在设置视图消费滚轮；实际滚轮不穿透及按用途分组由 38-f 验证。
+# 双语界面标签由 28-a/28-a2 检查，完整 CLI 分组仍由 §33 config-cli.sh 检查。
+p38e_wheel_pin() { # <App.tsx> → 0 = 设置在页面前面消费滚轮
+  local f="$1" a b
   [ -f "$f" ] || return 1
   a="$(grep -n 'scrollSettings(delta)' "$f" | head -1 | cut -d: -f1)"
   b="$(grep -n 'updateScroll((v) => v + delta)' "$f" | head -1 | cut -d: -f1)"
   [ -n "$a" ] && [ -n "$b" ] && [ "$a" -lt "$b" ]
 }
-P38E_SRC="$TMP/p38e-src"; rm -rf "$P38E_SRC"
-mkdir -p "$P38E_SRC/skills/teamsmith/scripts/panel"
-cp -r "$SKILL_DIR/scripts/panel/src" "$P38E_SRC/skills/teamsmith/scripts/panel/src"
-if p38e_group_pin "$P38E_SRC"; then
-  ok "38-e 视图分组：layout.ts 无类分组表、无键→域表（标题按 group_<token> 查，分组只读记录）"
-else
-  bad "38-e 视图分组：pin 在现树上就红了"
-fi
-printf '\nconst settingsGroupApply = 1\n' >> "$P38E_SRC/skills/teamsmith/scripts/panel/src/layout.ts"
-if p38e_group_pin "$P38E_SRC"; then
-  bad "38-e 翻转：把类分组表装回去 pin 居然还绿（钉失效）"
-else
-  ok "38-e 翻转：layout.ts 里出现 settingsGroupApply → pin 红"
-fi
-if p38e_wheel_pin "$P38E_SRC"; then
+P38E_APP="$SKILL_DIR/scripts/panel/src/App.tsx"
+if p38e_wheel_pin "$P38E_APP"; then
   ok "38-e 滚轮消费：设置视图的分支在页面滚动之前（scrollSettings 先于 updateScroll，不穿透）"
+  sed '/scrollSettings(delta)/d' "$P38E_APP" > "$TMP/p38e-app-flip.tsx"
+  if p38e_wheel_pin "$TMP/p38e-app-flip.tsx"; then
+    bad "38-e 翻转：去掉滚轮消费 pin 还绿（钉失效）"
+  else
+    ok "38-e 翻转：删掉 scrollSettings(delta) → pin 红（滚轮会落回页面滚动）"
+  fi
 else
   bad "38-e 滚轮消费：pin 在现树上就红了"
-fi
-sed -i '/scrollSettings(delta)/d' "$P38E_SRC/skills/teamsmith/scripts/panel/src/App.tsx"
-if p38e_wheel_pin "$P38E_SRC"; then
-  bad "38-e 翻转：去掉滚轮消费 pin 还绿（钉失效）"
-else
-  ok "38-e 翻转：删掉 scrollSettings(delta) → pin 红（滚轮会落回页面滚动）"
 fi
 
 # 38-f P32 的修订面（FAST 下可见 SKIP）：panel-p21.sh 的 groups / settings / wheel 三个场景 ——
