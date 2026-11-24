@@ -29,7 +29,7 @@
 | `skills/teamsmith/templates/AGENTS.section.md.tmpl`、`skills/teamsmith/templates/pm-prompt.md.tmpl`、`skills/teamsmith/SKILL.md` | PM（P488、P490 已接受） | 自主规则与原授权已核；一行升级措辞在 c34e1468 的自检通过 |
 | `skills/teamsmith/tests/loop-inventory.tsv` | PM（P489 已接受） | 合并版 26/0，收回临时写权 |
 | `skills/teamsmith/tests/smoke.sh` §10 的 P440 路径断言 | PM（P491 已验收） | 候选 47/0、合并版字节一致，收回临时写权 |
-| `skills/teamsmith/tests/smoke.sh` §28/§38 的设置检查、`skills/teamsmith/tests/panel-p21.sh` | agent:dev（P492 临时） | 限当前设置测试，不写 §10 或产品 |
+| `skills/teamsmith/tests/smoke.sh` §28/§38 的设置检查、`skills/teamsmith/tests/panel-p21.sh` | PM（P492 已验收） | 原操作与单行补验、合并文件均已独立核对，收回临时写权 |
 | `skills/teamsmith/tests/remind-tool-real.mjs` 中两例诊断启动 | PM（P494 已验收） | 两例实际 2/0、合并版与运行文件一致，收回临时写权 |
 | 其余 `skills/teamsmith/scripts/panel/src/**` 及对应README/config/SKILL设置说明 | agent:dev（默认维护权） | P471/V177已完成，P474不授写 |
 | `openspec/changes/archive/2026-11-17-pulse-project-settings-simplify/**` | PM（A13已接受） | 已验9/9七工件原样归档，临时写权收回，不再授实现写入 |

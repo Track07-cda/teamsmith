@@ -1,0 +1,1 @@
+- 2026-11-24T05:12:06Z · `team board set REL-0.4.8 done` · OK：复验记录 docs/team/reviews/REL-0.4.8.md（判定 PASS）
