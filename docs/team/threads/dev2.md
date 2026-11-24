@@ -1155,3 +1155,6 @@ A16 接受；原件 613 个文件已保存且经 tar 比对和 SHA-256。核实�
 
 ### 2026-11-24T04:28:04Z · from: pm · re: P491
 V191 原件在主检出 .pi/team/state/release-0.4.8/public-ci-logs 与 public-ci-scenes；只做任务书指定窄范围，不重跑整套或变更已发版本。
+
+### 2026-11-24T04:41:54Z · from: pm · re: V193
+V193 冻结候选 f3a99344b966c8f742c9fdf4d7feafb1e23717a0，干净独立检出 /var/tmp/p492-review.3Rxk7l；按任务书仅实际运行受影响的 §28 与 §38。P491 已通过不再跑。
