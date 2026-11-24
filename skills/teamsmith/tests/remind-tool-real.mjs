@@ -100,6 +100,38 @@ async function publishLaunch(info) {
   const source = `source ${sh(join(info.skill, 'scripts/lib/common.sh'))}; source ${sh(join(info.skill, 'scripts/lib/cmd-config.sh'))}; team_load_config; team_pm_metadata_publish p442-${info.name}`
   await command('bash', ['-c', source], { cwd: info.root, env: info.env })
 }
+async function startRegistered(info, omitReminder) {
+  // As in recovery, respawn inherits the private tmux session environment, not the Bash caller's.
+  for (const [key, value] of Object.entries(info.env)) await tmux('set-environment', '-t', info.session, key, value)
+  // The no-entry control omits just the quoted -e argument; team_pm_start still owns the launch and all PID proof.
+  const omitEntry = omitReminder ? `
+    printf -v omit ' -e %q ' "$TEAM_SKILL_DIR/extension/team-remind.ts"
+    [[ "$launch" == *"$omit"* ]] || { printf 'Reminder entry not found in PM launch\\n' >&2; return 1; }
+    launch="\${launch/"$omit"/ }"
+  ` : ''
+  const source = `source ${sh(join(info.skill, 'scripts/lib/common.sh'))} && source ${sh(join(info.skill, 'scripts/lib/cmd-config.sh'))} && team_load_config || exit $?
+    eval "$(declare -f team_pm_launch_cmd | sed '1s/team_pm_launch_cmd/render_pm_launch/')" || exit $?
+    team_pm_launch_cmd() {
+      local launch omit
+      launch="$(render_pm_launch "$@")" || return
+      ${omitEntry}
+      printf '%s\\n' "$launch" > ${sh(join(info.dir, 'launch.txt'))} || return
+      printf '%s' "$launch"
+    }
+    team_pm_start
+    rc=$?
+    printf 'outcome=%s rc=%s\\n' "$TEAM_PM_START_OUTCOME" "$rc"
+    [ "$rc" -eq 0 ] || exit "$rc"
+    [ "$TEAM_PM_START_OUTCOME" = started ]`
+  const result = await runSync('bash', ['-c', source], { cwd: info.root,
+    env: { ...info.env, TMUX: `${socket},${info.serverPid},0`, TMUX_PANE: info.pane }, encoding: 'utf8' })
+  const output = (result.stdout ?? '') + (result.stderr ?? '')
+  writeFileSync(join(info.dir, 'formal-start.txt'), output)
+  const diag = join(info.state, 'pm-launch-failed.log')
+  if (existsSync(diag)) cpSync(diag, join(info.dir, 'pm-launch-failed.log'))
+  assert.equal(result.error, undefined, `${info.name}: ${result.error}`)
+  assert.equal(result.status, 0, `${info.name} formal PM launch: ${output}`)
+}
 async function doctor(info) {
   const result = await runSync('bash', [join(info.skill, 'scripts/team'), '--root', info.root, 'doctor'],
     { cwd: info.root, env: { ...info.env, TMUX: `${socket},${info.serverPid},0`, TMUX_PANE: info.pane }, encoding: 'utf8' })
@@ -141,10 +173,9 @@ async function start(name, respond, opts = {}) {
     }
     // These two cases bypass team_pm_launch_cmd; record the same pre-exec PID for cleanup.
     launch = `cd ${sh(cwd)} && printf '%s\\n' "$$" > ${sh(spawnReceipt)} && exec ${sh(pi)} --provider p442 --model controlled -e ${sh(join(runSkill, 'extension/team-remind.ts'))} ${extra} @${sh(prompt)}`
-  } else {
+  } else if (!opts.formalStart) {
     const sourceScript = `source ${sh(join(runSkill, 'scripts/lib/common.sh'))}; source ${sh(join(runSkill, 'scripts/lib/cmd-config.sh'))}; team_load_config; team_pm_launch_cmd ${sh(prompt)} ${sh(spawnReceipt)}`
     launch = await command('bash', ['-c', sourceScript], { cwd: root, env })
-    if (opts.invalid === 'no-entry') launch = launch.replace(` -e ${join(runSkill, 'extension/team-remind.ts')}`, '')
   }
   // Mutate after computing the directed launch so its environment still belongs to the real pane.
   // The extension then rejects the changed file, matching a live config edit rather than a forged launch.
@@ -155,8 +186,13 @@ async function start(name, respond, opts = {}) {
     assert(launch.includes(`-e ${watcher}`), 'the real PM launch names the production watcher')
     launch = launch.replace(`-e ${watcher}`, `-e ${earlier} -e ${watcher}`)
   }
-  writeFileSync(join(dir, 'launch.txt'), launch + '\n')
-  if (!opts.invalid) assert.equal((launch.match(/extension\/team-remind\.ts/g) ?? []).length, 1, 'one directed Reminder extension')
+  const checkLaunch = cmd => {
+    if (!opts.invalid) assert.equal((cmd.match(/extension\/team-remind\.ts/g) ?? []).length, 1, 'one directed Reminder extension')
+  }
+  if (!opts.formalStart) {
+    writeFileSync(join(dir, 'launch.txt'), launch + '\n')
+    checkLaunch(launch)
+  }
   let release
   const gate = opts.deferFirstResponse ? new Promise(resolve => { release = resolve }) : null
   plans.set(name, { requests: 0, dir, state, respond, gate })
@@ -165,20 +201,33 @@ async function start(name, respond, opts = {}) {
   await tmux('set-option', '-t', session, 'remain-on-exit', 'on')
   const pane = (await tmux('display-message', '-p', '-t', `${session}:${window}`, '#{pane_id}')).trim(); info.pane = pane
   info.serverPid = (await tmux('display-message', '-p', '-t', pane, '#{pid}')).trim()
-  const script = join(root, 'launch.sh')
-  const assignments = Object.entries(env).map(([key, value]) => `export ${key}=${sh(value)};`).join('\n')
   const launchError = join(dir, 'launch-stderr.txt')
-  writeFileSync(script, `#!/usr/bin/env bash\n${assignments}\nunset TEAM_ROOT TEAM_MAIN_ROOT TEAM_CONFIG_FILE TEAM_STATE_DIR\nbash -c ${sh(launch)} 2>${sh(launchError)}\nrc=$?; printf '%s\\n' "$rc" >${sh(info.done)}\nsleep 600\n`)
-  // Tell the owner before requesting the launch, even if interrupted before Pi can log session_start.
-  appendFileSync(launchedScenes, `${name}\t${receiptPath}\n`)
-  await tmux('respawn-pane', '-k', '-t', pane, `bash ${sh(script)}`)
-  await until(() => existsSync(join(dir, 'session-start')) || existsSync(info.done), `${name} session_start`)
-  if (existsSync(info.done) && !existsSync(join(dir, 'session-start'))) {
+  const trackLaunch = () => appendFileSync(launchedScenes, `${name}\t${receiptPath}\n`)
+  let launchExited = () => existsSync(info.done)
+  // Tell the owner before requesting either launch, even if Pi has not logged session_start.
+  if (opts.formalStart) {
+    trackLaunch()
+    await startRegistered(info, opts.invalid === 'no-entry')
+    checkLaunch(readFileSync(join(dir, 'launch.txt'), 'utf8'))
+    // Formal launch has no launch.sh/done file. Detect early exit by the PID it actually registered.
+    const pid = readFileSync(join(state, 'pm.pid'), 'utf8').trim()
+    launchExited = () => !existsSync(`/proc/${pid}`)
+  } else {
+    const script = join(root, 'launch.sh')
+    const assignments = Object.entries(env).map(([key, value]) => `export ${key}=${sh(value)};`).join('\n')
+    writeFileSync(script, `#!/usr/bin/env bash\n${assignments}\nunset TEAM_ROOT TEAM_MAIN_ROOT TEAM_CONFIG_FILE TEAM_STATE_DIR\nbash -c ${sh(launch)} 2>${sh(launchError)}\nrc=$?; printf '%s\\n' "$rc" >${sh(info.done)}\nsleep 600\n`)
+    trackLaunch()
+    await tmux('respawn-pane', '-k', '-t', pane, `bash ${sh(script)}`)
+  }
+  await until(() => existsSync(join(dir, 'session-start')) || launchExited(), `${name} session_start`)
+  if (launchExited() && !existsSync(join(dir, 'session-start'))) {
     const output = await tmux('capture-pane', '-p', '-t', pane, '-S', '-')
     writeFileSync(join(dir, 'launch-output.txt'), output)
-    throw new Error(`${name} Pi exited before session_start: rc=${readFileSync(info.done, 'utf8').trim()}\n${readFileSync(launchError, 'utf8')}${output}`)
+    const rc = opts.formalStart ? await tmux('display-message', '-p', '-t', pane, '#{pane_dead_status}') : readFileSync(info.done, 'utf8')
+    const stderr = opts.formalStart ? '' : readFileSync(launchError, 'utf8')
+    throw new Error(`${name} Pi exited before session_start: rc=${rc.trim()}\n${stderr}${output}`)
   }
-  if (!['ordinary', 'worker', 'forged', 'no-entry'].includes(opts.invalid)) await publishLaunch(info)
+  if (!opts.formalStart && !['ordinary', 'worker', 'forged', 'no-entry'].includes(opts.invalid)) await publishLaunch(info)
   if (release) release()
   if (opts.invalid === 'no-entry' && release) release()
   const tick = async () => {
@@ -198,7 +247,7 @@ async function stopPi(info) {
     const pid = Number(readFileSync(join(info.dir, 'session-start'), 'utf8').trim())
     const alive = () => { try { process.kill(pid, 0); return true } catch { return false } }
     await tmux('send-keys', '-t', info.pane, '-l', '/p442-control stop'); await tmux('send-keys', '-t', info.pane, 'Enter')
-    // team_pm_start restarts do not use launch.sh, so they have no `done` receipt. Wait for either
+    // team_pm_start does not use launch.sh, so it has no `done` receipt. Wait for either
     // that receipt or the actual process exit; a stuck private fixture is killed by its recorded pid.
     for (let n = 0; n < 200 && !existsSync(info.done) && alive(); n++) {
       await delay(50)
@@ -342,7 +391,7 @@ try {
       if (n === 8) return sse(res, { name: 'pm', tool: { n, input: { action: 'cancel', id: ids()[2] } } })
       if (n === 9) return sse(res, { name: 'pm', tool: { n, input: { action: 'cancel', id: ids()[3] } } })
       return sse(res, { name: 'pm', ...final('PM reminder tool sequence complete') })
-    }, { deferFirstResponse: true })
+    }, { formalStart: true, deferFirstResponse: true })
     const generated = readFileSync(info.config, 'utf8')
     assert.match(generated, /^TEAM_SESSION=.*\s+# tmux session name/m, 'fixture keeps the generated TEAM_SESSION trailing comment')
     assert.match(generated, /^TEAM_PM_WINDOW=.*\s+# window running the PM/m, 'fixture keeps the generated TEAM_PM_WINDOW trailing comment')
@@ -737,15 +786,18 @@ try {
     })
   }
 
-  if (selection.includes('doctor')) {
+  if (selection.includes('doctor') || selection.includes('noentry')) {
     await test('running PM with no entry is unknown, not a load failure', async () => {
-      const info = await start('noentry', async ({ n, res }) => sse(res, { name: 'noentry', ...final('no entry') }), { invalid: 'no-entry', deferFirstResponse: true })
+      const info = await start('noentry', async ({ n, res }) => sse(res, { name: 'noentry', ...final('no entry') }),
+        { formalStart: true, invalid: 'no-entry', deferFirstResponse: true })
       try {
         await until(() => events(info).some(e => e.type === 'agent_settled'), 'no-entry response')
         assert.match(await doctor(info), /PM 提醒工具\s+.*unknown evidence:ENOENT/)
         assert(!existsSync(join(info.state, 'reminders/state.json')))
       } finally { await stop(info) }
     })
+  }
+  if (selection.includes('doctor')) {
     await test('generated config mismatch hides the tool and leaves a specific doctor error', async () => {
       const info = await start('config-mismatch', async ({ n, res }) => sse(res, { name: 'config-mismatch', ...final('config mismatch') }), {
         configure: mismatchGeneratedSession, deferFirstResponse: true,
