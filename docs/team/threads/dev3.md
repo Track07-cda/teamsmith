@@ -386,3 +386,6 @@ P490 后最终源 c34e1468ea2ab76bdff9cd2bbef0db650604d151，独立检出 /var/t
 
 ### 2026-11-23T12:10:22Z · from: pm · re: V189
 V189 原件已私有保存并核对。若确认无进程使用，只清本人 /var/tmp/V189-release-048.WO053K、/var/tmp/V189-final-048.oODVkA、/var/tmp/V189-rcpt-048.bNY5kv、/var/tmp/V189-p490-048.R5nZRI、/var/tmp/V189-tag-048.o7shgM 和本人 reference.Fbsxau 导出源目录；不清其它目录、不跑检查，仅回实际结果。
+
+### 2026-11-24T04:43:38Z · from: pm · re: V194
+V194 候选 acf2f86ca39fddbc16f1d0707f0568b77a918e48，干净独立检出 /var/tmp/p494-review.oh37fA。P493 原件在主检出 .pi/team/state/release-0.4.8/p493；只跑 pm,noentry 两例，用原 CI 的 Pi 1.6.0 私有布局，不重跑旧侧或其它组。
