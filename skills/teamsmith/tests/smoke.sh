@@ -5997,6 +5997,17 @@ review_record_has_verifier() { # 真实命令产生的记录必须绑定 verify 
 }
 P440_GATE="$TMP/p440-review-gate.sh"
 printf '#!/usr/bin/env bash\nprintf '\''gate main=%%s home=%%s\\n'\'' '%s' "$HOME"\n' "$REPO" > "$P440_GATE"
+review_record_has_absolute_home() { # <record>；独立于产品净化判断实际路径边界
+  local LC_ALL=C home="${HOME:-}" line
+  local left='(^|[^A-Za-z0-9/_.-])' right='($|[^A-Za-z0-9._-]|[._-]($|[^A-Za-z0-9]))'
+  home="${home%/}"
+  [ -n "$home" ] || return 1
+  # HOME=/tmp：匹配 /tmp 和 /tmp/checkout，不匹配 /var/tmp 或 /tmp-other。
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [[ "$line" =~ $left"$home"$right ]]; then return 0; fi
+  done < "$1"
+  return 1
+}
 review_record_ledger_clean() { # P440：所有动态片段都不能把 main/home 绝对路径写进公开 Markdown
   local rec="$REPO/docs/team/reviews/T1.1.md" checkout_display="$REV_WT" gate_display="$P440_GATE"
   case "$REV_WT" in
@@ -6009,8 +6020,8 @@ review_record_ledger_clean() { # P440：所有动态片段都不能把 main/home
   esac
   [ -f "$rec" ] || { printf 'missing record\n'; return 1; }
   ! grep -qF "$REPO" "$rec" || { printf 'absolute main root remains\n'; return 1; }
-  if [ "${HOME:-}" != "/" ]; then
-    ! grep -qF "$HOME" "$rec" || { printf 'absolute home remains\n'; return 1; }
+  if review_record_has_absolute_home "$rec"; then
+    printf 'absolute home remains\n'; return 1
   fi
   grep -qF "独立 checkout：\`$checkout_display\`" "$rec" || { printf 'independent checkout display mismatch\n'; return 1; }
   grep -qF 'agent 报告：`<main-root>/.worktrees/dev/docs/team/reports/T1.1-dev.md`' "$rec" \
@@ -6103,7 +6114,7 @@ if [ "$P440_RED_REVIEW_RC" -ne 0 ] || [ ! -f "$P440_RED_REC" ] || ! grep -qF '�
   bad "P440 review 红侧前提不成立：不能用缺失记录或失败 review 充当路径翻转"
 elif ! grep -qF "$REPO" "$P440_RED_REC"; then
   bad "P440 review 红侧失效：变异记录里没有绝对 main root"
-elif ! grep -qF "$HOME" "$P440_RED_REC"; then
+elif ! review_record_has_absolute_home "$P440_RED_REC"; then
   bad "P440 review 红侧失效：变异记录里没有绝对 HOME"
 elif review_record_ledger_clean >"$TMP/p440-review-red.log" 2>&1; then
   bad "P440 review 红侧失效：恢复绝对路径写盘仍通过账本路径断言"
