@@ -358,3 +358,6 @@ V186 原件已私有保存并与原件比较通过。若确认无进程使用，
 
 ### 2026-11-24T03:06:27Z · from: pm · re: V190
 用户选 A，V190 即时启动；干净固定检出 /var/tmp/rel048-meta-p490.87ZeWU，c34e1468ea2ab76bdff9cd2bbef0db650604d151。只执行现有 remind-tool-real.sh --select=adversarial-event-after，一次，真实 Pi 与私有 loopback，不跑其它场景；原件留存。
+
+### 2026-11-24T03:14:40Z · from: pm · re: V190
+V190 已通过接受，原始记录已私有保存并 compare、SHA-256 核对。只清本人 /var/tmp/v190.ZHCs4v（退出且无监听后），不动冻结检出、不重跑，回实际结果。
