@@ -30,7 +30,7 @@
 | `skills/teamsmith/tests/loop-inventory.tsv` | PM（P489 已接受） | 合并版 26/0，收回临时写权 |
 | `skills/teamsmith/tests/smoke.sh` §10 的 P440 路径断言 | PM（P491 已验收） | 候选 47/0、合并版字节一致，收回临时写权 |
 | `skills/teamsmith/tests/smoke.sh` §28/§38 的设置检查、`skills/teamsmith/tests/panel-p21.sh` | agent:dev（P492 临时） | 限当前设置测试，不写 §10 或产品 |
-| `skills/teamsmith/tests/remind-tool-real.mjs` 中两例诊断启动 | agent:dev-bob（P494 临时） | 限 `pm`/`noentry` 与必要共用段，不动产品 |
+| `skills/teamsmith/tests/remind-tool-real.mjs` 中两例诊断启动 | PM（P494 已验收） | 两例实际 2/0、合并版与运行文件一致，收回临时写权 |
 | 其余 `skills/teamsmith/scripts/panel/src/**` 及对应README/config/SKILL设置说明 | agent:dev（默认维护权） | P471/V177已完成，P474不授写 |
 | `openspec/changes/archive/2026-11-17-pulse-project-settings-simplify/**` | PM（A13已接受） | 已验9/9七工件原样归档，临时写权收回，不再授实现写入 |
 | `openspec/changes/archive/2026-11-16-routing-parameter-check-dedup/**` | PM（A12已接受） | 已验6/6的五工件原样归档，临时写权收回 |
