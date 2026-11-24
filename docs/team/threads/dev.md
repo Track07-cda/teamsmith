@@ -484,3 +484,6 @@ P485仅余R3：按78f1a5ae只改design与原2.4样本判据。同步命令结束
 
 ### 2026-11-24T04:28:04Z · from: pm · re: P492
 V191 原件在主检出 .pi/team/state/release-0.4.8/public-ci-logs 与 public-ci-scenes；只做任务书指定窄范围，不重跑整套或变更已发版本。
+
+### 2026-11-24T05:04:42Z · from: pm · re: P492
+V193 选择器原实跑 56/1，只返修 panel-p21.sh:733 的落盘格式断言，原件确写 TEAM_REVIEW_TIMEOUT 单引号30。任务书是唯一范围，保留所有其他字节和原行为。作者只做静态，不重跑。
