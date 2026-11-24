@@ -345,3 +345,6 @@ V185首轮五项四过，报告bc51f1ba；只修真实Pi TERM：关闭私有tmux
 
 ### 2026-11-24T04:28:04Z · from: pm · re: P493
 V191 原件在主检出 .pi/team/state/release-0.4.8/public-ci-logs 与 public-ci-scenes；只做任务书指定窄范围，不重跑整套或变更已发版本。
+
+### 2026-11-24T04:37:52Z · from: pm · re: P494
+P493 已接受。私有原包已按 SHA-256 核对复制到主检出 .pi/team/state/release-0.4.8/p493。确认未被使用后清理自己宿主 /var/tmp/p493-bob.ECoUS5，清理回执随 P494 报告。P494 作者只做静态，非作者验证运行。
