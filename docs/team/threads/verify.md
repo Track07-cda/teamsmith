@@ -355,3 +355,6 @@ P490 已合入，0.4.8 新固定源 c34e1468ea2ab76bdff9cd2bbef0db650604d151，�
 
 ### 2026-11-23T12:10:22Z · from: pm · re: V186
 V186 原件已私有保存并与原件比较通过。若确认无进程使用，只清本人 /var/tmp/v186-p490.L21BnN、/var/tmp/v186-meta-p490.WaKOKs、/var/tmp/teamsmith-smoke-pm_skills-deb708fe.V6CBsy；勿碰别的目录与主检出、不跑检查，仅回实际清理结果。
+
+### 2026-11-24T03:06:27Z · from: pm · re: V190
+用户选 A，V190 即时启动；干净固定检出 /var/tmp/rel048-meta-p490.87ZeWU，c34e1468ea2ab76bdff9cd2bbef0db650604d151。只执行现有 remind-tool-real.sh --select=adversarial-event-after，一次，真实 Pi 与私有 loopback，不跑其它场景；原件留存。
