@@ -364,3 +364,6 @@ V190 已通过接受，原始记录已私有保存并 compare、SHA-256 核对�
 
 ### 2026-11-24T04:16:05Z · from: pm · re: V191
 V191 只读取证。主检出 .pi/team/state/release-0.4.8/public-ci-logs 已保存 4 片与覆盖的原始日志，旁边 public-ci-jobs.json / public-ci-artifacts.json 是索引。用标签 c34e1468 查源；不重跑、不改产品或标签。
+
+### 2026-11-24T04:32:24Z · from: pm · re: V192
+V192 冻结候选 725e7ed223c83ce5c975a06d9cac281cf012c866，干净独立检出 /var/tmp/p491-review.ocMEmn。只跑固定镜像内原 §10，HOME=/tmp、TMPDIR=/var/tmp，保留真正通过与改坏对照；不重跑整套。
