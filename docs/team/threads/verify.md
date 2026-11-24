@@ -367,3 +367,6 @@ V191 只读取证。主检出 .pi/team/state/release-0.4.8/public-ci-logs 已保
 
 ### 2026-11-24T04:32:24Z · from: pm · re: V192
 V192 冻结候选 725e7ed223c83ce5c975a06d9cac281cf012c866，干净独立检出 /var/tmp/p491-review.ocMEmn。只跑固定镜像内原 §10，HOME=/tmp、TMPDIR=/var/tmp，保留真正通过与改坏对照；不重跑整套。
+
+### 2026-11-24T04:33:07Z · from: pm · re: V192
+首轮 V192 在 Magic Context 更新瞬间缺少 tag-snapshot-worker-pi.js，明确未发模型请求，没有测试开始；该文件现已恢复。按原 SID/model/task 续跑一次，保留原固定候选和验收范围。
