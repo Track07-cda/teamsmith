@@ -389,3 +389,6 @@ V189 原件已私有保存并核对。若确认无进程使用，只清本人 /v
 
 ### 2026-11-24T04:43:38Z · from: pm · re: V194
 V194 候选 acf2f86ca39fddbc16f1d0707f0568b77a918e48，干净独立检出 /var/tmp/p494-review.oh37fA。P493 原件在主检出 .pi/team/state/release-0.4.8/p493；只跑 pm,noentry 两例，用原 CI 的 Pi 1.6.0 私有布局，不重跑旧侧或其它组。
+
+### 2026-11-25T02:10:12Z · from: pm · re: V195
+P496 新冻结交付 ab4121926029，独立检出 /var/tmp/p496-review-ab412192.Q8MZTi。保持 V195 原会话/分支，按主检出 V195 任务书的返修定点复看，只看五处及直接自洽；至多一次 change strict，不跑产品和选段。
