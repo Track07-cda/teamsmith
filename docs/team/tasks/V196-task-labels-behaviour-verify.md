@@ -32,3 +32,7 @@ TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh --select 4c,6d,28 </dev/n
 - 允许原生工具写主检出 `docs/team/reviews/P497.md`、`P497-verify.log`：`TEAM_GATES='bash /var/tmp/<你的私有根>/<runner>' bash skills/teamsmith/scripts/team review P497 --dir /var/tmp/p497-review-6ce75ccf.buY10v --branch 6ce75ccf57002aa33724b3e0fea3c292bedd2256`。不要用默认整套命令，不运行 §38、整套、真实模型或发布检查。若检查启动/准备或某项行为失败，保存完整原件，明确哪些已跑、哪些没跑，先交归因，不自行改产品或盲重跑整批。
 
 唯一任务分支交付 `docs/team/reports/V196-verify.md`：先给候选是否可接受和实际缺口，带原生独立记录、输出/画面及临时根位置、实际短命令和退出值，小步本地提交（V196、`Agent: verify`）。不合并、不推送、不改任务勾选、不发布。合并后由你对 PM 给的新检出做字节核对和必要的短接入，不重复此批；原件保留至 PM 确认收存。
+
+## 首轮后先停在原证据
+
+`6ce75ccf` 已有原生 FAIL（636/3/3），报告 `aadffdf2`。不重复运行。首轮已完成且未改变的行为保留原证据；§26-a 原来被错误列为跳过。新固定候选到位后，原 V196 只用保存的 59 列帧复核修正后的取行、用相关 §26-a 路径补隔离重建、单独补公开标签命令的分隔符，然后执行原来未启动的 `panel-b3.sh board` 与一次权重反例。按新固定提交提供具体执行方式，不再启动 15 段选测来刷新数字；不得把旧原生 FAIL 改绿或替未跑项写通过。

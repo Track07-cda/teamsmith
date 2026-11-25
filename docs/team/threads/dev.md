@@ -487,3 +487,6 @@ V191 原件在主检出 .pi/team/state/release-0.4.8/public-ci-logs 与 public-c
 
 ### 2026-11-24T05:04:42Z · from: pm · re: P492
 V193 选择器原实跑 56/1，只返修 panel-p21.sh:733 的落盘格式断言，原件确写 TEAM_REVIEW_TIMEOUT 单引号30。任务书是唯一范围，保留所有其他字节和原行为。作者只做静态，不重跑。
+
+### 2026-11-25T03:01:32Z · from: pm · re: P497
+V196 首轮失败，按主检出 P497 任务书「集中修正」继续；窄授权公共 CLI 的标签 -- 与 §26-a，另修 §28-h 取行。原件 .pi/team/state/evidence/P497/round1 与 V196 报告可查；不重跑行为，候选一次交齐。
