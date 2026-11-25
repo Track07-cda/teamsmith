@@ -21,6 +21,7 @@
 | `openspec/changes/archive/2026-11-25-quick-init-model-defaults/**`、`openspec/specs/init-skill/spec.md`、`docs/team/reports/A17-dev2.md` | PM（A17 已接受） | 四条要求已核同步，五份工件原样移动；归档临时写权收回 |
 | `docs/team/reports/P501-dev2.md` | PM（P501 探索已接受） | 核实逐行时间来源的报告 |
 | `openspec/changes/pulse-board-recent-first/**`、`docs/team/reports/P502-dev2.md` | agent:dev2（P502 临时） | 只写正式方案与 panel、board-and-status 两份变更草案，不写产品或其他变更 |
+| `docs/team/reports/V199-dev3.md` | agent:dev3（V199 临时） | 看板最近更新时间方案独立审阅，固定提交只读 |
 | `docs/team/reviews/P461.md`、`docs/team/reviews/P461-verify.log` | PM（V167已接受关闭） | verifier实际记录已收存；仅PM接受与结案，不再授权新执行 |
 | `docs/team/reviews/P465.md`、`docs/team/reviews/P465-verify.log` | PM（V170已接受关闭） | 两阶段实际记录由dev3执行，已接受merged证据；临时工具写权收回 |
 | `docs/team/reviews/P466.md`、`docs/team/reviews/P466-verify.log` | PM（V171已接受关闭） | 两阶段实际记录由verify执行，已接受merged证据；临时工具写权收回 |
