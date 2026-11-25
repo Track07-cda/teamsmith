@@ -8,8 +8,8 @@
 > 工具：`team task <ID> --title ...` 建行 ｜ `team board set <ID> <状态>` 改状态 ｜ `team board ls`
 > 每个 ID 只留一行：历史上一行两用的（V1.1 · M4.3 · M6.3）已把两行内容与依赖合并进一行并注明（D98）。
 
-| ID | 任务 | Agent | 分支 | 依赖 | 状态 |
-|---|---|---|---|---|---|
+| ID | 任务 | Agent | 分支 | 依赖 | 状态 | Teamsmith Updated UTC |
+|---|---|---|---|---|---|---|
 | — | （还没有任务：`team task T1.1 --title "第一个任务" --agent dev`） | - | - | - | dropped |
 | T1.1 | smoke 快慢分层：给门禁一个 60 秒内的快模式 | dev | - | - | done |
 | V1.1 | 对抗性复核：文档一致性不变量与 review --dir 只读性（此 ID 曾被两用：另一行是 spec-delta-gate 的 re-verify，与 V2 重复，已合并，见 D98） | verify | - | P2.1 | dropped |
@@ -842,8 +842,9 @@
 | P501 | 核实 Pulse 看板按更新日期倒序的最小实现 | dev2 | - | - | done |
 | P502 | 编写 Pulse 看板按最近更新排序方案 | dev2 | - | P501 | done |
 | V199 | 独立审阅 Pulse 看板更新时间倒序方案 | dev3 | - | P501 | done |
-| P503 | 实施 Pulse 看板按更新时间倒序 | dev-bob | - | P502,V199 | review |
-| V200 | 独立验收 Pulse 看板按更新时间倒序 | dev3 | - | P502,V199 | wip |
+| P503 | 实施 Pulse 看板按更新时间倒序 | dev-bob | - | P502,V199 | done | 2026-11-25T11:34:14Z |
+| V200 | 独立验收 Pulse 看板按更新时间倒序 | dev3 | - | P502,V199 | done | 2026-11-25T11:34:15Z |
+| A18 | 同步已验证的 Pulse 看板更新时间排序要求 | dev2 | - | P503,V200 | todo | 2026-11-25T11:34:16Z |
 
 ## 当前里程碑
 
