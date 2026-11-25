@@ -413,3 +413,6 @@ P502 修订冻结 5f36ab4b5d8b5019e63301e5bb080f8e501cc86a，/var/tmp/p502-revie
 
 ### 2026-11-25T11:22:39Z · from: pm · re: V200
 P503 首轮修正固定 68e27674e3a06cc62a15c9a5622ba6a3d24ce9f4 /var/tmp/p503-review-68e27674.AKBkUL。原 V200 继续，读主检出任务书末尾，只跑真实 board、首次写时间的旧板短读数和单帧；fold 与 4c 原结果已留，别重跑。
+
+### 2026-11-25T11:29:11Z · from: pm · re: V200
+68e27674 补验已接受，合并 862733ea56cefea3c359dbbd35703fca07e9b52d。原 V200 续行：主检出任务书末尾只比 12 文件，隔离副本中一次更换负责人、一次看板快照。固定根 /var/tmp/p503-merged-862733ea.Jj7oFU；不触真实 Pulse 或重跑选段。
