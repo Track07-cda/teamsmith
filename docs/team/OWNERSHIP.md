@@ -17,6 +17,7 @@
 | `docs/team/reports/V196-verify.md`、`docs/team/reviews/P497.md` 与 `P497-verify.log` | agent:verify（V196 临时） | 冻结候选独立验证；中央两份证据只由原生 `team review` 生成，产品只读 |
 | `docs/team/reports/P498-dev2.md`、`docs/team/reviews/P498.md` | PM（探索接受） | 仅保留探索及接入裁定 |
 | `openspec/changes/quick-init-model-defaults/**`、`docs/team/reports/P499-dev2.md` | agent:dev2（P499） | 新项目默认模型方案；仅 init-skill delta，不改现行规格或实现 |
+| `docs/team/reports/V197-dev3.md` | agent:dev3（V197） | 新项目初始化方案独立审阅；只写本人报告，不改固定候选 |
 | `docs/team/reviews/P461.md`、`docs/team/reviews/P461-verify.log` | PM（V167已接受关闭） | verifier实际记录已收存；仅PM接受与结案，不再授权新执行 |
 | `docs/team/reviews/P465.md`、`docs/team/reviews/P465-verify.log` | PM（V170已接受关闭） | 两阶段实际记录由dev3执行，已接受merged证据；临时工具写权收回 |
 | `docs/team/reviews/P466.md`、`docs/team/reviews/P466-verify.log` | PM（V171已接受关闭） | 两阶段实际记录由verify执行，已接受merged证据；临时工具写权收回 |
