@@ -12,8 +12,8 @@
 | `ci/collect-scene.sh` | PM | P324已合入，临时写权收回；当前无实现任务改此文件 |
 | `docs/team/reports/**`、`docs/team/threads/**` | agent:* | 报告与线程（只写自己的报告文件） |
 | `docs/team/reports/P495-dev2.md`、`docs/team/reviews/P495.md` | PM（P495 已接受） | 保留探索记录，无后续写权 |
-| `openspec/changes/task-labels/**`、`docs/team/reports/P496-dev2.md` | agent:dev2（P496） | 任务标签方案；仅 board-and-status 和 panel 的 delta，不写正式规格与产品 |
-| `docs/team/reports/V195-dev3.md` | agent:dev3（V195） | 独立审阅任务标签方案；只写个人报告，不改候选 |
+| `openspec/changes/task-labels/**`（除实施任务勾选）、`docs/team/reports/{P496-dev2,V195-dev3}.md` | PM（方案接受） | 已接受的任务标签方案及独立审阅报告冻结，收回 P496/V195 写权 |
+| `docs/team/tasks/P497-task-labels-apply.md` 明授的标签 CLI、Pulse 看板、相关测试及实施勾选范围，`docs/team/reports/P497-dev.md` | agent:dev（P497 临时） | 任务标签实现；不改巡检、设置页、真实标签或正式规格 |
 | `docs/team/reviews/P461.md`、`docs/team/reviews/P461-verify.log` | PM（V167已接受关闭） | verifier实际记录已收存；仅PM接受与结案，不再授权新执行 |
 | `docs/team/reviews/P465.md`、`docs/team/reviews/P465-verify.log` | PM（V170已接受关闭） | 两阶段实际记录由dev3执行，已接受merged证据；临时工具写权收回 |
 | `docs/team/reviews/P466.md`、`docs/team/reviews/P466-verify.log` | PM（V171已接受关闭） | 两阶段实际记录由verify执行，已接受merged证据；临时工具写权收回 |
