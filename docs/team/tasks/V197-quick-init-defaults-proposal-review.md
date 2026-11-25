@@ -26,3 +26,7 @@ branch: task/V197-quick-init-defaults-proposal-review
 冻结 `f93ac89c2ae6bd23b1797a30254387b6edc33c8b`，干净检出 `/var/tmp/p499-review-f93ac89c.TRBOme`。保留原报告，在同一会话、分支追加最终结论。只看 `git diff 315ca5d3..f93ac89c -- openspec/changes/quick-init-model-defaults` 与原 P499 任务书定点项；三处必修、三条直接相关验收建议及返修引入的冲突需要关闭。因 OpenSpec 修改要求需要整段带上，重点比新增三条要求与正式规格的实际差异，确认未动版本、插件、适配器、现有配置发现、迁移和现场授权边界。路径的不同效果看 `init`、`bootstrap`、预览所实际使用位置；不要把正常配置链接当错，也不要求额外检查。默认读取为零的范围仅模型选择；现有两参数的交接不新增入口。确认最短的坏/恢复复用一个 CLI 场景即可。
 
 仅对新固定提交补单 change strict，引用作者已有 spec-refs/报告检查，不重复探索、行为、选段或全量。报告追加 ACCEPTED 或具体未闭合点及同一候选依据，必要 Git 差异检查照旧。
+
+### 最终只复看清单文字
+
+固定 `4cd418c15b31b9b3af4c11ff7f2042ed7b1f9c66`。直接 `git diff f93ac89c..4cd418c1 -- openspec/changes/quick-init-model-defaults`，核实只恢复非模型事项原确认，并限定未给且需要的模型输入；已关闭项不重开。无需新检出、OpenSpec 或其他测试，前一轮结构回执照实绑定前一提交；此次只做差异核对及本人报告提交。
