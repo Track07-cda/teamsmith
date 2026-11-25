@@ -416,3 +416,6 @@ P503 首轮修正固定 68e27674e3a06cc62a15c9a5622ba6a3d24ce9f4 /var/tmp/p503-r
 
 ### 2026-11-25T11:29:11Z · from: pm · re: V200
 68e27674 补验已接受，合并 862733ea56cefea3c359dbbd35703fca07e9b52d。原 V200 续行：主检出任务书末尾只比 12 文件，隔离副本中一次更换负责人、一次看板快照。固定根 /var/tmp/p503-merged-862733ea.Jj7oFU；不触真实 Pulse 或重跑选段。
+
+### 2026-11-25T11:36:14Z · from: pm · re: V200
+V200 三轮 21256 文件已保存并按字节与来源校验。请确认无进程在用后，仅清理你创建的准确根 /var/tmp/v200.88cT2o、/var/tmp/v200-r2.v2bdYC（含已停止的专用预检 socket）、/var/tmp/v200-m.BTFiSb、/var/tmp/teamsmith-panel-b3-pm_skills-deb708fe.aCkvYl、/var/tmp/teamsmith-panel-b3-pm_skills-deb708fe.srZsQo、/var/tmp/teamsmith-smoke-pm_skills-deb708fe.Sab3G0，以及仅在确认为本人 4c 专用且已停止的条件下 /var/tmp/.t-1000.xlNd1D。不要扫描清理其它路径，不重跑、不改报告或正在使用的项目。检查路径都不存在再回执；无法确认的点名。PM 固定检出已处理。
