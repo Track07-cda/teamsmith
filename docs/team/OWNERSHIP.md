@@ -15,6 +15,7 @@
 | `openspec/changes/task-labels/**`（除实施任务勾选）、`docs/team/reports/{P496-dev2,V195-dev3}.md` | PM（方案接受） | 已接受的任务标签方案及独立审阅报告冻结，收回 P496/V195 写权 |
 | `docs/team/tasks/P497-task-labels-apply.md` 明授的标签 CLI、Pulse 看板、相关测试及实施勾选范围，`docs/team/reports/P497-dev.md` | agent:dev（P497 临时） | V196 后只修 CLI 的标签分隔符及 §28-h 取行、§26-a 隔离重建；不改其它入口、设置或巡检 |
 | `docs/team/reports/V196-verify.md`、`docs/team/reviews/P497.md` 与 `P497-verify.log` | agent:verify（V196 临时） | 冻结候选独立验证；中央两份证据只由原生 `team review` 生成，产品只读 |
+| `docs/team/reports/P498-dev2.md` | agent:dev2（P498） | 新项目默认模型与预置任务类型的接入探索；唯一报告写权 |
 | `docs/team/reviews/P461.md`、`docs/team/reviews/P461-verify.log` | PM（V167已接受关闭） | verifier实际记录已收存；仅PM接受与结案，不再授权新执行 |
 | `docs/team/reviews/P465.md`、`docs/team/reviews/P465-verify.log` | PM（V170已接受关闭） | 两阶段实际记录由dev3执行，已接受merged证据；临时工具写权收回 |
 | `docs/team/reviews/P466.md`、`docs/team/reviews/P466-verify.log` | PM（V171已接受关闭） | 两阶段实际记录由verify执行，已接受merged证据；临时工具写权收回 |
