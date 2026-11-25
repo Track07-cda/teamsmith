@@ -1,10 +1,14 @@
 # V196 · 任务标签与看板独立验证
 
-agent: verify   status: BLOCKED / NEEDS CHANGES   time: 2026-11-25T02:57:42Z
+agent: verify   status: BLOCKED / NEEDS CHANGES   time: 2026-11-25T03:11:01Z
 
 branch: `task/V196-task-labels-behaviour-verify`   PR/MR: -
 
-**候选 `6ce75ccf57002aa33724b3e0fea3c292bedd2256` 不可接受。** `team board label define --color '#0969da' -- '-Follow-up'` 拒绝了应支持的标签名；窄屏测试又因取行规则不匹配实际排版而失败，原始两帧中的同一张卡片文本实际相同。原生记录为 FAIL：636 项通过、3 项失败、3 项跳过。按任务书的 `&&`，同一终端里的键鼠操作、实际刷新与算分反例都未启动；真正的原始分数 `T2=8` 已保存。
+**返修候选 `4cbc5bc78eeeca78cef535c727dd22379d9360c0` 仍不能合并。** 标签名称、59 列卡片、隔离重建和故意算错四项已取得通过证据。实时终端 16 项通过、1 项失败：从 `M39 Outside` 连送三个 ↑ 后，只看到焦点上移一张到 `M51 Other`，未到目标 `M39 Second`。看板尚未进入权重更新及键鼠筛选步骤。详见下方第二轮；两轮正式 FAIL 都保留。
+
+## 首轮 `6ce75ccf` 历史结果
+
+**首轮候选 `6ce75ccf57002aa33724b3e0fea3c292bedd2256` 不可接受。** `team board label define --color '#0969da' -- '-Follow-up'` 拒绝了应支持的标签名；窄屏测试又因取行规则不匹配实际排版而失败，原始两帧中的同一张卡片文本实际相同。原生记录为 FAIL：636 项通过、3 项失败、3 项跳过。按任务书的 `&&`，同一终端里的键鼠操作、实际刷新与算分反例都未启动；真正的原始分数 `T2=8` 已保存。
 
 ## Deliverables
 
@@ -95,4 +99,43 @@ p28h-59-labels.txt 行 5: ' › · V14    独立复验：控制台表面'
 
 ## Suggested next steps
 
-**BLOCKED:** 请 PM 交作者修 F1、F2，并就 F3 修复所需的原 §26-a 复制和错误归类范围授权。候选重新冻结后，优先补对应 CLI、窄屏与被挡住的真实终端和一次算分反例；保留本次可复用的原件，不把首轮 FAIL 改成通过，不默认启动全套。
+**首轮 BLOCKED 处置：** PM 让作者修 F1、F2、F3，并限定下面五项补验。首轮原件与 FAIL 保留；15 段未重跑。
+
+## 第二轮 · `4cbc5bc78eeeca78cef535c727dd22379d9360c0`
+
+对照 `6ce75ccf..4cbc5bc7`，只变更 `scripts/team`、`tests/smoke.sh` 与作者报告。`git diff --exit-code` 比较其余 `scripts/**`、实时测试与桥接脚本、OpenSpec 工件退出 0；面板和评分实现不变。下列各项分别执行，首轮与返修检出均不写。
+
+```sh
+bash -n /var/tmp/v196-r2.LAN0n4/run.sh
+TEAM_GATES='bash /var/tmp/v196-r2.LAN0n4/run.sh' bash skills/teamsmith/scripts/team review P497 \
+  --dir /var/tmp/p497-review-4cbc5bc7.jNvU9J --branch 4cbc5bc78eeeca78cef535c727dd22379d9360c0
+# actual executor: verify; review FAIL, 63s; review rc=1
+# cli_rc=127 narrow_rc=0 rebuild_rc=0 pty_rc=1 flip_again_rc=1
+bash /var/tmp/v196-r2.LAN0n4/finish-cli.sh
+# cli_local_node_rc=0; board_ls_max_rc=0; T2 original=8 mutated=5 original_assertion_rc=1
+# flip_local_node_rc=0; finish_cli_runner_rc=0
+```
+
+| 补验 | 结果与证据 |
+|---|---|
+| 1 · 命令分隔符（F1） | 私有项目执行公开的 `board label define --color '#0969da' -- '-Follow-up'`，退出 0；`--help`、`--root` 也作为分隔符后的**字面名称**写入。`label-file.tsv` 与 `label-ls.tsv` 各有三个精确值，原 `BOARD.md` `cmp` 退出 0。源码只在已有参数前两项是 `board label` 时转发 `--`；其它命令仍走旧的 `shift; ARGS+=("$@"); break`。没有重跑帮助组。 |
+| 2 · 59 列（F2） | 将原 ANSI 帧复制到新根 `narrow/`，直接从候选提取并执行 §28-h 原句，不重绘。两文件各恰一行 ` › · V14    独立复验：控制台表面`，`cmp` 退出 0，SHA-256 同为 `b31eb5e2d2fddf27c167eb2bc4a242c72e03c1de07da711c3d5767484d3ec872`。 |
+| 3 · 隔离重建（F3） | 带同级 `text-sanitize.mjs` 复制原面板目录，先确认副本无既有 bundle。`bun install --frozen-lockfile` 退出 0（45 个包），`BUN=… bash build.sh` 退出 0，真正生成 979784 字节；`cmp` 退出 0，SHA-256 与候选均为 `cae80ab589032b4cf44347d2963f143a62524a670391220a5eb17c6734d1aee1`。源码 `tests/smoke.sh:13662–13672`：安装失败才跳过；安装后构建失败进入 `bad`，未另造故障安装。 |
+| 4 · 真实终端 | 在 `/var/tmp/tl-pty.ovdvlv` 隔离，`TEAM_B3_KEEP=1 bash skills/teamsmith/tests/panel-b3.sh board </dev/null` 首次实际运行，退出 1，16 通过、1 失败。三张同编号卡片、真实空详情及同一界面直接改色已看见；连送 ↑ 后焦点不在预期位置，后续未执行。详见下。 |
+| 5 · 算分反例 | 私有副本的 `BOARD.md` 和标签表分别与原 `board-six.md`、`catalog-six.tsv` `cmp` 退出 0。只改 `scores()` 为最大值，差异在 `sum-max.diff`。实际执行一次 `team board ls --sort priority`，命令退出 0，第三列 T2 从原 8 变成 **5**；原 `T2=8` 判据退出 1。没有重复 8 分正向查询。 |
+
+**验证脚本准备错误与产品分开：** 正式 runner 的项目隔离环境清掉了 `CONTAINER_ID`。`PATH` 第一个 `node` 是 Distrobox 转发脚本，先失败在 `/usr/bin/distrobox: not found`，CLI 写入与算分 JS 尚未运行；首个 `priority-max.tsv` 不构成反例。只对这两项，在相同私有目录明确使用 `/usr/bin/node`（`v24.22.1`）补跑实际命令；原 127 及正式 FAIL 未覆盖，其他三项未重跑。实际最大值输出：
+
+```text
+board_ls_max_rc=0
+T2 original=8 mutated=5 original_assertion_rc=1
+T2    todo    5    ["Bug","Urgent"]    Offline drafts
+```
+
+**真实终端证据。** `/var/tmp/teamsmith-panel-b3-pm_skills-deb708fe.zYvwoN/board/` 的 `live-labels/board.json` 中，`M39 First`、`M39 Second`（第 1、2 条）都属任务表，名字是 `Bug`、`Urgent`，分数原文 `"8"`；后表 `M39 Outside`（第 87 条）不属任务表且无标签字段。`first-detail-reply.json` 实际为 `id=M39, count=0, files=[]`。`dup-{first,second}-detail.txt` 均显示优先级 8 和无关联文件；`dup-outside-detail.txt` 仍显示原无关联文件提示，无标签和分数。`swatch-before.txt` → `swatch-after.txt` 中 Bug 色标 ANSI 从 `38;2;9;105;218` 变成 `38;2;51;187;119`；同一详情的 `swatch-plain.txt` 仍显示两个名称和 8。真实 board 回执的 `Bug` 颜色为 `#33bb77`。
+
+**F4 · 实时终端仍阻塞。** `dup-outside-back.txt` 有唯一光标 `› · M39 Outside`。`tests/panel-b3.sh:1171` 一次 `tmux send-keys` 发 `Up Up Up`；下一份 `dup-priority-from.txt` 的唯一光标是 `› · M51 Other`，位置仅向上一步；100 轮后立即再取，画面未变。单次 `Down` 走过 First、Second、Neighbor、Other、Outside 的各自画面已保存。`App.tsx:974–1018` 的单次移动从最近渲染的 `kanbanRef.current` 取目标再更新焦点，该引用在渲染处更新（`:2099`）；若三键同批且回调都看到同一行，也会得到现场的一步。现有原件不能区分按键是否只到达一次、还是多次处理共用同一焦点；未归成机器慢，也不宣称已经定位到产品或夹具。请用可观察的逐次焦点位置区分输入与焦点更新，别把当前失败改成更长等待；如分开发键能走通，也不等于本次连键问题不存在。
+
+**当前 OpenSpec 评估：** 分隔符纠正、窄屏取行、隔离重建及 8→5 反例已闭合；实时结果仍不满足 `Board labels and priority are optional read-only views` 的完整可用路径。未观察到改权重后同卡聚焦和重排、键鼠筛选同卡、会话选择与历史切换、损坏/修复实时替换，以及从工作页打开后同号插入的刷新。保留 3.1 未勾；不进入合并版核对、未运行 §38 或首轮 15 段。当前计数：CRITICAL 1（现场路径未完成，F4）· WARNING 0 · SUGGESTION 0；已完成的四项可直接复用，不重跑。
+
+**BLOCKED:** PM 交作者定位 F4 并冻结新候选；只安排必要的终端补验。原生返修记录 `docs/team/reviews/P497.md`、`P497-verify.log` 与两次私有证据原件均保留。返修根 `/var/tmp/v196-r2.LAN0n4/` 含 `run.sh`、`results.tsv`、五项分别的日志、`finish-cli.sh`、`finish-cli.log` 和 59 列副本；此前 CLI 环境错误也留作原始记录。
