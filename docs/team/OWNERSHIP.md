@@ -18,7 +18,7 @@
 | `docs/team/reports/P498-dev2.md`、`docs/team/reviews/P498.md` | PM（探索接受） | 仅保留探索及接入裁定 |
 | `docs/team/reports/{P499-dev2,V197-dev3}.md` | PM（方案接受） | 已接受的初始化方案审阅记录，收回原写权 |
 | `docs/team/reports/P500-dev-bob.md`、`docs/team/reports/V198-dev3.md`、`docs/team/reviews/P500.md` 与 `P500-verify.log` | PM（候选与合并证据接受） | P500/V198 已完成，收回产品与中央记录暂时写权 |
-| `openspec/changes/quick-init-model-defaults/**` → `openspec/changes/archive/*-quick-init-model-defaults/**`、`openspec/specs/init-skill/spec.md`、`docs/team/reports/A17-dev2.md` | agent:dev2（A17 临时） | 仅归档已验证四条要求和本人报告，不写产品或其它要求 |
+| `openspec/changes/archive/2026-11-25-quick-init-model-defaults/**`、`openspec/specs/init-skill/spec.md`、`docs/team/reports/A17-dev2.md` | PM（A17 已接受） | 四条要求已核同步，五份工件原样移动；归档临时写权收回 |
 | `docs/team/reviews/P461.md`、`docs/team/reviews/P461-verify.log` | PM（V167已接受关闭） | verifier实际记录已收存；仅PM接受与结案，不再授权新执行 |
 | `docs/team/reviews/P465.md`、`docs/team/reviews/P465-verify.log` | PM（V170已接受关闭） | 两阶段实际记录由dev3执行，已接受merged证据；临时工具写权收回 |
 | `docs/team/reviews/P466.md`、`docs/team/reviews/P466-verify.log` | PM（V171已接受关闭） | 两阶段实际记录由verify执行，已接受merged证据；临时工具写权收回 |

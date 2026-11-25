@@ -13,9 +13,10 @@ The repository SHALL contain `skills/teamsmith-init/SKILL.md` (at most 100 lines
 `teamsmith-init`, and whose body begins with the **installation beat** — install the CLI
 (`npm install -g teamsmith`) and run `team init` in the project, which installs the skills into the project's
 `.pi/skills/` (the "team init installs the project skills" requirement below) — and then continues the
-new-project entry point in three beats: an ordered checklist of the questions the PM must settle with the user
-(dependencies, session/roster, project category mapping and independent PM model, gates, VCS mode, install command, ROADMAP/OWNERSHIP/AGENTS.md
-red lines), the instruction to run `bash <teamsmith>/scripts/team bootstrap`, and a closing handoff sentence
+new-project entry point in three beats: an ordered checklist that requires the PM to settle dependencies,
+session/roster, gates, VCS mode, install command and ROADMAP/OWNERSHIP/AGENTS.md red lines with the user and
+also covers model setup (task categories and a separate PM model); the instruction to run
+`bash <teamsmith>/scripts/team bootstrap`; and a closing handoff sentence
 that points day-to-day operation at the `teamsmith` skill. The installation beat SHALL name the npm command and
 `team init` before it names `team bootstrap`, SHALL name the project target `.pi/skills/`, and SHALL keep the
 two alternative routes on the same page with what each is for — the Pi package install (`pi install …`, which
@@ -23,6 +24,9 @@ needs no global CLI) and `./install.sh` (a checkout, or a `~/.agents/skills` lay
 exactly two files moved from the daily skill — `references/bootstrap.md` and
 `templates/bootstrap-prompt.md.tmpl` — moved, not copied, and MUST NOT contain `scripts/`, `extension/` or
 `tests/` directories, nor claim ownership of the pulse, dispatch, review or merge.
+
+The checklist SHALL explain the Pi-user default model and optional overrides, and MUST NOT ask for model inputs
+up front when the saved default provides them and the user has not requested an override.
 
 The checklist's roster bullet SHALL name the route that really changes the roster: `team add-agent <name>
 --register` to grow it and `team teardown --agent <name> --register` to shrink it, each write audited. It MUST NOT
@@ -40,8 +44,10 @@ of `dispatch` proves works in a fixture).
 #### Scenario: The body carries the three beats
 
 - **WHEN** `skills/teamsmith-init/SKILL.md` is searched for the checklist, the bootstrap command and the handoff
-- **THEN** it contains an ordered question checklist covering roster/models/gates/VCS, a line invoking
+- **THEN** it contains an ordered checklist covering roster/models/gates/VCS, a line invoking
   `scripts/team bootstrap`, and a closing sentence naming `teamsmith` as the skill for day-to-day operation
+- **AND** the model item explains the saved default and optional overrides without asking for model inputs up
+  front when the default is usable and the user has not requested an override
 
 #### Scenario: The two moved files have exactly one home
 
@@ -135,8 +141,9 @@ that same CLI, rendered templates stay anchored at the CLI's own location, and n
 
 #### Scenario: bootstrap still runs from the one CLI
 
-- **WHEN** `bash skills/teamsmith/scripts/team bootstrap --print` runs in a fixture repository
-- **THEN** it exits 0 and prints the plan (detect / config / docs skeleton / worktrees / pulse) exactly as before
+- **WHEN** `bash skills/teamsmith/scripts/team bootstrap --print` runs in a fresh fixture repository without invalid explicit inputs or an unusable selected config path
+- **THEN** it exits 0 and keeps the plan's five stages (detect / config / docs skeleton / worktrees / pulse); the
+  model information follows the initialization model requirement below
 
 #### Scenario: The tooling never references the init skill
 
@@ -195,7 +202,10 @@ NOT mention the four adapter keys (`TEAM_AGENT_CMD`, `TEAM_AGENT_NOTIFY_CMD`, `T
 SHALL keep their behaviour: the `pi` row judges the floor by `--session-id` (a probe whose `--help` goes to
 stderr, as Pi 0.76.0–0.79.0 did, still passes), and the plugin row only reports what is installed — it never
 asks the user to install a third-party plugin and recommends only what teamsmith requires or ships itself.
-The questionnaire SHALL ask for an explicit category mapping and independent PM model; rendering is covered by the task-policy initialization requirement. This does not change the Pi-version/plugin checks or advertise the adapter seam.
+The questionnaire SHALL explain the task map and separate PM model. It SHALL ask for a model input only if that
+input has not already been provided and either the user wants to override its default or the saved Pi user default
+cannot supply it; rendering is covered by the task-policy initialization requirement. This does not change the Pi-version/plugin
+checks or advertise the adapter seam.
 
 #### Scenario: The checklist is Pi-only
 
@@ -432,13 +442,49 @@ project-local install, neither row is printed.
 
 ### Requirement: Initialization teaches category policy and breaking upgrades without live adoption
 
-Fresh init/bootstrap SHALL accept `--task-models '<map>' --pm-model '<model>'` and render exactly those validated values; missing explicit model inputs refuse before config/ledger/install/worktree/pulse writes. Existing valid new-policy projects may be re-entered without supplying those inputs again and SHALL keep their policy; any explicit re-render that requires new values SHALL validate explicit inputs before replacement. Retired `--default-model` is removed with a correction. Config templates SHALL declare task map/independent PM, never retired worker keys; init/bootstrap install/protocol/ownership/task/PM/memory guidance SHALL describe task category rather than a permanent seat model. `team task --category` is the brief generator only; it is not a dispatch override. Ownership stays about files/roles, not model strength. The initial two-model example is routine=opencode-go/deepseek-v4.1-flash and analysis/verify=openai-codex/gpt-6.1-sol:high, independent PM=openai-codex/gpt-6.1-sol:high; examples are not engine defaults or a provider availability claim.
+On a fresh project, `team init` and `team bootstrap` SHALL resolve two values before writing: a complete task-model map and a separate PM model. Valid explicit `--task-models` replaces the entire map; valid explicit `--pm-model` sets only the PM model. For each missing input on the first-run path, use the default model actually saved in Pi's user settings: a missing map gets exactly `routine`, `analysis`, `verify` with that model, and a missing PM input gets that same model separately. When both are explicit, there is no Pi default lookup. Invalid explicit inputs or a configuration-path refusal MUST NOT trigger a default lookup, including in preview. Existing plugin and dependency checks do not take part in model selection and SHALL remain unchanged.
+
+The only file consulted for a Pi model SHALL be user `settings.json` under `PI_CODING_AGENT_DIR` or, if unset, `~/.pi/agent`. Use only the saved `defaultProvider` and `defaultModel` and the optional saved thinking level. Prefer the saved level for that exact model, then the saved general level; use only a level that can be appended unambiguously using the existing suffix syntax and can be stored in every field it supplies. Otherwise retain the original saved model ID unchanged. Selection MUST NOT require a Pi executable or process, read project Pi settings, trust, credentials, the model catalog or sessions, or run Pi or its extensions. Do not guess a provider/model or claim authentication or availability.
+
+If a fresh project still lacks either value, real init/bootstrap SHALL refuse before any config/ledger/install/worktree/pulse write. Bootstrap preview SHALL keep the read-only plan and show values actually resolved, explicitly mark unresolved inputs and not present the incomplete plan as runnable. Both missing-input diagnostics SHALL name the current command and only the missing flags as alternatives to saving a Pi default; they MUST NOT suggest a migration for a fresh project.
+
+An unavailable selected configuration or an unusable existing init target MUST NOT be treated as a fresh project. The affected entry point, including bootstrap preview, SHALL name the path and stop before effects, even when both model flags are present; it MUST NOT create configuration elsewhere. If bootstrap finds no config while its init target already exists, it SHALL stop and point to that path instead of calling fresh init. Readable configuration links remain valid. An existing configuration, including an incomplete or damaged one, MUST NOT use Pi defaults. Valid existing projects may re-enter without model inputs and SHALL retain both saved values, even if the Pi default changes; bootstrap preview SHALL show the configuration will be retained, not print an init command it will not run. An explicit re-render SHALL use only valid existing values and validated explicit replacements; it is not a first-run default or migration path. Retired model flags are refused with a correction appropriate to new or existing configuration, without looking up a Pi default. Config templates SHALL declare task map/independent PM, never retired worker keys; init/bootstrap install/protocol/ownership/task/PM/memory guidance SHALL describe task category rather than a permanent seat model. `team task --category` is the brief generator only; it is not a dispatch override. Ownership stays about files/roles, not model strength. The explicit two-model example is routine=opencode-go/deepseek-v4.1-flash and analysis/verify=openai-codex/gpt-6.1-sol:high, independent PM=openai-codex/gpt-6.1-sol:high; examples are not engine defaults or a provider availability claim.
 
 PM guidance SHALL recommend routine for bounded ordinary implementation, analysis for complex planning/judgment and verify for independent adversarial review, record category rationale in brief prose and choose configured names in other projects. Tools do not infer difficulty or phase/category equivalence. Worker guidance SHALL preserve scope, reports and disk handover through fresh takeover; independent verification cannot be waived by a strong model. An existing project's retired model keys SHALL be migrated by the mechanical startup transaction the next requirement defines, or by the explicit `team config upgrade-models` transaction; `init --force` and bootstrap MUST NOT migrate them, and legacy bootstrap refuses before install or other effects naming both routes. Auto-inference MUST NOT invent a model value or a category's meaning beyond that declared table. A write path that refuses a project for carrying the retired keys SHALL print the repair advice derived from that project's own configuration — once per run, above unrelated blockers — and SHALL print a paste-ready command only when the derivation is unambiguous. Private source verification, protected-branch source landing, project configuration/fresh-launch activation and shared-source adoption SHALL be distinct recorded gates. S1→S2→S3 dependencies and shared-file handoffs SHALL use a private non-deployed integration tree that is not a target of global/project-live skill links or live CLI source paths; it is not the shared main checkout. Partial implementation SHALL NOT reach shared source/main before a separately approved safe adoption plan. Private review/handoff is not protected-branch delivery and SHALL NOT mark apply tasks done merely because they are integrated privately. Before full validated source reaches shared main, PM SHALL either obtain per-operation user authorization to isolate known shared consumers to preserved stable source and verify that isolation, or obtain explicit approval of the identified shared-source impact, including later reads by unmigrated projects. No automatic scanning/deployment system is required, and unknown consumers cannot be promised unaffected. This change does not execute link changes/installers or other-project adoption. Source changes still SHALL NOT silently rewrite live config, ledgers or running processes; project config migration, fresh launches, shared-source adoption and any other-project work each require their separate existing authorization.
 
+#### Scenario: A fresh project saves the Pi user default and exactly three task types
+- **GIVEN** a private Git project with no team configuration and a Pi user settings file saving `vendor/nested/model` with thinking level `high`
+- **WHEN** init runs without model flags, with no Pi executable on PATH
+- **THEN** config readback contains exactly `routine`, `analysis`, `verify` and a separate PM value, all `vendor/nested/model:high`, with no retired keys and the existing identity/layout
+
+#### Scenario: Bootstrap preview and actual initialization use the same inputs
+- **GIVEN** a fresh private project with a saved default and no saved thinking level
+- **WHEN** bootstrap is previewed and then run without model flags, with no change to those inputs
+- **THEN** the preview changes no project files or processes, and shows the same three task-model values and separate PM value that the real run writes, with no inserted thinking suffix
+
 #### Scenario: Fresh initialization has explicit model inputs and no retired keys
-- **WHEN** scratch init and fresh bootstrap run with valid task map and PM model, then with missing/invalid inputs and retired --default-model
-- **THEN** valid rendering carries only new model policy and the existing identity/layout; invalid calls refuse before any skeleton/install/pulse effect and give new input routes
+- **GIVEN** fresh private projects with a different saved Pi default
+- **WHEN** init or bootstrap runs with an explicit PM model only, an explicit task map only, or both
+- **THEN** only the supplied value overrides the default in the first two cases, the explicit map contains exactly its supplied categories, and supplying both persists just those explicit values without a Pi default lookup
+- **AND** the rendered configuration contains only the new model keys and retains the existing identity/layout
+- **AND** a supplied invalid map or PM model is refused before effects even with a usable saved default, including in bootstrap preview; retired `--default-model` is still rejected with a correction
+
+#### Scenario: Missing models do not create a project
+- **GIVEN** a fresh private project without a usable saved default
+- **WHEN** init or bootstrap lacks one or both model inputs, or bootstrap previews that plan
+- **THEN** a real run refuses before any writes and the preview exits successfully as a read-only plan, showing only the unresolved inputs as missing and not printing a runnable init command with placeholders
+- **AND** the next step names the invoked command and only the missing flags, not an already supplied flag or a migration
+
+#### Scenario: Existing project model values do not follow the Pi default
+- **GIVEN** an existing valid project and a different saved Pi user default
+- **WHEN** init or bootstrap is re-entered without model flags, or bootstrap previews the existing configuration
+- **THEN** the existing model values and categories remain unchanged with no Pi default lookup; preview says that configuration will be retained and does not print an init step as an executable command
+- **AND** an existing incomplete project is not automatically repaired by Pi defaults, and explicit re-render keeps its existing rules without a Pi default lookup
+
+#### Scenario: An unavailable selected config is not a first run
+- **GIVEN** a private Git project, a path explicitly selected with `--config` that does not exist, a usable Pi default and two valid explicit model flags
+- **WHEN** init, bootstrap and bootstrap preview are called against that path
+- **THEN** they name the selected path and refuse before effects without looking up a Pi default, creating the selected path or writing under the main checkout
 
 #### Scenario: Legacy bootstrap is not an implicit migration
 - **WHEN** bootstrap runs on legacy config even with force, or bootstrap --print previews it
