@@ -842,7 +842,7 @@
 | P501 | 核实 Pulse 看板按更新日期倒序的最小实现 | dev2 | - | - | done |
 | P502 | 编写 Pulse 看板按最近更新排序方案 | dev2 | - | P501 | done |
 | V199 | 独立审阅 Pulse 看板更新时间倒序方案 | dev3 | - | P501 | done |
-| P503 | 实施 Pulse 看板按更新时间倒序 | dev-bob | - | P502,V199 | todo |
+| P503 | 实施 Pulse 看板按更新时间倒序 | dev-bob | - | P502,V199 | wip |
 
 ## 当前里程碑
 
