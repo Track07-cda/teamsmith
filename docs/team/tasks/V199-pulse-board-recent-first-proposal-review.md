@@ -21,3 +21,7 @@ branch: task/V199-pulse-board-recent-first-proposal-review
 - 用 `tests/panel-b3.sh`、本地替身和 M48 实际入口核 §3 是否既可跑又足够短。优先替换原场景的适用检查，保留其他覆盖；对真正读写局部真源、受控时钟、同一项排序反例给证据。不为一个比较函数重新跑全套或另加通用框架；对计划触动的 `fold` 和 M48 要分别诚实写清如何短核、不把 `board` 的成功冒充它们跑过。指出可以删掉的重复场景，不为增加检查加篇幅。
 
 只在固定检出 `PATH="$HOME/.bun/bin:$PATH" TMPDIR=/var/tmp CI=1 OPENSPEC_TELEMETRY=0 openspec validate pulse-board-recent-first --type change --strict --no-interactive` 一次；来源/引用检查可读作者回执。报告实际输出、退出码、具体文件/函数证据与结论，Git 差异检查并小步本地提交（V199，`Agent: dev3`）。不写产品、不运行板写命令、Pulse、行为、构建或全量，不改别的任务；不推、不合并。
+
+## 定点复看 P502 修订
+
+原 V199 会话与分支继续。冻结 `5f36ab4b5d8b5019e63301e5bb080f8e501cc86a`，干净检出 `/var/tmp/p502-review-5f36ab4b.kTZNNb`。只看 `60a73655..5f36ab4b` 的方案差异，核原 R1–R3：时间识别不改旧写入落点和返回语义；明确窄、宽的滚动边界及原行选择；现有 `board fold` 与 `4c` 是确实能执行的少量验收，反例只检一帧。复用前轮已有源码核对和作者引用回执，不重开其它设计、不评价尚未执行的行为；对新固定提交只补一次指定的单变更 strict，追加明确结论和证据。
