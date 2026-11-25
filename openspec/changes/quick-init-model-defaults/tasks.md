@@ -12,7 +12,7 @@
 
 ## 2. Focused independent verification
 
-- [ ] 2.1 In the later implementation/verification phases run `TMPDIR=/var/tmp bash skills/teamsmith/tests/task-model-routing.sh --select init` and record actual command outputs, readback, no-write checks and the single contrast from 1.4 on a private checkout. Inspect the branches and call order for one Pi default lookup when a new project's model input needs it, or zero for full explicit pairs, re-entry and path/explicit-value refusals. Do not count or remove the existing post-init package checks, even if they read the same settings file. The init group already belongs to smoke §61; do not run §61 again, other routing groups, the full flip suite or the full smoke suite for this change.
+- [x] 2.1 In the later implementation/verification phases run `TMPDIR=/var/tmp bash skills/teamsmith/tests/task-model-routing.sh --select init` and record actual command outputs, readback, no-write checks and the single contrast from 1.4 on a private checkout. Inspect the branches and call order for one Pi default lookup when a new project's model input needs it, or zero for full explicit pairs, re-entry and path/explicit-value refusals. Do not count or remove the existing post-init package checks, even if they read the same settings file. The init group already belongs to smoke §61; do not run §61 again, other routing groups, the full flip suite or the full smoke suite for this change.
 
 ## Workflow follow-up
 

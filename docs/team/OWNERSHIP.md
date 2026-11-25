@@ -16,9 +16,9 @@
 | `docs/team/tasks/P497-task-labels-apply.md` 明授的标签 CLI、Pulse 看板、相关测试及实施勾选范围，`docs/team/reports/P497-dev.md` | agent:dev（P497 临时） | V196 后只修 CLI 的标签分隔符及 §28-h 取行、§26-a 隔离重建；不改其它入口、设置或巡检 |
 | `docs/team/reports/V196-verify.md`、`docs/team/reviews/P497.md` 与 `P497-verify.log` | agent:verify（V196 临时） | 冻结候选独立验证；中央两份证据只由原生 `team review` 生成，产品只读 |
 | `docs/team/reports/P498-dev2.md`、`docs/team/reviews/P498.md` | PM（探索接受） | 仅保留探索及接入裁定 |
-| `openspec/changes/quick-init-model-defaults/**`（除实施任务勾选）、`docs/team/reports/{P499-dev2,V197-dev3}.md` | PM（方案接受） | 已接受的初始化方案及独立报告，收回原写权 |
-| `docs/team/tasks/P500-quick-init-model-defaults-apply.md` 明授的 CLI、说明、既有测试和任务勾选、`docs/team/reports/P500-dev-bob.md` | agent:dev-bob（P500 临时） | 只实施新项目首次模型默认与常用任务类型；不改现行规格、配置迁移或真实项目 |
-| `docs/team/reports/V198-dev3.md`、`docs/team/reviews/P500.md` 与 `P500-verify.log` | agent:dev3（V198 临时） | 实际验证固定候选；中央两份由原生 review 写，产品只读 |
+| `docs/team/reports/{P499-dev2,V197-dev3}.md` | PM（方案接受） | 已接受的初始化方案审阅记录，收回原写权 |
+| `docs/team/reports/P500-dev-bob.md`、`docs/team/reports/V198-dev3.md`、`docs/team/reviews/P500.md` 与 `P500-verify.log` | PM（候选与合并证据接受） | P500/V198 已完成，收回产品与中央记录暂时写权 |
+| `openspec/changes/quick-init-model-defaults/**` → `openspec/changes/archive/*-quick-init-model-defaults/**`、`openspec/specs/init-skill/spec.md`、`docs/team/reports/A17-dev2.md` | agent:dev2（A17 临时） | 仅归档已验证四条要求和本人报告，不写产品或其它要求 |
 | `docs/team/reviews/P461.md`、`docs/team/reviews/P461-verify.log` | PM（V167已接受关闭） | verifier实际记录已收存；仅PM接受与结案，不再授权新执行 |
 | `docs/team/reviews/P465.md`、`docs/team/reviews/P465-verify.log` | PM（V170已接受关闭） | 两阶段实际记录由dev3执行，已接受merged证据；临时工具写权收回 |
 | `docs/team/reviews/P466.md`、`docs/team/reviews/P466-verify.log` | PM（V171已接受关闭） | 两阶段实际记录由verify执行，已接受merged证据；临时工具写权收回 |
