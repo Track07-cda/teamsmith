@@ -11,6 +11,7 @@
 | `.github/workflows/gates.yml` | agent:dev（P326 临时） | 仅任务书明授的CI入口，不提高60分钟上限；冻结交付后归还PM |
 | `ci/collect-scene.sh` | PM | P324已合入，临时写权收回；当前无实现任务改此文件 |
 | `docs/team/reports/**`、`docs/team/threads/**` | agent:* | 报告与线程（只写自己的报告文件） |
+| `docs/team/reports/P495-dev2.md` | agent:dev2（P495） | 任务标签接入探索，仅研究报告；不授产品、规格或现场写入 |
 | `docs/team/reviews/P461.md`、`docs/team/reviews/P461-verify.log` | PM（V167已接受关闭） | verifier实际记录已收存；仅PM接受与结案，不再授权新执行 |
 | `docs/team/reviews/P465.md`、`docs/team/reviews/P465-verify.log` | PM（V170已接受关闭） | 两阶段实际记录由dev3执行，已接受merged证据；临时工具写权收回 |
 | `docs/team/reviews/P466.md`、`docs/team/reviews/P466-verify.log` | PM（V171已接受关闭） | 两阶段实际记录由verify执行，已接受merged证据；临时工具写权收回 |
