@@ -3264,17 +3264,32 @@ assert_eq "M48：旗标之后 T1.1 真的有两行" "$(grep -c '^| T1\.1 ' "$M48
 assert_has "$REPO/.pi/team/state/watchdog.log" "T1.1" "M48：审计落在 state/watchdog.log"
 assert_has "$REPO/.pi/team/state/watchdog.log" "allow-dup" "M48：审计写明是 --allow-dup"
 # 指派 agent 的正门（PM 追加）：给已有行指派 → 只改 agent 列、行数不变，而不是再写一行
+m48_non_agent_cols() {
+  awk -F'|' -v OFS='|' '
+    /^\| ID / && !header {
+      header=1
+      for (i=2; i<NF; i++) {
+        name=$i; gsub(/^[ \t]+|[ \t]+$/, "", name)
+        if (name=="Teamsmith Updated UTC") { count++; last=i }
+      }
+      if (count==1 && last==NF-1) tc=last
+    }
+    /^\| T1\.1 / {
+      $4=" agent "
+      if (tc && NF==tc+1) { $tc=$NF; NF-- }
+      print
+    }' "$1"
+}
 M48_ROWS_BEFORE="$(grep -c '^| ' "$M48_BOARD")"
-M48_T11_BEFORE="$(grep '^| T1\.1 ' "$M48_BOARD")"
+M48_OTHER_BEFORE="$(m48_non_agent_cols "$M48_BOARD")"
 if $TEAM board assign T1.1 reviewer >"$TMP/m48-assign.log" 2>&1; then ok "M48：board assign 给已有行指派成功"; else bad "M48：board assign 应当成功"; tail -3 "$TMP/m48-assign.log"; fi
 assert_has "$TMP/m48-assign.log" "board assign T1.1 → reviewer" "M48：成功输出点名 ID 与 agent"
 assert_eq "M48：assign 后行数不变（不是又加一行）" "$(grep -c '^| ' "$M48_BOARD")" "$M48_ROWS_BEFORE"
 assert_eq "M48：assign 后 T1.1 仍是两行（没有顺手改历史数据）" "$(grep -c '^| T1\.1 ' "$M48_BOARD")" "2"
 M48_T11_AFTER="$(grep '^| T1\.1 ' "$M48_BOARD")"
 assert_eq "M48：assign 后 agent 列 = reviewer" "$(printf '%s\n' "$M48_T11_AFTER" | awk -F'|' '{v=$4; gsub(/^[ \t]+|[ \t]+$/,"",v); print v}' | paste -sd,)" "reviewer,reviewer"
-assert_eq "M48：assign 只改 agent 列（两行其余列逐字节未变）" \
-  "$(printf '%s\n' "$M48_T11_AFTER" | awk -F'|' -v OFS='|' '{gsub(/^[ \t]+|[ \t]+$/,"",$4); $4=" agent "; print}')" \
-  "$(printf '%s\n' "$M48_T11_BEFORE" | awk -F'|' -v OFS='|' '{gsub(/^[ \t]+|[ \t]+$/,"",$4); $4=" agent "; print}')"
+assert_eq "M48：assign 只改 agent 和有声明的更新时间（两行其余列逐字节未变）" \
+  "$(m48_non_agent_cols "$M48_BOARD")" "$M48_OTHER_BEFORE"
 # 与 board set 同语义：两者都按 ID 寻址，同 ID 的多行一起改（新增重复在门口就被拒，历史数据不动）
 $TEAM board set T1.1 blocked >"$TMP/m48-set-dup.log" 2>&1 || bad "M48：同 ID 多行时 board set 应当可用"
 assert_eq "M48：board set 也是 ID 寻址（同 ID 的两行状态一起变）" \

@@ -1210,7 +1210,7 @@ team_panel_board_json() { # 看板行 + 四态计数（含 done/dropped）+ 最�
   # ——不是每行 fork 一个进程（参考板 73 行）；没有任务书/没有该头 → `-`。
   local tfiles=() tf
   for tf in "$TEAM_DOCS_ABS/tasks"/*.md; do [ -f "$tf" ] && tfiles+=("$tf"); done
-  rows="$(awk -F'|' -v ic="$ic" -v tc="$tc" -v ac="$ac" -v bc="$bc" -v dc="$dc" -v sc="$sc" -v bf="$f" '
+  rows="$(awk -F'|' -v ic="$ic" -v tc="$tc" -v ac="$ac" -v bc="$bc" -v dc="$dc" -v sc="$sc" -v bf="$f" "$_TEAM_BOARD_TIME_AWK"'
     function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
     function esc(s) { gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); gsub(/\t/, " ", s); gsub(/\r/, "", s); return s }
     function keep(id, st) {
@@ -1224,11 +1224,23 @@ team_panel_board_json() { # 看板行 + 四态计数（含 done/dropped）+ 最�
       else if (want && $0 ~ /^phase:/) { ph[tid] = trim(substr($0, 7)); want = 0 }
       next
     }
+    { bt_scan() }
     /^\|/ {
       id = trim($(ic)); st = trim($(sc))
       if (!keep(id, st)) next
       phase = (id in ph && ph[id] != "") ? ph[id] : "-"
-      printf "%s{\"id\": \"%s\", \"title\": \"%s\", \"agent\": \"%s\", \"branch\": \"%s\", \"deps\": \"%s\", \"state\": \"%s\", \"phase\": \"%s\"}", (n++ ? ", " : ""), esc(id), esc(trim($(tc))), esc(trim($(ac))), esc(trim($(bc))), esc(trim($(dc))), esc(st), esc(phase)
+      row[++n] = sprintf("{\"id\": \"%s\", \"title\": \"%s\", \"agent\": \"%s\", \"branch\": \"%s\", \"deps\": \"%s\", \"state\": \"%s\", \"phase\": \"%s\"", esc(id), esc(trim($(tc))), esc(trim($(ac))), esc(trim($(bc))), esc(trim($(dc))), esc(st), esc(phase))
+      if (bt_row(id) && NF==bt_width && bt_last_cell() && ic==bt_col["id"] && tc==bt_col["task"] && sc==bt_col["status"]) {
+        stamp = bt_trim($(bt_col["time"]))
+        if (stamp ~ /^[0-9TZ:-]+$/) time[n] = stamp
+      }
+    }
+    END {
+      for (i=1; i<=n; i++) {
+        printf "%s%s", (i>1 ? ", " : ""), row[i]
+        if (bt_tables==1 && i in time) printf ", \"updated_at\": \"%s\"", time[i]
+        printf "}"
+      }
     }' "${tfiles[@]}" "$f")"
   counts="$(awk -F'|' -v ic="$ic" -v sc="$sc" '
     function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }

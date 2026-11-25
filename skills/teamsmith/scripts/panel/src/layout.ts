@@ -284,6 +284,7 @@ interface Ctx {
   blocks: PanelBlocks
   view: ViewState
   activity: ActivityBlock[]
+  kanban?: BoardProjection
   /** History rows the board keeps visible before folding (default `BOARD_DONE_KEEP`; a flush
    * column raises it so the spare height shows real history instead of blank card space). */
   boardDoneKeep?: number
@@ -305,6 +306,7 @@ interface Ctx {
 export interface LayoutInput extends FrameInput {
   strings: Strings
   view: ViewState
+  kanban?: BoardProjection
 }
 
 // ------------------------------------------------------------------ small renderers
@@ -803,8 +805,7 @@ const FOLD_VERT_ELLIPSIS = '⋮'
 /** The grouped form's pseudo-lane key for the single page window (`< 100` columns). */
 const GROUPED_WINDOW = '\u0000page'
 
-/** The history lanes anchor their window on the newest cards. */
-function laneAnchorsNewest(lane: string): boolean {
+function historyLane(lane: string): boolean {
   return lane === 'done' || lane === 'dropped'
 }
 
@@ -812,9 +813,38 @@ function laneLabel(lane: string, s: Strings): string {
   return boardStateText(lane, s)
 }
 
-/** The cards of one lane, in BOARD.md order (the file lists oldest → newest). */
-function laneCards(rows: BoardRow[], lane: string): BoardRow[] {
-  return rows.filter((r) => r.state === lane)
+/** A page-4 projection; the board block and machine output retain their original rows. */
+export interface BoardProjection {
+  rows: BoardRow[]
+  ordinals: Map<BoardRow, number>
+  lanes: Map<string, BoardRow[]>
+}
+
+function boardTime(value?: string): number | null {
+  if (!value || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(value)) return null
+  const time = Date.parse(value)
+  return Number.isFinite(time) && new Date(time).toISOString() === `${value.slice(0, -1)}.000Z` ? time : null
+}
+
+export function projectBoard(rows: BoardRow[], recent = true): BoardProjection {
+  const ordinals = dupOrdinals(rows)
+  const lanes = new Map(LANES.map((lane) => [lane, [] as BoardRow[]]))
+  for (const row of rows) lanes.get(row.state)?.push(row)
+  if (recent) {
+    for (const [lane, cards] of lanes) {
+      const timed: { row: BoardRow; time: number }[] = []
+      const undated: BoardRow[] = []
+      for (const row of cards) {
+        const time = boardTime(row.updated_at)
+        if (time === null) undated.push(row)
+        else timed.push({ row, time })
+      }
+      // A stable sort keeps equal seconds in file order. History falls back to the file tail.
+      timed.sort((a, b) => b.time - a.time)
+      lanes.set(lane, timed.map(({ row }) => row).concat(historyLane(lane) ? undated.reverse() : undated))
+    }
+  }
+  return { rows, ordinals, lanes }
 }
 
 /**
@@ -924,30 +954,13 @@ export function focusRow(rows: BoardRow[], focus?: { id: string; nth?: number } 
   return null
 }
 
-/** The focus reference for one row (the App sets the focus from a click or a `←`/`→` step). */
-export function focusRefOf(rows: BoardRow[], row: BoardRow): FocusRef {
-  return refFor(row, dupOrdinals(rows))
+export function focusRefOf(board: BoardProjection, row: BoardRow): FocusRef {
+  return refFor(row, board.ordinals)
 }
 
-/**
- * The focused card resolved against the current board. An id that left the board lands on its lane's
- * first card (and a lane that emptied, on the first card of the first non-empty lane); a null focus
- * starts there too. Pure and shared with the App, which owns the focus state — the layout only
- * renders and windows it.
- */
-export function resolveFocus(
-  rows: BoardRow[],
-  focus?: FocusRef | null,
-): FocusRef | null {
-  return resolveFocusWith(rows, dupOrdinals(rows), focus)
-}
-
-/** `resolveFocus` with the board's ordinals already built (the frame path builds them once per frame). */
-function resolveFocusWith(
-  rows: BoardRow[],
-  ordinals: Map<BoardRow, number>,
-  focus?: FocusRef | null,
-): FocusRef | null {
+/** Resolve identity in file order, but choose a lane's fallback in the drawn order. */
+export function resolveFocus(board: BoardProjection, focus?: FocusRef | null): FocusRef | null {
+  const { rows, ordinals, lanes } = board
   if (focus) {
     const named = focusRow(rows, focus)
     if (named) return refFor(named, ordinals)
@@ -955,12 +968,11 @@ function resolveFocusWith(
     // must not lose the entry).
     const first = rows.find((r) => r.id === focus.id)
     if (first) return refFor(first, ordinals)
-    const sameLane = laneCards(rows, focus.lane)[0]
+    const sameLane = lanes.get(focus.lane)?.[0]
     if (sameLane) return refFor(sameLane, ordinals)
   }
-  for (const lane of LANES) {
-    const card = laneCards(rows, lane)[0]
-    if (card) return refFor(card, ordinals)
+  for (const cards of lanes.values()) {
+    if (cards.length) return refFor(cards[0], ordinals)
   }
   return null
 }
@@ -985,13 +997,13 @@ function laneWindow(
   cards: BoardRow[],
   size: number,
   target: BoardRow | null,
-  offsetKey = lane,
-): { start: number; end: number; above: number; below: number } {
+): { start: number; end: number; above: number; below: number; span: number } {
   const span = Math.max(1, Math.floor(size))
   const count = cards.length
   const maxStart = Math.max(0, count - span)
-  const explicit = ctx.view.laneOffset?.[offsetKey]
-  let start = explicit == null || Number.isNaN(explicit) ? (laneAnchorsNewest(lane) ? maxStart : 0) : explicit
+  const explicit = ctx.view.laneOffset?.[lane]
+  // Machine print retains the old history tail window. The interactive order starts at its head.
+  let start = explicit == null || Number.isNaN(explicit) ? (!ctx.view.tui && historyLane(lane) ? maxStart : 0) : explicit
   start = Math.max(0, Math.min(maxStart, Math.floor(start)))
   // The window follows the focus only while the lane has no offset of its own: once the wheel (or a
   // card move) set one, that offset wins — otherwise the wheel could never scroll away from the
@@ -1003,7 +1015,7 @@ function laneWindow(
       else if (idx >= start + span) start = Math.min(maxStart, idx - span + 1)
     }
   }
-  return { start, end: Math.min(count, start + span), above: start, below: Math.max(0, count - (start + span)) }
+  return { start, end: Math.min(count, start + span), above: start, below: Math.max(0, count - (start + span)), span }
 }
 
 /**
@@ -1031,7 +1043,8 @@ function cardLine(ctx: Ctx, card: BoardRow, width: number, focused: boolean): Li
  * follows too) — the view renders on top of this page in the detail batch.
  */
 function cardAction(card: BoardRow, focused: boolean, nth: number): Action {
-  return focused ? { kind: 'open-focused', lane: card.state } : { kind: 'focus', lane: card.state, id: card.id, nth }
+  const row = { lane: card.state, id: card.id, nth }
+  return focused ? { kind: 'open-focused', lane: card.state, row } : { kind: 'focus', ...row }
 }
 
 /** The wheel's lane target: any spot inside a lane that is not a card resolves to this lane. */
@@ -1045,13 +1058,13 @@ function laneColumn(
   lane: string,
   width: number,
   slots: number,
+  cards: BoardRow[],
   target: BoardRow | null,
   ordinals: Map<BoardRow, number>,
   windows: LaneWindow[],
   folded: boolean,
 ): PlacedLine[] {
   const { s } = ctx
-  const cards = laneCards(ctx.blocks.board?.rows ?? [], lane)
   if (folded) {
     // P123: the fold branch returns before the window loop, so not one card line (nor an edge
     // counter, nor the empty marker) is built — the bounded-frame promise can only get cheaper.
@@ -1059,12 +1072,12 @@ function laneColumn(
     // board keeps its shape when every lane folds.
     // P125: in the side-by-side tier the folded lane is the three-column frame — the columns it
     // does not use are handed to the unfolded lanes by the width algorithm in `kanbanBlock`.
-    windows.push({ lane, offset: 0, visible: 0, count: 0 })
+    windows.push({ lane, offset: 0, visible: 0, count: 0, span: Math.max(1, slots - LANE_MARKER_SLOTS) })
     const focused = target != null && target.state === lane
     return foldedLaneFrame(ctx, lane, focused, slots + 2)
   }
   const win = laneWindow(ctx, lane, cards, slots - LANE_MARKER_SLOTS, target)
-  windows.push({ lane, offset: win.start, visible: win.end - win.start, count: cards.length })
+  windows.push({ lane, offset: win.start, visible: win.end - win.start, count: cards.length, span: win.span })
   // Everything in the lane that is not a card resolves to the lane itself, so the wheel scrolls the
   // lane under the cursor (the card hits win the lookup where a card is — `.find()` takes the first).
   const hover: Hit[] | undefined = ctx.view.tui ? [{ start: 0, end: width, action: laneHover(lane) }] : undefined
@@ -1123,16 +1136,14 @@ function mergeLaneColumns(cols: PlacedLine[][], widths: number[]): PlacedLine[] 
 /** Under 100 columns the page is one column grouped by state, one window for the whole page. */
 function kanbanGrouped(
   ctx: Ctx,
-  rows: BoardRow[],
+  board: BoardProjection,
   target: BoardRow | null,
-  ordinals: Map<BoardRow, number>,
 ): { lines: PlacedLine[]; lanes: LaneWindow[] } {
   const { s } = ctx
   const width = ctx.width
   const all: PlacedLine[] = []
   const focusLine = { i: -1 }
-  for (const lane of LANES) {
-    const cards = laneCards(rows, lane)
+  for (const [lane, cards] of board.lanes) {
     if (laneFolded(ctx.view, lane, !cards.length)) {
       // P123: a folded lane is its one line here too — no cards, no empty marker, no card rows.
       const focused = target != null && target.state === lane
@@ -1151,7 +1162,7 @@ function kanbanGrouped(
       const line = cardLine(ctx, card, Math.max(0, width - 2), focused)
       const hits: Hit[] | undefined =
         ctx.view.tui && !ctx.view.detail
-          ? [{ start: 1, end: 1 + Math.max(1, widthOf(line)), action: cardAction(card, focused, ordinals.get(card) ?? 0) }]
+          ? [{ start: 1, end: 1 + Math.max(1, widthOf(line)), action: cardAction(card, focused, board.ordinals.get(card) ?? 0) }]
           : undefined
       all.push({ line: truncLine(ln(seg(' '), ...line.slice(0)), width), hits })
     }
@@ -1191,19 +1202,13 @@ function kanbanBlock(ctx: Ctx): Block | null {
     summary: { line: truncLine(ln(seg(` ${s.boardHeadingCount}`.replace('{n}', String(board.total ?? 0)), 'heading')), ctx.width) },
   })
   if (deg.has('board')) return one([{ line: truncLine(ln(seg(` ${s.dash}`, 'dim')), ctx.width) }])
-  const rows = board.rows ?? []
-  if (!rows.length) return one([{ line: truncLine(ln(seg(` ${s.boardEmpty}`, 'dim')), ctx.width) }])
-  const ordinals = dupOrdinals(rows)
-  // P249: only a ref that names one of the six lanes (or no ref at all, which keeps the board's own
-  // default cursor) resolves here; a preview row's ref puts no cursor on the kanban.
-  const focus =
-    ctx.view.focus && !LANES.includes(ctx.view.focus.lane) ? null : resolveFocusWith(rows, ordinals, ctx.view.focus)
-  // M48: one row object is the focus; every `card === target` below is O(1) and two rows sharing an
-  // id never both light up. The duplicate ordinals are built once per frame and shared by the
-  // focus/actions (no per-lane or per-card rescan of the board).
-  const target = focusRow(rows, focus)
+  const projected = ctx.kanban
+  if (!projected?.rows.length) return one([{ line: truncLine(ln(seg(` ${s.boardEmpty}`, 'dim')), ctx.width) }])
+  // P249: a preview row's ref puts no cursor on the kanban. The remainder use row identity.
+  const focus = ctx.view.focus && !boardFocusRef(ctx.view.focus) ? null : resolveFocus(projected, ctx.view.focus)
+  const target = focusRow(projected.rows, focus)
   if (!ctx.twoColumn) {
-    const grouped = kanbanGrouped(ctx, rows, target, ordinals)
+    const grouped = kanbanGrouped(ctx, projected, target)
     return { ...one(grouped.lines), lanes: grouped.lanes }
   }
   const slots = Math.max(2, Math.floor(ctx.laneRows ?? LANE_KEEP_DEFAULT) + LANE_MARKER_SLOTS)
@@ -1215,7 +1220,7 @@ function kanbanBlock(ctx: Ctx): Block | null {
   // verdict is computed from the width itself (the layout's own two-column tier), never a
   // hardcoded threshold here.
   const usable = Math.max(0, ctx.width - LANE_GAP * (LANES.length - 1))
-  const foldOf = (lane: string): boolean => laneFolded(ctx.view, lane, !laneCards(rows, lane).length)
+  const foldOf = (lane: string): boolean => laneFolded(ctx.view, lane, !projected.lanes.get(lane)?.length)
   const foldedLanes = LANES.filter(foldOf)
   const shownLanes = LANES.filter((lane) => !foldOf(lane))
   const widths = new Map<string, number>()
@@ -1231,7 +1236,7 @@ function kanbanBlock(ctx: Ctx): Block | null {
     const eachShown = Math.max(8, Math.floor((usable - FOLD_FRAME_W * foldedLanes.length) / shownLanes.length))
     for (const lane of shownLanes) widths.set(lane, eachShown)
   }
-  const cols = LANES.map((lane) => laneColumn(ctx, lane, widths.get(lane) ?? 8, slots, target, ordinals, windows, foldedLanes.includes(lane)))
+  const cols = LANES.map((lane) => laneColumn(ctx, lane, widths.get(lane) ?? 8, slots, projected.lanes.get(lane) ?? [], target, projected.ordinals, windows, foldedLanes.includes(lane)))
   return { ...one(mergeLaneColumns(cols, LANES.map((lane) => widths.get(lane) ?? 8))), lanes: windows }
 }
 
@@ -2356,16 +2361,17 @@ function healthBlock(ctx: Ctx): Block | null {
 function demotedPair(ctx: Ctx): { full: string; phase: string } | null {
   const { s } = ctx
   if (ctx.view.page !== 4 || ctx.view.detail || ctx.view.overlay || ctx.view.settings) return null
-  const rows = ctx.blocks.board?.rows ?? []
-  if (!rows.length) return null
-  const card = focusRow(rows, resolveFocus(rows, ctx.view.focus))
+  const board = ctx.kanban
+  if (!board?.rows.length) return null
+  const card = focusRow(board.rows, resolveFocus(board, ctx.view.focus))
   if (!card) return null
   // P125: in the side-by-side tier the folded lane is the three-column frame, which cannot carry
   // its label — the band names the lane it holds the focus for (its label and card count) exactly
   // where the demoted pair would render. In the grouped tier the folded line still carries them,
   // so the pair stays as it was.
-  if (ctx.twoColumn && laneFolded(ctx.view, card.state, !laneCards(rows, card.state).length)) {
-    const text = `${laneLabel(card.state, s)} ${laneCards(rows, card.state).length}`
+  const count = board.lanes.get(card.state)?.length ?? 0
+  if (ctx.twoColumn && laneFolded(ctx.view, card.state, !count)) {
+    const text = `${laneLabel(card.state, s)} ${count}`
     return { full: text, phase: text }
   }
   const phase = card.phase && card.phase !== '-' ? card.phase : s.dash
@@ -2380,6 +2386,7 @@ function keyBandBlock(ctx: Ctx, rowsAvailable = true): Block {
     return { id: 'keys', full: true, priority: 99, lines: [], separator: 'none' }
   }
   const { s, width } = ctx
+  const kanbanLane = ctx.kanban ? resolveFocus(ctx.kanban, ctx.view.focus)?.lane : undefined
   const actions: { text: string; action: Action }[] = ctx.view.settings ? [] : [
     { text: s.keyCompose, action: { kind: 'compose' } },
     { text: s.keyFlush, action: { kind: 'flush' } },
@@ -2436,11 +2443,11 @@ function keyBandBlock(ctx: Ctx, rowsAvailable = true): Block {
           { text: s.keyCards, action: { kind: 'card-move', delta: 1 } },
           {
             text: s.keyFold,
-            action: { kind: 'lane-fold', lane: resolveFocus(ctx.blocks.board?.rows ?? [], ctx.view.focus)?.lane ?? '' },
+            action: { kind: 'lane-fold', lane: kanbanLane ?? '' },
           },
           {
             text: s.keyOpen,
-            action: { kind: 'open-focused', lane: resolveFocus(ctx.blocks.board?.rows ?? [], ctx.view.focus)?.lane ?? 'todo' },
+            action: { kind: 'open-focused', lane: kanbanLane ?? 'todo' },
           },
           { text: s.keyPages, action: { kind: 'page-cycle' } },
           { text: s.keyQuit, action: { kind: 'quit' } },
@@ -2707,6 +2714,7 @@ export function layout(input: LayoutInput): Frame {
     blocks: input.blocks ?? {},
     view: input.view,
     activity: input.activityBlocks ?? [],
+    kanban: input.view.page === 4 ? (input.kanban ?? projectBoard(input.blocks?.board?.rows ?? [], input.view.tui)) : undefined,
   }
 
   const blocks = pageDefinitions(ctx)

@@ -182,7 +182,8 @@ The committed artifact at the time of writing:
 
 ```
 file:   skills/teamsmith/scripts/panel/panel.js
-size and sha256: printed by build.sh (the smoke suite compares a fresh rebuild byte for byte)
+size:   975138 bytes
+sha256: d654596f29c8572d7742f523d147193478e0e155feaa3d366fc1ba7daf797e06
 pins:   ink 7.1.1 · react 19.3.0 · runtime floor: node >= 20 | bun >= 1.3
 ```
 

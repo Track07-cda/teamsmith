@@ -7,8 +7,8 @@
 #   bash skills/teamsmith/tests/panel-b3.sh pages settings  # selected scenarios
 #   TEAM_B3_KEEP=1 bash skills/teamsmith/tests/panel-b3.sh  # keep the fixture directory
 #
-# Every scenario runs in a private tmux server (`-L p14b3-$$`) and a fresh fixture project; the
-# data path is the deterministic `panel-b3-stub.sh`, so assertions never depend on this repo.
+# Every scenario runs on a private tmux server (`-L p14b3-$$`) and a fresh fixture project.
+# Data comes from `panel-b3-stub.sh` except the board scenario's real sandbox board/detail reads.
 # Exit: 0 every selected scenario green, 1 at least one assertion failed, 3 setup failure.
 #
 # Fixture knob (only under TEAM_SMOKE_FIXTURE=1; otherwise printed as ignored):
@@ -237,7 +237,7 @@ start_panel() { # [extra env assignments] [panel args...]
   tmux -L "$sock" kill-window -t "$sess:panel" 2>/dev/null || true
   tmux -L "$sock" new-window -d -t "$sess" -n panel -c "$ROOT" \
     "TEAM_JS_BIN=$(printf '%q' "$js") $extra exec '$js' '$panel' --root '$ROOT' --state-dir '$state' \
-      --team-cli '$stub' --no-pulse --interval 1 ${*:-}"
+      --team-cli '${panel_cli:-$stub}' --no-pulse --interval 1 ${*:-}"
   wait_panel
 }
 
@@ -357,7 +357,7 @@ board_anchor="▾ 待办"
 board_lane_order="todo,wip,review,done,blocked,dropped"
 
 board_lane_list() { # <outfile> → 按图例顺序去重的 lane-fold 车道名
-  "$js" "$panel" --snapshot --targets --root "$ROOT" --state-dir "$state" --team-cli "$stub" \
+  "$js" "$panel" --snapshot --targets --root "$ROOT" --state-dir "$state" --team-cli "${panel_cli:-$stub}" \
     --lang zh --theme dark --width 120 --height 32 --page 4 >"$1" 2>/dev/null
   python3 - "$1" <<'PYL'
 import json, sys
@@ -434,6 +434,36 @@ for row, r in enumerate(rows, 1):
         print(i + 1, row)
         raise SystemExit
 PYX
+}
+
+# Read one history lane's actual card ids and bottom count, by its bordered body cell.
+board_history_window() { # <complete frame> <id prefix D or X>
+  awk -F'│' -v pat="${2}[0-9][0-9]" '
+    { lines[NR]=$0; if (!slot) for (i=2;i<NF;i++) if ($i ~ pat) { slot=i; break } }
+    END {
+      if (!slot) exit 1
+      for(i=1;i<=NR;i++) {
+        split(lines[i], cells, FS); cell=cells[slot]
+        if (match(cell, pat)) ids=ids (ids=="" ? "" : ",") substr(cell, RSTART, RLENGTH)
+        if (match(cell, /↓[0-9]+/)) { below=substr(cell, RSTART, RLENGTH); sub(/^↓/, "", below) }
+      }
+      print ids, below+0
+    }' "$1"
+}
+
+board_first_hidden() { # <complete frame> <prefix> <expected full lane order, space-separated>
+  local ids below i
+  local actual=() expected=()
+  read -r ids below < <(board_history_window "$1" "$2") || return 1
+  IFS=, read -r -a actual <<< "$ids"
+  read -r -a expected <<< "$3"
+  for ((i=0; i<${#actual[@]}; i++)); do
+    [ "${actual[i]}" = "${expected[i]:-}" ] || { printf 'actual window: %s; full order: %s\n' "$ids" "$3" >&2; return 1; }
+  done
+  [ "$below" -gt 0 ] && [ "$below" -eq "$((${#expected[@]} - i))" ] || {
+    printf 'actual window: %s; hidden below: %s; full order: %s\n' "$ids" "$below" "$3" >&2; return 1;
+  }
+  printf '%s\n' "${expected[i]}"
 }
 
 # ---------------------------------------------------------------- scenarios
@@ -1001,192 +1031,264 @@ scn_collapse() {
 }
 
 scn_board() {
-  section "board · 看板页：第四页记忆 / 焦点随重排 / 车道滚动 / 鼠标（4.2/5.3/5.4/6.1/6.2）"
+  section "board · 看板页：第四页记忆 / 最近实际更新 / 原行焦点 / 车道滚动 / 鼠标"
   server_up board
-  bcap() { cap > "$tmp/$current/$1.txt"; }               # write a capture under the fixture dir
-  bfile() { printf '%s/%s.txt' "$tmp/$current" "$1"; }   # read it back
-  conf_set "lang=zh" "page=1" "activity=1" "mouse=1" "density=comfortable" "theme=dark"
+  local work="$tmp/$current" board="$ROOT/docs/team/BOARD.md" board_cli="$tmp/$current/board-cli" name actual_state
+  local panel_cli="$board_cli" real_date
+  local clear=(TEAM_ROOT TEAM_MAIN_ROOT TEAM_ROOT_SOURCE TEAM_ROOT_WAS TEAM_CWD TEAM_PROJECT TEAM_SESSION
+    TEAM_SESSION_FROM TEAM_PM_WINDOW TEAM_CONFIG TEAM_CONFIG_FILE TEAM_DOCS_DIR TEAM_DOCS_ABS TEAM_SKILL_DIR
+    TEAM_STATE_DIR TEAM_STATE_DIR_EXPLICIT TMUX TMUX_PANE "${!TEAM_IDENTITY_@}")
+  local isolated=(env)
+  for name in "${clear[@]}"; do isolated+=(-u "$name"); done
+  {
+    printf '#!/usr/bin/env bash\nset -euo pipefail\nroot=%q\nreal=%q\nstub=%q\n' "$ROOT" "$skill/scripts/team" "$stub"
+    printf 'unset'; printf ' %q' "${clear[@]}"; printf '\n'
+    cat <<'BCLI'
+cd -P -- "$root"
+if [ "${3:-}" = __panel-data ]; then
+  [ "$1" = --root ] && [ "$2" = "$root" ] && [ "${4:-}" = --block ] || exit 3
+  case "${5:-}" in board|detail) ;; *) exec "$stub" "$@" ;; esac
+fi
+exec bash "$real" "$@"
+BCLI
+  } > "$board_cli" && chmod +x "$board_cli" || { bad '无法准备真实看板入口'; return; }
+  "$board_cli" paths > "$work/paths.json" && python3 - "$ROOT" "$work/paths.json" <<'BPATH'
+import json, sys
+from pathlib import Path
+root = Path(sys.argv[1]).resolve()
+paths = json.loads(Path(sys.argv[2]).read_text())
+want = {"main_root": str(root), "worktree": str(root), "docs": str(root / "docs/team")}
+if any(paths[key] != value for key, value in want.items()):
+    raise SystemExit(f"board fixture identity mismatch: expected {want}, got {paths}")
+BPATH
+  if [ "$?" -ne 0 ]; then bad '真实 CLI 没有解析到夹具的 main_root/worktree/docs'; return; fi
+  actual_state="$(cd "$ROOT" && "${isolated[@]}" bash -euc '
+    . "$1"; CMD=paths; team_identity_resolve "$PWD"; team_load_config; printf "%s\n" "$TEAM_STATE_DIR"
+  ' _ "$skill/scripts/lib/common.sh")" || { bad '无法核实真实 CLI 的默认状态目录'; return; }
+  if [ "$actual_state" != "$state" ]; then bad "状态目录不一致：CLI=$actual_state，面板=$state"; return; fi
+  printf '%s\n' "$actual_state" > "$work/state-path.txt"
+  ok '真实 CLI 和面板使用同一私有项目及状态目录'
+
+  real_date="$(command -v date)" || { bad '缺少 date'; return; }
+  mkdir -p "$work/clock"
+  {
+    printf '#!/usr/bin/env bash\nreal=%q\nreads=%q\n' "$real_date" "$work/clock-reads.txt"
+    cat <<'BCLOCK'
+if [ "$#" -eq 2 ] && [ "$1" = -u ] && [ "$2" = +%Y-%m-%dT%H:%M:%SZ ]; then
+  printf '%s\n' "$B3_BOARD_NOW" >> "$reads" && printf '%s\n' "$B3_BOARD_NOW"
+else
+  exec "$real" "$@"
+fi
+BCLOCK
+  } > "$work/clock/date" && chmod +x "$work/clock/date" || { bad '无法准备受控时钟'; return; }
+  board_at() {
+    local second="$1"; shift
+    PATH="$work/clock:$PATH" B3_BOARD_NOW="2026-01-02T00:00:0${second}Z" "$board_cli" board "$@" > "$work/write-$second.log" 2>&1 || {
+      bad "真实 board $* 失败（write-$second.log）"; tail -4 "$work/write-$second.log"; return 1;
+    }
+  }
+  row_stamp() { "$board_cli" board row "$1" | awk -F'|' '{v=$8; gsub(/^[ \t]+|[ \t]+$/, "", v); print v}'; }
+  bfile() { printf '%s/%s.txt' "$work" "$1"; }
+  # Use the same counted stable-frame wait; match order and the one cursor on the current screen,
+  # not text left in tmux scrollback. The .observed file retains the derived reading for failures.
+  bframe() { # <name> <order regex> <comma-separated order> <unique cursor regex> [extra needles]
+    local file order_re="$2" wanted="$3" cursor_re="$4"
+    file="$(bfile "$1")"; shift 4
+    local needles=("$@")
+    [ -z "$order_re" ] || needles+=("B3 order: [$wanted]")
+    [ -z "$cursor_re" ] || needles+=("B3 focus: matched")
+    if ( pty_cap() {
+      tmux -L "$sock" capture-pane -p -t "$sess:panel" | awk -v order="$order_re" -v cursor="$cursor_re" '
+        { print; if (/›/) { count++; line=$0 }
+          if (order!="") {
+            raw=$0
+            while (match(raw, order)) {
+              part=substr(raw, RSTART, RLENGTH); gsub(/ +/, " ", part)
+              ids=ids (ids=="" ? "" : ",") part
+              raw=substr(raw, RSTART+RLENGTH)
+            }
+          }
+        }
+        END { print "B3 order: [" ids "]"; if (cursor!="" && count==1 && line ~ cursor) print "B3 focus: matched" }'
+    }; wait_frame "$file.observed" "board/$file" "${needles[@]}" ); then
+      awk '!/^B3 (order|focus):/' "$file.observed" > "$file"
+    else
+      bad "没有等到 $file（原读数：$file.observed）"
+      return 1
+    fi
+  }
+
+  local history=36 lane prefix i stamp done_order dropped_order
+  {
+    printf '| ID | 任务 | Agent | 分支 | 依赖 | 状态 | Teamsmith Updated UTC |\n|---|---|---|---|---|---|---|\n'
+    printf '| M7 | Wip card | dev | - | - | wip |\n'
+    for lane in done dropped; do
+      prefix=D; [ "$lane" = done ] || prefix=X
+      for ((i=1; i<=history; i++)); do
+        printf '| %s%02d | Old | dev | - | - | %s |' "$prefix" "$i" "$lane"
+        case "$i" in 2|4) printf ' 2025-01-01T00:00:%02dZ |' "$i" ;; esac
+        printf '\n'
+      done
+    done
+  } > "$board"
+  for i in 9 8 39; do
+    printf '# M%s\n\nBoard body M%s proof\n' "$i" "$i" > "$ROOT/docs/team/tasks/M$i-board.md"
+  done
+  board_at 1 add M9 'Card A' dev - && board_at 2 add M8 'Card B' dev - || return
+  cp "$board" "$work/board-after-adds.md" || { bad '无法保存新增两行后的表'; return; }
+  local order_re='M[89]'
+  bstart() { start_panel && tmux -L "$sock" resize-window -t "$sess:panel" -x 120 -y 32; }
+  conf_set 'lang=zh' 'page=1' 'activity=1' 'mouse=1' 'density=comfortable' 'theme=dark'
   rm -f "$(page_file)"
-  start_panel
-  # 4.2: `4` switches, the file remembers it, a relaunch restores it.
+  bstart || { bad '看板面板未启动'; return; }
   keys 4
-  sleep 1
-  bcap p4
-  assert_board_page "$(bfile p4)" "按 4 切到看板页（六车道在场）"
-  assert_eq "按 4 后 panel-page=4" "$(page_of)" "4"
-  start_panel
-  bcap relaunch
-  assert_board_page "$(bfile relaunch)" "重启后仍在看板页（panel-page 记忆）"
-  assert_eq "重启后 panel-page 仍是 4" "$(page_of)" "4"
-  # 4.2: an out-of-range file falls back to the default page, never an error.
+  bframe focus-a "$order_re" 'M8,M9' '› · M8' "$board_anchor" || return
+  assert_board_page "$(bfile focus-a)" '按 4 切到看板页（六车道在场；后加的 M8 在前）'
+  assert_eq '按 4 后 panel-page=4' "$(page_of)" '4'
+  bstart && bframe relaunch "$order_re" 'M8,M9' '› · M8' "$board_anchor" || { bad '重启未恢复看板页'; return; }
+  assert_eq '重启后 panel-page 仍是 4' "$(page_of)" '4'
   printf '9\n' > "$(page_file)"
-  start_panel
-  bcap oob
-  assert_has "$(bfile oob)" "项目进度" "panel-page=9 时回落到默认页（总览）"
-  assert_not_board_page "$(bfile oob)" "panel-page=9 时没有渲染看板页"
-  # 5.3: the focus is keyed by entry id — a reorder keeps it, a removal falls back inside the lane.
-  board_a="$tmp/$current/board-a.json"
-  board_b="$tmp/$current/board-b.json"
-  board_c="$tmp/$current/board-c.json"
-  python3 - "$board_a" "$board_b" "$board_c" <<'PYB'
-import json, sys
-
-def row(i, state, title):
-    return {"id": i, "title": title, "agent": "dev", "branch": "-", "deps": "-", "state": state, "phase": "apply"}
-
-a = [row("M9", "todo", "聚焦的卡片"), row("M8", "todo", "第二条"), row("M7", "wip", "进行中的一条")]
-b = [row("M8", "todo", "第二条"), row("M9", "todo", "聚焦的卡片"), row("M7", "wip", "进行中的一条")]
-c = [row("M7", "wip", "进行中的一条"), row("M9", "todo", "聚焦的卡片")]
-for path, rows in ((sys.argv[1], a), (sys.argv[2], b), (sys.argv[3], c)):
-    json.dump({"rows": rows, "counts": {}, "total": len(rows), "deliveries": []}, open(path, "w"))
-PYB
-  printf '4\n' > "$(page_file)"
-  start_panel "B3_STUB_BOARD_FILE='$board_a'"
-  sleep 1
-  bcap focus-a
-  assert_eq "初始焦点在 M9（首条非空车道的第一张）" "$(focused_id "$(bfile focus-a)")" "M9"
+  bstart && bframe oob '' '' '' '项目进度' "!$board_anchor" || { bad '非法页码未回到总览'; return; }
+  assert_not_board_page "$(bfile oob)" 'panel-page=9：没有渲染看板页'
+  keys 4
+  bframe focus-reopen "$order_re" 'M8,M9' '› · M8' || return
   keys Down
-  sleep 0.6
-  bcap focus-m8
-  assert_eq "↓ 把焦点移到 M8" "$(focused_id "$(bfile focus-m8)")" "M8"
-  cp "$board_b" "$board_a.tmp" && mv "$board_a.tmp" "$board_a"
+  bframe focus-m9 "$order_re" 'M8,M9' '› · M9' || return
+  board_at 3 assign M9 reviewer || return
+  assert_eq 'M9 实际换人后写入第三个 UTC 秒' "$(row_stamp M9)" '2026-01-02T00:00:03Z'
+  cp "$board" "$work/board-a-updated.md" || { bad '无法保存 A 实际更新后的表'; return; }
   keys r
-  sleep 1
-  bcap focus-reordered
-  assert_eq "重排后焦点仍在 M8（按 id 跟踪，不按行号）" "$(focused_id "$(bfile focus-reordered)")" "M8"
-  cp "$board_c" "$board_a.tmp" && mv "$board_a.tmp" "$board_a"
+  bframe focus-reordered "$order_re" 'M9,M8' '› · M9' || return
+  ok '真实新增和换人：M8,M9 → M9,M8，焦点仍是 M9'
+  stamp="$(row_stamp M8)"
+  board_at 4 assign M8 'dev ' || return
+  assert_eq 'M8 同值重写（尾空白）仍保留第二个 UTC 秒' "$(row_stamp M8),$stamp" '2026-01-02T00:00:02Z,2026-01-02T00:00:02Z'
   keys r
-  sleep 1
-  bcap focus-vanished
-  assert_eq "M8 离开看板后焦点落到该车道第一条（M9）" "$(focused_id "$(bfile focus-vanished)")" "M9"
-  # M48: two rows carry one id (the file's history does this). The cursor must walk both — each one
-  # step, no freeze — and the focus glyph must sit on exactly one row. The old id-keyed match lit
-  # both up and `↓` never left the first of them. The fixture gives the two rows distinct agents
-  # (visible in a lane card at 120 columns) and distinct titles (visible on the full-width work page).
-  board_dup="$tmp/$current/board-dup.json"
-  python3 - "$board_dup" <<'PYD'
+  bframe focus-noop "$order_re" 'M9,M8' '› · M9' || return
+  keys Down
+  bframe focus-b "$order_re" 'M9,M8' '› · M8' || return
+  keys Enter
+  bframe key-detail '' '' '' 'Board body M8 proof' '!Board body M9 proof' || return
+  keys Escape
+  bframe key-back "$order_re" 'M9,M8' '› · M8' || return
+  ok '重排后 ↓/Enter 打开 M8 的真实任务书；Esc 返回仍选中 M8'
+  local click_col click_row
+  if read -r click_col click_row < <(card_point "$(bfile key-back)" M9); then
+    python3 "$pty_direct" --js "$js" --panel "$panel" --root "$ROOT" --state-dir "$state" --team-cli "$board_cli" \
+      --out "$work/click-card.bin" --click-col "$click_col" --click-row "$click_row" --cols 120 --rows 32 \
+      --board-open M9 M8 'Board body M9 proof' > "$work/click-card.log" 2>&1
+    assert_eq '直驱鼠标：一次点卡只选中 M9；再次点击读到 M9 正文；Esc 返回 M9' "$?" '0'
+  else bad '当前帧没有 M9 的点击坐标'; fi
+
+  # The live reader still supplies the same lane order in both grouped widths. A deliberately
+  # shorter pane then makes the group follow the keyboard over the edge of its original frame.
+  tmux -L "$sock" resize-window -t "$sess:panel" -x 99 -y 32 || { bad '无法改为 99 列'; return; }
+  bframe grouped-99 "$order_re" 'M9,M8' '› · M8' "$board_anchor" '!╭─ ▾ 待办' || return
+  tmux -L "$sock" resize-window -t "$sess:panel" -x 59 -y 12 || { bad '无法改为 59 列'; return; }
+  bframe grouped-59 "$order_re" 'M9,M8' '› · M8' "$board_anchor" '!╭─ ▾ 待办' || return
+  keys Right
+  bframe grouped-wip '' '' '› ▸ M7' || return
+  keys Right
+  bframe grouped-history '' '' '› ✓ D04' || return
+  local hidden='' id
+  local tail_ids=()
+  for ((i=history;i>=1;i--)); do if [ "$i" -ne 4 ] && [ "$i" -ne 2 ]; then printf -v id '%02d' "$i"; tail_ids+=("$id"); fi; done
+  done_order='D04 D02'; dropped_order='X04 X02'
+  for id in "${tail_ids[@]}"; do done_order+=" D$id"; dropped_order+=" X$id"; done
+  for id in ${done_order#D04 }; do
+    if ! grep -qF "$id" "$(bfile grouped-history)"; then hidden="$id"; fi
+    keys Down
+    bframe "grouped-$id" '' '' "› ✓ $id" || return
+    [ -z "$hidden" ] || break
+  done
+  if [ -n "$hidden" ]; then ok "99/59 列保持同序；窄窗随键盘焦点跨过原窗边界，显示 $hidden"; else bad '窄窗没有可验证的首窗外旧行'; fi
+
+  tmux -L "$sock" resize-window -t "$sess:panel" -x 120 -y 32 || { bad '无法恢复 120 列'; return; }
+  keys Left
+  bframe back-wip '' '' '› ▸ M7' '╭' || return
+  keys Left
+  bframe lane-first "$order_re" 'M9,M8' '› · M9' 'D36' 'X36' || return
+  if read -r click_col click_row < <(card_point "$(bfile lane-first)" D04); then
+    local before="$work/wheel-lane-before.txt" after="$work/wheel-lane-after.txt" hidden_done hidden_drop
+    python3 "$pty_direct" --js "$js" --panel "$panel" --root "$ROOT" --state-dir "$state" --team-cli "$board_cli" \
+      --out "$work/wheel-lane.bin" --out2 "$work/wheel-lane-after.bin" --no-click --wheel down --wheel-clicks 3 \
+      --wheel-ready D36 --wheel-before-frame "$before" --wheel-after-frame "$after" \
+      --click-col "$click_col" --click-row "$click_row" --cols 120 --rows 32 > "$work/wheel-lane.log" 2>&1
+    assert_eq '直驱滚轮：取到同一进程的滚动前后整帧' "$?" '0'
+    if hidden_done="$(board_first_hidden "$before" D "$done_order")" && hidden_drop="$(board_first_hidden "$before" X "$dropped_order")"; then
+      ok "done/dropped 首窗：两张有时间的卡按时间倒序，旧卡从文件尾显示，首窗外分别是 $hidden_done/$hidden_drop，底边数量准确"
+      assert_not "$before" "$hidden_done" 'done 首窗外的指定旧卡尚未出现'
+      assert_not "$before" "$hidden_drop" 'dropped 首窗外的指定旧卡尚未出现'
+      assert_has "$after" "$hidden_done" '内容区向下滚动后，done 首窗外的指定旧卡出现'
+      assert_eq '滚 done 后 dropped 可见卡和底边数量未变' "$(board_history_window "$after" X)" "$(board_history_window "$before" X)"
+      assert_eq '滚 done 后焦点仍在原卡' "$(focused_id "$after")" 'M9'
+    else bad '两条历史栏的实际首窗、隐藏行或数量与原表不符'; fi
+  else bad '当前帧没有 done 内容区坐标'; fi
+
+  keys Down
+  bframe before-removal "$order_re" 'M9,M8' '› · M8' || return
+  awk '!/^\| M8 /' "$board" > "$board.tmp" && mv "$board.tmp" "$board" || { bad '无法移除 M8 夹具行'; return; }
+  keys r
+  bframe focus-vanished "$order_re" 'M9' '› · M9' '!M8' || return
+  ok 'M8 离开看板后，焦点回到同栏首张 M9'
+
+  # Same-ID rows use the same task file; their unique cursor is checked by row title instead.
+  cat > "$board.tmp" <<'BDUP'
+| ID | 任务 | Agent | 分支 | 依赖 | 状态 | Teamsmith Updated UTC |
+|---|---|---|---|---|---|---|
+| M39 | 第一条 | reviewer | - | - | todo | 2026-01-01T00:00:00Z |
+| M39 | 第二条 | dev | - | - | todo | 2026-01-01T00:00:00Z |
+| M48 | 第三条 | dev | - | - | todo |
+| M49 | 第四条 | dev | - | - | todo | 2025-02-29T12:00:00Z |
+
+| Risk | Item | Owner | Branch | Deps | Status | Date |
+|---|---|---|---|---|---|---|
+| M39 | 表外 | dev | - | - | blocked | 2099-01-01T00:00:00Z |
+BDUP
+  mv "$board.tmp" "$board" || { bad '无法写入重复 ID 夹具'; return; }
+  local dup_re='M39 +第一条|M39 +第二条|M48 +第三条|M49 +第四条'
+  local original='M39 第一条,M39 第二条,M48 第三条,M49 第四条'
+  local reordered='M39 第二条,M39 第一条,M48 第三条,M49 第四条'
+  bstart && bframe dup-1 "$dup_re" "$original" '› · M39 第一条' || { bad '等时、缺时、坏日期没有按约定首排'; return; }
+  keys Down
+  bframe dup-2 "$dup_re" "$original" '› · M39 第二条' || return
+  board_at 5 assign M39 reviewer || return
+  keys r
+  bframe dup-refresh "$dup_re" "$reordered" '› · M39 第二条' || return
+  "$board_cli" --root "$ROOT" __panel-data --block board > "$work/dup-data.json" && python3 - "$work/dup-data.json" <<'BTIMES'
 import json, sys
+rows = json.load(open(sys.argv[1]))["rows"]
+actual = [(r["title"], r.get("updated_at")) for r in rows if r["id"] == "M39"]
+want = [("第一条", "2026-01-01T00:00:00Z"), ("第二条", "2026-01-02T00:00:05Z"), ("表外", None)]
+if actual != want:
+    raise SystemExit(f"M39 row times: expected {want}, got {actual}")
+BTIMES
+  assert_eq '同 ID 分行比较：仅第二行获新时刻，表外日期不是更新时间' "$?" '0'
+  assert_match "$board" '^\| M39 \| 表外 \| reviewer \| - \| - \| blocked \| 2099-01-01T00:00:00Z \|$' '表外同 ID 仍按旧业务规则换人，原自定义日期不变'
+  keys Enter
+  bframe dup-detail '' '' '' 'Board body M39 proof' || return
+  keys Escape
+  bframe dup-back "$dup_re" "$reordered" '› · M39 第二条' || return
+  keys Down
+  bframe dup-next "$dup_re" "$reordered" '› · M39 第一条' || return
+  keys Down
+  bframe dup-3 "$dup_re" "$reordered" '› · M48 第三条' || return
+  ok '同 ID 是两个停靠点：等时按文件序；刷新上移后第二行仍唯一选中；打开/返回不串行'
+  board_at 6 set M48 blocked && board_at 7 set M48 blocked || return
+  assert_eq '缺时间的 M48 实际改状态才补时间，重复 set 保留第六秒' \
+    "$("$board_cli" board row M48 | awk -F'|' '{gsub(/[ \t]/, "", $7); gsub(/[ \t]/, "", $8); print $7 "," $8}')" 'blocked,2026-01-02T00:00:06Z'
+  assert_eq '四次真实更新加一次重复行更新各只取一次时间；两次同值操作不取时间' \
+    "$(cut -c18-19 "$work/clock-reads.txt" | paste -sd,)" '01,02,03,05,06'
 
-def row(i, state, title, agent):
-    return {"id": i, "title": title, "agent": agent, "branch": "-", "deps": "-", "state": state, "phase": "apply"}
-
-# P123: the card line no longer carries the agent, so the two same-id rows are told apart by their
-# titles — short enough to survive the 120-column lane's title truncation (每条 3 个汉字).
-rows = [row("M39", "todo", "第一条", "dev1"), row("M39", "todo", "第二条", "dev2"), row("M48", "todo", "第三条", "dev3")]
-json.dump({"rows": rows, "counts": {}, "total": len(rows), "deliveries": []}, open(sys.argv[1], "w"))
-PYD
-  printf '4\n' > "$(page_file)"
-  start_panel "B3_STUB_BOARD_FILE='$board_dup'"
-  sleep 1
-  bcap dup-1
-  assert_eq "M48 重复 ID：初始焦点在第一行 M39" "$(focused_id "$(bfile dup-1)")" "M39"
-  assert_eq "M48 重复 ID：焦点光标恰好一个（不是两行都亮）" "$(grep -o '›' "$(bfile dup-1)" | wc -l | tr -d ' ')" "1"
-  focused_row "$(bfile dup-1)" > "$tmp/$current/dup-1-row.txt"
-  assert_has "$tmp/$current/dup-1-row.txt" "M39 第一条" "M48 重复 ID：高亮落在第一条（按行身份，不是裸 ID）"
-  keys Down; sleep 0.5
-  bcap dup-2
-  assert_eq "M48 重复 ID：↓ 后仍只有一个光标" "$(grep -o '›' "$(bfile dup-2)" | wc -l | tr -d ' ')" "1"
-  focused_row "$(bfile dup-2)" > "$tmp/$current/dup-2-row.txt"
-  assert_has "$tmp/$current/dup-2-row.txt" "M39 第二条" "M48 重复 ID：↓ 走到同 ID 的第二行（不卡死）"
-  # Cross-frame persistence (the brief's requirement): a refresh and a detail round trip must keep the
-  # *second* row of the id, not snap back to the first one.
-  keys r; sleep 1
-  bcap dup-refresh
-  focused_row "$(bfile dup-refresh)" > "$tmp/$current/dup-refresh-row.txt"
-  assert_has "$tmp/$current/dup-refresh-row.txt" "M39 第二条" "M48 重复 ID：刷新（r）后焦点仍在第二条同 ID 行"
-  keys Enter; sleep 1.4
-  bcap dup-detail
-  assert_has "$(bfile dup-detail)" "详情 M39" "M48 重复 ID：Enter 打开的是焦点那一行的详情"
-  keys Escape; sleep 0.8
-  bcap dup-back
-  focused_row "$(bfile dup-back)" > "$tmp/$current/dup-back-row.txt"
-  assert_has "$tmp/$current/dup-back-row.txt" "M39 第二条" "M48 重复 ID：详情返回后焦点仍在第二条同 ID 行"
-  keys Down; sleep 0.5
-  bcap dup-3
-  assert_eq "M48 重复 ID：再 ↓ 走到 M48（同 ID 两行之后继续前进）" "$(focused_id "$(bfile dup-3)")" "M48"
-  keys Up; sleep 0.4; keys Up; sleep 0.4
-  bcap dup-4
-  assert_eq "M48 重复 ID：↑↑ 回到第一行 M39" "$(focused_id "$(bfile dup-4)")" "M39"
-  focused_row "$(bfile dup-4)" > "$tmp/$current/dup-4-row.txt"
-  assert_has "$tmp/$current/dup-4-row.txt" "M39 第一条" "M48 重复 ID：↑ 逐行经过第二条，回到第一条"
-  # The work page walks the same rows through its own drawn order (M48 changed both walks). Its
-  # first `↓` anchors on the first drawn row (P20/B5), so the second press is the first real step.
   printf '2\n' > "$(page_file)"
-  start_panel "B3_STUB_BOARD_FILE='$board_dup'"
-  sleep 1
-  bcap dup-work-1
-  assert_eq "M48 重复 ID（工作页）：初始焦点在第一绘制行 M39" "$(focused_id "$(bfile dup-work-1)")" "M39"
-  assert_eq "M48 重复 ID（工作页）：焦点光标恰好一个" "$(grep -o '›' "$(bfile dup-work-1)" | wc -l | tr -d ' ')" "1"
-  focused_row "$(bfile dup-work-1)" > "$tmp/$current/dup-work-1-row.txt"
-  assert_has "$tmp/$current/dup-work-1-row.txt" "第一条" "M48 重复 ID（工作页）：高亮落在第一条"
-  keys Down; sleep 0.5; keys Down; sleep 0.5
-  bcap dup-work-2
-  focused_row "$(bfile dup-work-2)" > "$tmp/$current/dup-work-2-row.txt"
-  assert_has "$tmp/$current/dup-work-2-row.txt" "第二条" "M48 重复 ID（工作页）：↓ 走到第二条同 ID 行"
-  keys Down; sleep 0.5
-  bcap dup-work-3
-  assert_eq "M48 重复 ID（工作页）：再 ↓ 走到 M48" "$(focused_id "$(bfile dup-work-3)")" "M48"
-  # The done-lane/wheel checks below need the kanban page back.
-  printf '4\n' > "$(page_file)"
-  # 5.4: a 20-card done lane anchors on the newest and counts what it hides; the wheel scrolls it.
-  start_panel "B3_STUB_DONE=20"
-  sleep 1
-  bcap lane-first
-  assert_has "$(bfile lane-first)" "↓" "20 张 done：第一帧在底边报出隐藏数量"
-  assert_has "$(bfile lane-first)" "D20" "20 张 done：第一帧锚定最新（D20 可见）"
-  assert_has "$(bfile lane-first)" "D01" "20 张 done：车道窗口里能看到更旧的卡片"
-  done_col="$(python3 - "$(bfile lane-first)" <<'PYC'
-import re, sys
-
-WIDE = [(0x1100,0x115f),(0x2e80,0x303e),(0x3041,0x33ff),(0x3400,0x4dbf),(0x4e00,0x9fff),(0xa000,0xa4cf),(0xac00,0xd7a3),(0xf900,0xfaff),(0xfe10,0xfe19),(0xfe30,0xfe6f),(0xff00,0xff60),(0xffe0,0xffe6)]
-
-def disp(text):
-    return sum(2 if any(a <= ord(ch) <= b for a, b in WIDE) else 1 for ch in text)
-
-rows = [re.sub(r"\x1b\[[0-9;]*m", "", l.rstrip("\n")) for l in open(sys.argv[1], encoding="utf-8")]
-head = next((r for r in rows if "完成" in r), "")
-print(disp(head.split("完成")[0]) + 3 if head else 63)
-PYC
-)"
-  # The wheel is injected into its own pty instance (tmux keeps wheel events for itself, measured in
-  # this suite's other wheel scenario), so the evidence is that instance's own byte stream: the rows
-  # Ink rewrites when the lane window moves hold ids that were hidden before.
-  B3_STUB_DONE=20 python3 "$pty_direct" --js "$js" --panel "$panel" --root "$ROOT" --state-dir "$state" \
-    --team-cli "$stub" --out "$tmp/$current/wheel-lane.bin" --out2 "$tmp/$current/wheel-lane-after.bin" \
-    --expect-enable yes --click-col "${done_col:-63}" --click-row 6 --wheel up --wheel-clicks 3 \
-    --cols 120 --rows 32 >"$tmp/$current/wheel-lane.log" 2>&1
-  assert_eq "直驱 pty：车道内滚轮事件注入成功（6.2）" "$?" "0"
-  if grep -qE 'D0[1-5]' "$tmp/$current/wheel-lane-after.bin" 2>/dev/null; then
-    ok "车道内滚轮上滚：done 窗口移到更旧的卡片（原先隐藏的 D01–D05 进入视图）"
-  else
-    bad "车道内滚轮上滚后没有看到原先隐藏的 done 卡片（车道没有滚动）"
-  fi
-
-  # 6.1: a click on a card focuses it — in the injected instance's own bytes, the focus cursor has
-  # to move onto the clicked card (the start of the frame puts it on the first card of `todo`).
-  # P352: 坐标从帧里取（行 = 画着 P14 的那一行，列 = 它的 id 所在的显示列）—— P125 把未折叠车道
-  # 19→22 列之后，写死的 25 落到卡片内边距那一列，点击就不再是「点卡片」。
-  read -r click_col click_row < <(card_point "$(bfile lane-first)" P14)
-  printf '  \033[36m· 夹具\033[0m 6.1 的点击点取自 lane-first 帧：row=%s col=%s（P14 的 id 列）\n' \
-    "${click_row:-（取不到）}" "${click_col:-（取不到）}"
-  B3_STUB_DONE=20 python3 "$pty_direct" --js "$js" --panel "$panel" --root "$ROOT" --state-dir "$state" \
-    --team-cli "$stub" --out "$tmp/$current/click-card.bin" --expect-enable yes \
-    --click-col "${click_col:-0}" --click-row "${click_row:-0}" --cols 120 --rows 32 >"$tmp/$current/click-card.log" 2>&1
-  assert_eq "直驱 pty：卡片点击注入成功（6.1）" "$?" "0"
-  click_moved="$(python3 - "$tmp/$current/click-card.bin" <<'PYM'
-import re, sys
-
-raw = open(sys.argv[1], "rb").read().decode("utf-8", "replace")
-clean = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", raw)
-# The cursor glyph followed by the clicked card's id on the same written row.
-print("ok" if re.search(r"›\s*(?:[·▸◆✓✗—]\s*)?P14", clean) else "no")
-PYM
-)"
-  if [ "$click_moved" = "ok" ]; then
-    ok "点击 wip 车道第一张卡后焦点光标落在 P14 上（点击 = 聚焦）"
-  else
-    bad "点击卡片后焦点没有移到被点的卡（$click_moved）"
-  fi
+  bstart && bframe dup-work-1 '' '' '›.*M39.*第一条' || { bad '工作页首行不是原表第一行'; return; }
+  keys Down
+  bframe dup-work-anchor '' '' '›.*M39.*第一条' || return
+  keys Down
+  bframe dup-work-2 '' '' '›.*M39.*第二条' || return
+  keys Down
+  bframe dup-work-3 '' '' '›.*M48.*第三条' || return
+  ok '工作页仍沿真实文件顺序：同 ID 第一条、第二条、M48'
 }
 
 scn_detail() {
@@ -1533,23 +1635,30 @@ PYC
   else
     ok "滚轮在折叠车道线上：折叠保持、没有卡片出现（页面没被滚动）"
   fi
-  # The header of an *unfolded* lane keeps that lane's wheel region (the pre-P123 behaviour).
+  # An unfolded header still keeps its lane's wheel region. The sample is longer than the
+  # window; identify a missing old card from this PTY's own initial frame, not an old stream.
   conf_set "lang=zh" "page=4" "activity=1" "mouse=1" "density=comfortable" "theme=dark"
   printf '4\n' > "$(page_file)"
-  start_panel "B3_STUB_DONE=20"
-  sleep 0.8
-  fcap p123-hwheelbase
+  start_panel "B3_STUB_DONE=36" && wait_frame "$(ffile p123-hwheelbase)" '展开历史栏可滚动' 'D36' '▾ 完成' \
+    || { bad '展开历史栏首帧没有出现'; return; }
   done_col="$(lane_col "$(ffile p123-hwheelbase)" '▾ 完成')"
-  B3_STUB_DONE=20 python3 "$pty_direct" --js "$js" --panel "$panel" --root "$ROOT" --state-dir "$state" --team-cli "$stub" \
+  local before after hidden neighbor after_neighbor
+  before="$(ffile p123-hwheel-before)"; after="$(ffile p123-hwheel-after)"
+  B3_STUB_DONE=36 python3 "$pty_direct" --js "$js" --panel "$panel" --root "$ROOT" --state-dir "$state" --team-cli "$stub" \
     --out "$tmp/$current/p123-hwheel.bin" --out2 "$tmp/$current/p123-hwheel-after.bin" --expect-enable yes --no-click \
-    --wheel up --wheel-clicks 3 --click-col "${done_col:-60}" --click-row 3 --cols 120 --rows 32 \
-    >"$tmp/$current/p123-hwheel.log" 2>&1
-  assert_eq "直驱 pty：展开车道头上的滚轮注入成功" "$?" "0"
-  if grep -aqE 'D0[1-5]' "$tmp/$current/p123-hwheel-after.bin" 2>/dev/null; then
-    ok "展开车道头上的滚轮仍滚该车道（原先隐藏的 D01–D05 进入视图）"
-  else
-    bad "展开车道头上的滚轮没有滚动它的车道（车道区域丢了）"
-  fi
+    --wheel down --wheel-clicks 3 --wheel-ready D36 --wheel-before-frame "$before" --wheel-after-frame "$after" \
+    --click-col "${done_col:-0}" --click-row 3 --cols 120 --rows 32 >"$tmp/$current/p123-hwheel.log" 2>&1
+  assert_eq '直驱 pty：展开栏头滚动的前后整帧' "$?" '0'
+  local ids _
+  if read -r ids _ < <(board_history_window "$before" D) && [[ ${ids##*,} =~ ^D([0-9]{2})$ ]] \
+    && [ "${BASH_REMATCH[1]}" -gt 1 ]; then
+    printf -v hidden 'D%02d' "$((10#${BASH_REMATCH[1]} - 1))"
+    assert_not "$before" "$hidden" '展开栏头：选定的旧卡不在同一 PTY 首帧'
+    assert_has "$after" "$hidden" "展开栏头向下滚后，首窗外的 $hidden 出现"
+  else bad '展开栏头首帧没有可核对的窗外旧卡'; fi
+  if neighbor="$(card_point "$before" V21)" && after_neighbor="$(card_point "$after" V21)" && [ -n "$neighbor" ]; then
+    assert_eq '栏头只滚本栏，邻栏 V21 在前后整帧的位置不变' "$after_neighbor" "$neighbor"
+  else bad '栏头滚动前后没有可核对的邻栏 V21'; fi
 }
 
 # ---------------------------------------------------------------- run

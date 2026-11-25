@@ -174,6 +174,8 @@ export interface BoardRow {
   state: string
   /** The task brief's `phase:` header (`-` when there is no brief or no header) — console-only. */
   phase?: string
+  /** Optional source cell; only the interactive board uses a valid UTC timestamp. */
+  updated_at?: string
 }
 
 /** A recent delivery (a report file, newest first) for the overview's delivery block. */
@@ -648,8 +650,8 @@ export type Action =
   | { kind: 'queue-list' }
   /** Board page: put the focus on this card (a click on an unfocused card). */
   | { kind: 'focus'; lane: string; id: string; nth?: number }
-  /** Board page: open the focused card's detail view (a click on the already focused card). */
-  | { kind: 'open-focused'; lane: string }
+  /** The open chip uses the current focus; an already focused board card names its frame's row. */
+  | { kind: 'open-focused'; lane: string; row?: FocusRef }
   /** Board page: move the focus one lane left/right (the key band's `←`/`→` chip). */
   | { kind: 'lane-move'; delta: number }
   /** Board page: move the focus one card up/down inside its lane (the `↑`/`↓` chip). */
@@ -726,6 +728,8 @@ export interface LaneWindow {
   offset: number
   visible: number
   count: number
+  /** Card capacity, even if this side-by-side lane is empty or folded in this frame. */
+  span?: number
 }
 
 /** The detail view's document window as the frame rendered it (the App's arrows/wheel clamp). */

@@ -5024,22 +5024,116 @@ team_board_has() { # <id> → 0=表里有这一行
   [ -n "$(team_board_row_direct "$1" 2>/dev/null || true)" ]   # 留：查不到=空答案（不是故障）
 }
 
-# 只写一列（不做任何校验）。未知 id 时**不写文件**并返回 1 —— F29 之前 awk 永远「成功」，
-# 于是 `board set NOSUCH done` 会打印 ✓ 而文件一个字节都没变（md5 相同）。
-# M48：列名参数化，好让 `board assign` 走同一条「只改一格、拒绝时一个字节不落盘」的路。
-team_board_write_col() { # <id> <列名> <值> → 0=真的改了那一行；1=没有这个 id（不碰文件）
-  local f="$TEAM_DOCS_ABS/BOARD.md" id="$1" name="$2" val="$3" idcol col
+# Shared awk for the optional time cell only. Neither the CLI writers nor the panel reader
+# use it to choose their business fields or rows. A candidate is a named header plus its
+# adjacent separator; its physical rows end at the first non-pipe line.
+_TEAM_BOARD_TIME_AWK='
+  function bt_trim(s) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
+  function bt_field(s) {
+    if (s=="ID" || s=="编号") return "id"
+    if (s=="任务" || s=="标题" || s=="Title" || s=="Task") return "task"
+    if (s ~ /^[Aa]gent$/) return "agent"
+    if (s=="分支" || s=="Branch") return "branch"
+    if (s=="依赖" || s=="Deps" || s=="Depends") return "deps"
+    if (s=="状态" || s=="Status") return "status"
+    if (s=="Teamsmith Updated UTC") return "time"
+    return ""
+  }
+  function bt_scan(   i, name) {
+    if ($0 !~ /^\|/) { bt_pending=0; return }
+    if (bt_head && FNR==bt_end+1) {
+      bt_end=FNR
+      if (NF>bt_width) bt_extra=1
+    }
+    if (bt_pending && NF==bt_pending && $NF ~ /^[[:space:]]*$/) {
+      for (i=2; i<NF && bt_trim($i) ~ /^:?-+:?$/; i++) {}
+      if (i==NF) {
+        if (++bt_tables==1) {
+          bt_head=FNR-1; bt_end=FNR; bt_width=NF; bt_extra=0
+          for (name in bt_candidate) bt_col[name]=bt_candidate[name]
+        }
+        bt_pending=0
+        return
+      }
+    }
+    bt_pending=0
+    if ($NF !~ /^[[:space:]]*$/) return
+    for (name in bt_candidate) delete bt_candidate[name]
+    for (i=2; i<NF; i++) {
+      name=bt_field(bt_trim($i))
+      if (name=="") continue
+      # mawk creates a missing array element when evaluating the assignment target.
+      if (name in bt_candidate) bt_candidate[name]=-1
+      else bt_candidate[name]=i
+    }
+    if (bt_candidate["id"]>0 && bt_candidate["task"]>0 && bt_candidate["status"]>0) bt_pending=NF
+  }
+  function bt_task_id(id) {
+    return id!="" && id!="ID" && id!="编号" && id !~ /^[-–—]+$/
+  }
+  function bt_row(id) {
+    return bt_tables==1 && FNR>bt_head+1 && FNR==bt_end && $0 ~ /^\|/ && bt_task_id(id) && $NF ~ /^[[:space:]]*$/
+  }
+  function bt_last_cell() {
+    return bt_col["time"]==bt_width-1
+  }
+  function bt_writable() {
+    return bt_tables==1 && (bt_last_cell() || (!bt_col["time"] && !bt_extra))
+  }
+  function bt_append(line, value,   end) {
+    end=match(line, /\|[[:space:]]*$/)
+    return substr(line, 1, end) value "|" substr(line, end+1)
+  }
+'
+
+team_board_lock_key() { # The directory entry mv replaces, not a symlink target at that entry.
+  local f="$1"
+  ( CDPATH='' cd -P -- "${f%/*}" && printf 'board:%s/%s\n' "${PWD%/}" "${f##*/}" )
+}
+
+# M48：按旧列位写所有匹配行；失败不替换。调用进程而不是锁的子进程负责清缓存。
+team_board_write_col() { # <id> <列名> <值>
+  local f="$TEAM_DOCS_ABS/BOARD.md" key
+  key="$(team_board_lock_key "$f")" || return 1
+  team_with_lock "$key" team_board_write_col_locked "$f" "$@" || return 1
+  team_scan_invalidate board
+}
+
+team_board_write_col_locked() {
+  local f="$1" id="$2" name="$3" val="$4" idcol col plan at='' head=0 tc=0 marks=''
+  local TEAM_SCAN_CACHE=0
   [ -f "$f" ] || return 1
   idcol="$(team_board_col id)"; col="$(team_board_col "$name")"
-  awk -v id="$id" -v val="$val" -v ic="$idcol" -v c="$col" 'BEGIN{FS=OFS="|"}
-    /^\|/ { v=$(ic); gsub(/^[[:space:]]+|[[:space:]]+$/,"",v)
-             if (v==id) { gsub(/^[[:space:]]+|[[:space:]]+$/,"",$(c)); $(c)=" "val" "; print; found=1; next } }
+  # Use the same awk -v value as the original writer (including its escape handling).
+  plan="$(awk -F'|' -v id="$id" -v val="$val" -v ic="$idcol" -v c="$col" -v name="$name" "$_TEAM_BOARD_TIME_AWK"'
+    {
+      bt_scan()
+      if (bt_row(bt_trim($(ic))) && bt_trim($(ic))==id && ic==bt_col["id"] && c==bt_col[name] &&
+          (NF==bt_width || (bt_last_cell() && NF==bt_width-1)) && val !~ /[|\n]/ &&
+          bt_trim($(c))!=bt_trim(" "val" ")) marks=marks " " FNR
+    }
+    END {
+      if (marks!="" && bt_writable()) printf "%d %d%s\n", (bt_last_cell() ? 0 : bt_head), bt_width-(bt_last_cell() ? 1 : 0), marks
+    }' "$f")" || return 1
+  if [ -n "$plan" ]; then
+    read -r head tc marks <<< "$plan"
+    at="$(team_timestamp)" || return 1
+  fi
+  awk -v id="$id" -v val="$val" -v ic="$idcol" -v c="$col" -v head="$head" -v tc="$tc" -v marks="$marks" -v at="$at" "$_TEAM_BOARD_TIME_AWK"'
+    BEGIN { FS=OFS="|"; n=split(marks, rows, " "); for (i=1; i<=n; i++) changed[rows[i]]=1 }
+    head && FNR==head { print bt_append($0, " Teamsmith Updated UTC "); next }
+    head && FNR==head+1 { print bt_append($0, "---"); next }
+    /^\|/ && bt_trim($(ic))==id {
+      $(c)=" "val" "; found=1
+      if (FNR in changed) {
+        if (NF==tc) { print bt_append($0, " "at" "); next }
+        $(tc)=" "at" "
+      }
+    }
     { print }
     END { exit(found ? 0 : 1) }
   ' "$f" > "$f.tmp" || { rm -f "$f.tmp"; return 1; }
   mv "$f.tmp" "$f" || { rm -f "$f.tmp"; return 1; }
-  team_scan_invalidate board   # M50：写完再读（同进程）必须读到新行
-  return 0
 }
 
 team_board_write() { # <id> <status> → 状态列（board set 的写口）
@@ -5953,7 +6047,15 @@ team_board_assign() { # <id> <agent> → 0=改了一行；1=拒绝（不落盘�
 }
 
 team_board_add() { # <id> <title> <agent> <branch> <deps> [allow-dup:0|1]
-  local f="$TEAM_DOCS_ABS/BOARD.md"
+  local f="$TEAM_DOCS_ABS/BOARD.md" key
+  key="$(team_board_lock_key "$f")" || return 1
+  team_with_lock "$key" team_board_add_locked "$f" "$@" || return 1
+  team_scan_invalidate board
+}
+
+team_board_add_locked() {
+  local f="$1"; shift
+  local TEAM_SCAN_CACHE=0
   [ -f "$f" ] || return 1
   # M48：同 ID 的第二行先拒绝（与 board set 的「未知 id 不写」同风格：拒绝时一个字节都不写）。
   # 历史遗留的共用 ID 保留，但**新增**重复必须显式说清楚（--allow-dup 并落一条审计）。
@@ -5975,7 +6077,7 @@ team_board_add() { # <id> <title> <agent> <branch> <deps> [allow-dup:0|1]
   # 与文件现有列数对齐：额外的列填 -（这样加了自定义列也不会错位）
   local ncols idcol taskcol agentcol branchcol depscol stcol cells=() i
   # 列数取「任务表表头行」的列数（文件里可能还有别的表，取最后一行会数错）
-  ncols="$(awk 'BEGIN{FS="|"} /^\|/ { v=$2; gsub(/^[ \t]+|[ \t]+$/,"",v); if (v=="ID") { print NF; exit } }' "$f")"
+  ncols="$(awk 'BEGIN{FS="|"} /^\|/ { v=$2; gsub(/^[ \t]+|[ \t]+$/,"",v); if (v=="ID") { print NF; exit } }' "$f")" || return 1
   [ -n "$ncols" ] || ncols=8
   idcol="$(team_board_col id)"; taskcol="$(team_board_col task)"; agentcol="$(team_board_col agent)"
   branchcol="$(team_board_col branch)"; depscol="$(team_board_col deps)"; stcol="$(team_board_col status)"
@@ -5987,18 +6089,47 @@ team_board_add() { # <id> <title> <agent> <branch> <deps> [allow-dup:0|1]
   for ((i=1;i<ncols-1;i++)); do row="$row${cells[$i]:- }|"; done
   # 插到「任务表」的最后一行之后（模板末尾还有别的表：直接 append 会跑到别的表里去）
   local hdr last
-  hdr="$(awk 'BEGIN{FS="|"} /^\|/ { v=$'"$idcol"'; gsub(/^[ \t]+|[ \t]+$/,"",v); if (v=="ID") { print NR; exit } }' "$f")"
+  hdr="$(awk 'BEGIN{FS="|"} /^\|/ { v=$'"$idcol"'; gsub(/^[ \t]+|[ \t]+$/,"",v); if (v=="ID") { print NR; exit } }' "$f")" || return 1
   if [ -n "$hdr" ]; then
-    last="$(awk -v start="$hdr" 'NR>=start { if ($0 ~ /^\|/) last=NR; else if (last) exit } END{print last}' "$f")"
+    last="$(awk -v start="$hdr" 'NR>=start { if ($0 ~ /^\|/) last=NR; else if (last) exit } END{print last}' "$f")" || return 1
   else
-    last="$(awk '/^\|/ { last=NR } END{print last}' "$f")"
+    last="$(awk '/^\|/ { last=NR } END{print last}' "$f")" || return 1
   fi
   if [ -n "$last" ]; then
-    awk -v at="$last" -v row="$row" 'NR==at { print; print row; next } { print }' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+    local plan stamp='' head=0 tc=0
+    plan="$(awk -F'|' -v last="$last" -v row="$row" -v ic="$idcol" -v tc="$taskcol" -v ac="$agentcol" \
+      -v bc="$branchcol" -v dc="$depscol" -v sc="$stcol" -v native_width="$ncols" "$_TEAM_BOARD_TIME_AWK"'
+      { bt_scan() }
+      END {
+        if (!bt_writable() || last!=bt_end || row ~ /\n/ || ic!=bt_col["id"] || tc!=bt_col["task"] ||
+            ac!=bt_col["agent"] || bc!=bt_col["branch"] || dc!=bt_col["deps"] || sc!=bt_col["status"]) exit
+        n=split(row, cells, FS)
+        if (n==native_width && bt_task_id(bt_trim(cells[ic])) && (n==bt_width || (bt_last_cell() && n==bt_width-1))) {
+          if (!bt_last_cell()) printf "%d 0\n", bt_head
+          else printf "0 %d\n", (n==bt_width ? bt_col["time"] : 0)
+        }
+      }' "$f")" || return 1
+    if [ -n "$plan" ]; then
+      read -r head tc <<< "$plan"
+      stamp="$(team_timestamp)" || return 1
+    fi
+    awk -v last="$last" -v row="$row" -v head="$head" -v tc="$tc" -v stamp="$stamp" "$_TEAM_BOARD_TIME_AWK"'
+      BEGIN {
+        FS=OFS="|"
+        if (stamp!="") {
+          if (!tc) row=bt_append(row, " "stamp" ")
+          else { n=split(row, cells, FS); cells[tc]=" "stamp" "; row=cells[1]; for(i=2;i<=n;i++) row=row OFS cells[i] }
+        }
+      }
+      head && FNR==head { $0=bt_append($0, " Teamsmith Updated UTC ") }
+      head && FNR==head+1 { $0=bt_append($0, "---") }
+      { print; if (FNR==last) print row }
+    ' "$f" > "$f.tmp" || { rm -f "$f.tmp"; return 1; }
   else
-    printf '%s\n' "$row" >> "$f"
+    # Preserve the original append bytes even when a legacy board has no pipe lines.
+    { cat "$f" && printf '%s\n' "$row"; } > "$f.tmp" || { rm -f "$f.tmp"; return 1; }
   fi
-  team_scan_invalidate board   # M50：写完再读（同进程）必须读到新行
+  mv "$f.tmp" "$f" || { rm -f "$f.tmp"; return 1; }
   # 显式允许的重复：审计里留一条（谁在什么时候往同一个 ID 加了第二行、当时几行）
   if [ "$dup_prev" = "1" ]; then
     local dupline; dupline="$(team_board_duplicate_ids | grep -F "$1 ×" | head -1 || true)"   # 留：无匹配=0，负数也是答案

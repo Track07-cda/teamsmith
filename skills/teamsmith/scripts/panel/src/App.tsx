@@ -14,14 +14,16 @@ import { writeSync } from 'node:fs'
 import { Box, Text, useApp, useCursor, useInput } from 'ink'
 import { effectiveSetting, settingLabel, isSecondsSetting, settingTiming, limitsTokens, limitFields, limitsValue, withLimitsTokens } from './project-settings.js'
 import type { SettingsPage, LimitsDraft } from './types.js'
-import { settingsRecordDetails, layout, resolveFocus, focusRefOf, focusRow, rowKey, settingsRowFocusable, settingsViewRows, boardFocusRef, rowSourceOf } from './layout.js'
-import type { LayoutInput, SettingsRow } from './layout.js'
+import { settingsRecordDetails, layout, projectBoard, resolveFocus, focusRefOf, focusRow, rowKey, settingsRowFocusable, settingsViewRows, boardFocusRef, rowSourceOf } from './layout.js'
+import type { BoardProjection, LayoutInput, SettingsRow } from './layout.js'
 import { clockOf } from './format.js'
 import { fill, stringsFor, type Strings } from './strings/index.js'
 import { composeKey, cpLength, cursorView, insertAt, intake, killSpan, moveCursor, popUndo, pushKill, pushUndo, receiptLine, resetKillDirection, ringEntry, type ComposeMode, type ComposeView, type KillRing, type Receipt, type UndoSnapshot } from './compose.js'
 import type { Settings } from './settings.js'
 import type {
   Action,
+  BoardRow,
+  LaneWindow,
   DetailWindow,
   DetailSource,
   FocusRef,
@@ -47,6 +49,17 @@ const TRAY_TL = '╭'
 const TRAY_TR = '╮'
 const TRAY_H = '─'
 const TRAY_V = '│'
+const EMPTY_BOARD: BoardRow[] = []
+
+function sameBoardRef(a: FocusRef | null | undefined, b: FocusRef): boolean {
+  return a?.lane === b.lane && a.id === b.id && (a.nth ?? 0) === (b.nth ?? 0)
+}
+
+/** Clamp the old window, then move it only as far as needed to show the card. */
+function boardWindowStart(index: number, offset: number, span: number, count: number): number {
+  const start = Math.max(0, Math.min(offset, count - span))
+  return Math.max(index - span + 1, Math.min(index, start))
+}
 
 /** The focusable row of the view as the App walks it (headings are skipped). */
 type SettingsFocusRow = Exclude<SettingsRow, { kind: 'group' }>
@@ -364,8 +377,9 @@ export function App({
   const targetsRef = useRef<{ row: number; hit: { start: number; end: number; action: Action } }[]>([])
   const overlayIndexRef = useRef(0)
   const focusRef = useRef<FocusRef | null>(null)
-  const laneOffsetRef = useRef<Record<string, number>>({})
-  const lanesRef = useRef<{ lane: string; offset: number; visible: number; count: number }[]>([])
+  const lanesRef = useRef<LaneWindow[]>([])
+  const boardProjectionRef = useRef<BoardProjection | null>(null)
+  const renderedBoardRef = useRef<BoardProjection | null>(null)
   /** The work page's board rows in the order the last frame drew them (P20/B5). */
   const boardOrderRef = useRef<FocusRef[]>([])
   const detailRef = useRef<DetailWindow | null>(null)
@@ -394,7 +408,6 @@ export function App({
    */
   const choiceDangerRef = useRef<{ key: string; value: string } | null>(null)
   focusRef.current = focus
-  laneOffsetRef.current = laneOffset
   detailIdRef.current = detailId
   detailIndexRef.current = detailIndex
   detailScrollRef.current = detailScroll
@@ -407,11 +420,6 @@ export function App({
   const stringsRef = useRef(strings)
   stringsRef.current = strings
   overlayIndexRef.current = overlayIndex
-
-  useEffect(() => {
-    dataRef.current = frame
-    setData(frame)
-  }, [frame])
 
   const saveSettings = useCallback(
     (next: Settings) => {
@@ -876,8 +884,13 @@ export function App({
     [activityPinned, api, goPage, saveSettings],
   )
 
-  /** The board's rows as the last assembly saw them (the kanban moves over these). */
-  const boardRows = useCallback(() => dataRef.current.blocks?.board?.rows ?? [], [])
+  const kanbanFor = useCallback((rows = EMPTY_BOARD) => {
+    const cached = boardProjectionRef.current
+    if (cached?.rows === rows) return cached
+    const projected = projectBoard(rows)
+    boardProjectionRef.current = projected
+    return projected
+  }, [])
 
   /**
    * P123: the effective fold of one lane, exactly as the layout resolves it (explicit fold wins,
@@ -899,8 +912,7 @@ export function App({
   const toggleLaneFold = useCallback(
     (lane: string) => {
       const cur = settingsRef.current
-      const rows = boardRows()
-      const empty = !rows.some((r) => r.state === lane)
+      const empty = !renderedBoardRef.current?.lanes.get(lane)?.length
       const next: Settings = { ...cur }
       if (laneFoldedNow(lane, empty)) {
         next.boardFold = cur.boardFold.filter((l) => l !== lane)
@@ -911,61 +923,45 @@ export function App({
       }
       saveSettings(next)
     },
-    [boardRows, laneFoldedNow, saveSettings],
+    [laneFoldedNow, saveSettings],
   )
 
   const moveFocus = useCallback(
     (laneDelta: number, cardDelta: number) => {
-      const rows = boardRows()
-      const current = resolveFocus(rows, focusRef.current)
+      const board = renderedBoardRef.current
+      if (!board) return
+      const current = resolveFocus(board, focusRef.current)
       if (!current) return
       if (laneDelta !== 0) {
-        // ←/→: the neighbouring lane's first card (empty lanes are stepped over). The target lane's
-        // window is pushed to show it, so an offset the wheel left behind cannot hide the focus.
-        const lanes = ['todo', 'wip', 'review', 'done', 'blocked', 'dropped']
+        // Step to the next nonempty lane's first displayed card, resetting only its own window.
+        const lanes = [...board.lanes.keys()]
         let i = lanes.indexOf(current.lane)
         for (let step = 0; step < lanes.length; step++) {
           i = (i + laneDelta + lanes.length) % lanes.length
-          const card = rows.find((r) => r.state === lanes[i])
+          const card = board.lanes.get(lanes[i])?.[0]
           if (card) {
-            setFocus(focusRefOf(rows, card))
+            setFocus(focusRefOf(board, card))
             setLaneOffset((prev) => ({ ...prev, [lanes[i]]: 0 }))
             return
           }
         }
         return
       }
-      // ↑/↓: the next/previous **row** of the current lane. M48: a lookup by id stopped dead on the
-      // first of two rows sharing an id, so the second was unreachable — the walk is positional now
-      // (the resolved row object), and every drawn card is exactly one step.
-      const row = focusRow(rows, current)
-      if (!row) return
-      // P123: while the focused lane is folded its one line draws at the top of its column, so a
-      // card move would be an invisible state change (the cursor would leave the only drawn row).
-      // The keys no-op; `c` first, or `←`/`→` to another lane, brings the cards back.
-      if (laneFoldedNow(current.lane, !rows.some((r) => r.state === current.lane))) return
-      const inLane = rows.filter((r) => r.state === current.lane)
-      const idx = inLane.indexOf(row)
-      const next = idx < 0 ? undefined : inLane[idx + cardDelta]
+      const inLane = board.lanes.get(current.lane)
+      const row = focusRow(board.rows, current)
+      // A folded lane is one visible line; stepping inside it would be invisible (P123).
+      if (!row || !inLane || laneFoldedNow(current.lane, !inLane.length)) return
+      const index = inLane.indexOf(row) + cardDelta
+      const next = inLane[index]
       if (!next || next === row) return
-      setFocus(focusRefOf(rows, next))
-      // Scrolling the lane's window is the layout's own follow-the-focus rule; the wheel keeps its
-      // own offset, so push that offset along when the focus walks past the window's edge.
+      setFocus(focusRefOf(board, next))
       const win = lanesRef.current.find((w) => w.lane === current.lane)
-      if (win && win.visible > 0) {
-        const target = inLane.indexOf(next)
-        const start = Math.max(
-          0,
-          Math.min(
-            Math.max(0, win.count - win.visible),
-            win.offset +
-              (target < win.offset ? target - win.offset : target >= win.offset + win.visible ? target - win.offset - win.visible + 1 : 0),
-          ),
-        )
+      if (win?.visible) {
+        const start = boardWindowStart(index, win.offset, win.visible, win.count)
         setLaneOffset((prev) => ({ ...prev, [current.lane]: start }))
       }
     },
-    [boardRows, laneFoldedNow],
+    [laneFoldedNow],
   )
 
   /**
@@ -1006,6 +1002,14 @@ export function App({
     setDetailSource(source)
     setDetailId(id)
   }, [])
+
+  const openBoardFocused = useCallback(() => {
+    const board = renderedBoardRef.current
+    const focus = focusRef.current
+    if (!board || (focus && !boardFocusRef(focus))) return
+    const row = resolveFocus(board, focus)
+    if (row) openDetail(row.id)
+  }, [openDetail])
 
   /** Enter on the work page: open the focused row (or the first drawn one, when it left the board).
    * The page-wide order carries each row's block scope, and the scope picks the reader's source. */
@@ -1828,21 +1832,13 @@ export function App({
             setReplyScroll(0)
           }
           return
-        case 'open-focused': {
-          // One action kind, two pages: the kanban resolves its lane/card focus, the work page the
-          // drawn row order (P20/B5).
-          if (pageRef.current === 2) {
-            openWorkFocused()
-            return
-          }
-          // A preview row's ref (lane = a preview block's scope) is not a kanban card: no cursor is
-          // drawn for it and Enter opens nothing; a step re-anchors to the board (P249).
-          const focus = focusRef.current
-          if (focus && !boardFocusRef(focus)) return
-          const current = resolveFocus(boardRows(), focus)
-          if (current) openDetail(current.id)
+        case 'open-focused':
+          if (pageRef.current === 2) openWorkFocused()
+          else if (action.row) {
+            setFocus(action.row)
+            openDetail(action.row.id)
+          } else openBoardFocused()
           return
-        }
         case 'lane-move':
           moveFocus(action.delta, 0)
           return
@@ -1901,7 +1897,7 @@ export function App({
           return
       }
     },
-    [boardRows, chooseChoiceOption, closeChoicePicker, closeSettingsView, collapse, cyclePref, goPage, moveBoardFocus, moveChoicePicker, moveDetailTab, moveFocus, moveSettingsFocus, openCompose, openDetail, openSettingsRow, openSettingsView, openWorkFocused, runAction, scrollDetail, scrollLane, scrollSettings, toggleLaneFold, updateScroll],
+    [chooseChoiceOption, closeChoicePicker, closeSettingsView, collapse, cyclePref, goPage, moveBoardFocus, moveChoicePicker, moveDetailTab, moveFocus, moveSettingsFocus, openBoardFocused, openCompose, openDetail, openSettingsRow, openSettingsView, openWorkFocused, runAction, scrollDetail, scrollLane, scrollSettings, toggleLaneFold, updateScroll],
   )
 
   const effectiveActivity = activityPinned ? data.activity : settings.activity
@@ -1996,8 +1992,10 @@ export function App({
     // at process start. The live clock is NOT fed through here: it patches row 0 after the memo
     // (below), so the per-second tick never re-runs the full layout (measured: routing `now`
     // through layout() pushed an idle console to ~1.1% of one core — over the red line).
+    const kanban = page === 4 ? kanbanFor(data.blocks?.board?.rows) : undefined
     const themed = layout({
       ...data,
+      kanban,
       width: Math.max(1, size.columns || data.width),
       activity: effectiveActivity,
       strings,
@@ -2007,6 +2005,7 @@ export function App({
     const pad = size.rows > 0 ? Math.max(0, size.rows - input.length - hint.length - bottom.length - busyRow - themed.rows.length) : 0
     targetsRef.current = themed.targets
     lanesRef.current = themed.lanes ?? []
+    renderedBoardRef.current = kanban ?? null
     boardOrderRef.current = themed.boardOrder ?? []
     detailRef.current = themed.detail ?? null
     settingsWindowRef.current = themed.settings ?? null
@@ -2026,6 +2025,7 @@ export function App({
     scroll,
     focus,
     laneOffset,
+    kanbanFor,
     settings.boardFold,
     settings.boardShow,
     settings.boardEmptyFold,
@@ -2074,18 +2074,55 @@ export function App({
   setCursorPosition(cursorPos)
   api.setComposeCursor(cursorPos ?? null)
 
+  const retainBoardFocus = useCallback((rows?: BoardRow[]) => {
+    const previous = renderedBoardRef.current
+    const before = focusRef.current
+    if (!previous || previous.rows === rows || (before && !boardFocusRef(before))) return
+    const selected = resolveFocus(previous, before)
+    if (!selected) return
+    const board = kanbanFor(rows)
+    const retained = resolveFocus(board, selected)
+    if (!retained) return
+    // Remember the original occurrence, including the implicit cursor on the board's first card.
+    if (!sameBoardRef(before ?? resolveFocus(board), retained)) setFocus(retained)
+
+    const oldRow = focusRow(previous.rows, selected)
+    const row = focusRow(board.rows, selected)
+    const lane = board.lanes.get(retained.lane)
+    const win = lanesRef.current.find((w) => w.lane === retained.lane)
+    if (!oldRow || !row || !lane || !win?.span || laneFoldedNow(retained.lane, !lane.length)) return
+    const index = lane.indexOf(row)
+    if (index < 0 || (retained.lane === selected.lane && index === previous.lanes.get(selected.lane)?.indexOf(oldRow))) return
+    // Only a card visible in the old frame is owed a place in the new wide window. In particular,
+    // a wheel offset that deliberately hid it stays in force. Grouped panes already follow focus.
+    if (!targetsRef.current.some(({ hit }) => hit.action.kind === 'open-focused' && sameBoardRef(hit.action.row, selected))) return
+    const span = win.span
+    setLaneOffset((prev) => {
+      const natural = Math.max(0, Math.min(prev[retained.lane] ?? 0, lane.length - span))
+      const start = boardWindowStart(index, natural, span, lane.length)
+      return start === natural ? prev : { ...prev, [retained.lane]: start }
+    })
+  }, [kanbanFor, laneFoldedNow])
+
+  const adoptFrame = useCallback((fresh: FrameInput, fromProps = false) => {
+    const last = dataRef.current
+    dataRef.current = fresh
+    // The reader also delivers asynchronously through `frame` props (already checked by main).
+    // Preserve the last drawn selection before either path replaces its data.
+    if (!fromProps && (last === fresh || frameSignature(last) === frameSignature(fresh))) return
+    if (pageRef.current === 4) retainBoardFocus(fresh.blocks?.board?.rows)
+    setData(fresh)
+  }, [retainBoardFocus])
+
+  useEffect(() => adoptFrame(frame, true), [adoptFrame, frame])
+
   const refreshData = useCallback(
     (nextScroll = scrollRef.current) => {
-      const fresh = reload()
-      // A refresh that produced the same frame must not repaint: with the block TTLs, most cadences
-      // change nothing at all, and an idle console should cost ~0% (the red line is <1% of one core).
-      const same = frameSignature(dataRef.current) === frameSignature(fresh)
-      dataRef.current = fresh
+      adoptFrame(reload())
       scrollRef.current = nextScroll
-      if (!same) setData(fresh)
       setScroll(nextScroll)
     },
-    [reload],
+    [adoptFrame, reload],
   )
 
   useEffect(() => {
@@ -2494,7 +2531,8 @@ export function App({
       if (page === 4 && input === 'c' && !detailId) {
         // P123: `c` folds/unfolds the lane the focus names. The detail view and the settings
         // surfaces own the page region and never reach here (their branches returned above).
-        const current = resolveFocus(boardRows(), focusRef.current)
+        const board = renderedBoardRef.current
+        const current = board && resolveFocus(board, focusRef.current)
         if (current) toggleLaneFold(current.lane)
         return
       }
@@ -2511,11 +2549,7 @@ export function App({
         return
       }
       if (page === 4 && key.return) {
-        // Same rule as the click path: a preview row's ref neither draws nor opens on the kanban.
-        const focus = focusRef.current
-        if (focus && !boardFocusRef(focus)) return
-        const current = resolveFocus(boardRows(), focus)
-        if (current) openDetail(current.id)
+        openBoardFocused()
         return
       }
       if (page === 2 && key.return) {

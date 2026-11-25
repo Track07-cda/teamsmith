@@ -77,6 +77,17 @@ def drain(fd, seconds, deadline=None, until_frame=False):
     return buf
 
 
+def frame_text(frame):
+    text = frame.decode("utf-8", errors="replace")
+    text = re.sub(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\\\)", "", text)
+    return re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", text)
+
+
+def save_frame(path, frame):
+    with open(path, "w", encoding="utf-8") as dump:
+        dump.write(frame_text(frame))
+
+
 def frame_reading(data, previous=b""):
     frame = last_complete_frame(data)
     source = "current"
@@ -85,10 +96,7 @@ def frame_reading(data, previous=b""):
         source = "previous"
     if not frame:
         return f"no complete frame (current_bytes={len(data)}, previous_bytes={len(previous)})"
-    text = frame.decode("utf-8", errors="replace")
-    text = re.sub(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\\\)", "", text)
-    text = re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", text)
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    lines = [line.strip() for line in frame_text(frame).splitlines() if line.strip()]
     # Include the first rows, where the list's newest entry or the overlay appears.
     summary = " | ".join(lines[:8])[:1000]
     return f"{source} complete frame (current_bytes={len(data)}): {summary!r}"
@@ -143,6 +151,10 @@ def main():
     ap.add_argument("--wheel-ready", default="", help="wait for this text in a complete frame before scrolling")
     ap.add_argument("--wheel-barrier", default="", help="overlay text used to acknowledge the wheel input")
     ap.add_argument("--out2", default="", help="the bytes written after the wheel injection")
+    ap.add_argument("--wheel-before-frame", default="", help="the same PTY's complete frame before scrolling")
+    ap.add_argument("--wheel-after-frame", default="", help="a complete redraw after scrolling")
+    ap.add_argument("--board-open", nargs=3, metavar=("CARD", "NEXT", "BODY"),
+                    help="move to NEXT, click CARD to focus, click again to check BODY, then return")
     ap.add_argument("--send", default="", help="comma-separated key sequence before the dump (enter,esc,q,tab,up,down,left,right, or raw text)")
     ap.add_argument("--send2", default="", help="second key sequence; its bytes go to --out2 after --send")
     ap.add_argument("--cols", type=int, default=100)
@@ -225,6 +237,32 @@ def main():
 
     out = boot + drain(master, 0.5, deadline)
 
+    if args.board_open:
+        card, other, body = args.board_open
+
+        def focused(text, id_):
+            return text.count("›") == 1 and re.search(r"›\s*·\s*" + re.escape(id_) + r"\b", text)
+
+        # Only the press is actionable; send one SGR event per observed frame.
+        click = f"\x1b[<0;{args.click_col};{args.click_row}M".encode()
+        checkpoints = [
+            ("ready", None, f"focus {card}, {other} visible", lambda text: focused(text, card) and other in text),
+            ("other", named["down"], f"focus {other}", lambda text: focused(text, other)),
+            ("focus", click, f"focus {card}, no detail", lambda text: focused(text, card) and body not in text),
+            ("detail", click, f"detail body {body}", lambda text: body in text),
+            ("back", named["esc"], f"focus {card} again", lambda text: focused(text, card) and body not in text),
+        ]
+        for step, event, expected, predicate in checkpoints:
+            if event is not None:
+                os.write(master, event)
+            observed, error = wait_frame(master, proc, deadline, f"board-{step}", expected,
+                                         out if event is None else b"", lambda frame: predicate(frame_text(frame)),
+                                         previous=out if event is not None else b"")
+            out = observed if event is None else out + observed
+            if error:
+                return fail(error, out)
+            save_frame(f"{args.out}.{step}.txt", last_complete_frame(observed))
+
     toggled = b""
     if args.toggle_mouse_off:
         # `,` opens the overlay on the language row; three Downs reach the mouse row; Enter toggles.
@@ -248,7 +286,7 @@ def main():
         time.sleep(0.3)
         out += drain(master, 0.5, deadline)
 
-    if not args.no_click:
+    if not args.no_click and not args.board_open:
         os.write(master, f"\x1b[<0;{args.click_col};{args.click_row}M".encode())
         time.sleep(0.3)
         os.write(master, f"\x1b[<0;{args.click_col};{args.click_row}m".encode())
@@ -274,6 +312,11 @@ def main():
                 return fail(error, observed, after)
             out = observed
             after = b""
+        if args.wheel_before_frame:
+            frame = last_complete_frame(out + after)
+            if not frame:
+                return fail("no complete frame before the wheel", out + after, after)
+            save_frame(args.wheel_before_frame, frame)
         button = 65 if args.wheel == "down" else 64
         event = f"\x1b[<{button};{args.click_col};{args.click_row}M".encode()
         if args.wheel_barrier:
@@ -311,6 +354,11 @@ def main():
         after += drain(master, 1.2, deadline)
         if time.monotonic() >= deadline:
             return fail("deadline expired while collecting wheel output", out + after, after)
+        if args.wheel_after_frame:
+            frame = last_complete_frame(after)
+            if not frame:
+                return fail("no complete redraw after the wheel", out + after, after)
+            save_frame(args.wheel_after_frame, frame)
 
     if args.keys:
         for ch in args.keys:
