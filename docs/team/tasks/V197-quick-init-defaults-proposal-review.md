@@ -20,3 +20,9 @@ branch: task/V197-quick-init-defaults-proposal-review
 4. **定点验收可执行。** 核 `task-model-routing.sh --select init` 的依赖、函数与现有 `init-legacy-proceeds` 检查。判断能否复用同组现有场景而不重跑 §61 或其它组。样本要通过实际无参数入口读取默认、预览同写入、部分显式与全显式、真实无写入及重入。独立对照应仅重用最短的默认用例/命令，不为一个错误路径再次跑整组；现有检查不要因为扩范围而再叠一轮。指出最少必要的修正。用户个人设置和现有项目均不动。
 
 只在固定检出做一次 `openspec validate quick-init-model-defaults --type change --strict --no-interactive`（`PATH="$HOME/.bun/bin:$PATH" TMPDIR=/var/tmp CI=1 OPENSPEC_TELEMETRY=0`），方案的规格引用回执引用 P499，报告保存实际命令/退出值。报告改动用 `git diff --check`、暂存用 `git diff --cached --check`。不运行 `team init`、`bootstrap`、模型、实际测试选段、构建或完整测试；不要把结构通过当成行为通过。报告本地小提交（含 V197、`Agent: dev3`），不推送、合并、归档或接手实现。
+
+## 同一审阅只复看返修
+
+冻结 `f93ac89c2ae6bd23b1797a30254387b6edc33c8b`，干净检出 `/var/tmp/p499-review-f93ac89c.TRBOme`。保留原报告，在同一会话、分支追加最终结论。只看 `git diff 315ca5d3..f93ac89c -- openspec/changes/quick-init-model-defaults` 与原 P499 任务书定点项；三处必修、三条直接相关验收建议及返修引入的冲突需要关闭。因 OpenSpec 修改要求需要整段带上，重点比新增三条要求与正式规格的实际差异，确认未动版本、插件、适配器、现有配置发现、迁移和现场授权边界。路径的不同效果看 `init`、`bootstrap`、预览所实际使用位置；不要把正常配置链接当错，也不要求额外检查。默认读取为零的范围仅模型选择；现有两参数的交接不新增入口。确认最短的坏/恢复复用一个 CLI 场景即可。
+
+仅对新固定提交补单 change strict，引用作者已有 spec-refs/报告检查，不重复探索、行为、选段或全量。报告追加 ACCEPTED 或具体未闭合点及同一候选依据，必要 Git 差异检查照旧。
