@@ -21,3 +21,7 @@ branch: task/V198-quick-init-defaults-behaviour-verify
 以专用 runner 通过 `TEAM_GATES='bash /var/tmp/<你的证据根>/<runner>' bash skills/teamsmith/scripts/team review P500 --dir /var/tmp/p500-review-1a994aa5.fmLZnu --branch 1a994aa545a3314dbf5b593eeeb303aa4b515c8a` 保存原生记录。有长命令用后台启动后结束回合，完成通知再收结果。中央只允许该工具写 `docs/team/reviews/P500.md` 与 `P500-verify.log`；其他主检出只读。若有实际失败，保留原件，点名原因及未完成项，不更改产品、测试或自行重跑。记录通过/失败/跳过和耗时是实测，不推断全套通过。
 
 本人分支只提交 `docs/team/reports/V198-dev3.md`，先写可否接受、实际观察或阻塞，附正式记录、输出与证据根，Git 差异检查实际回执。小步本地提交（V198 / `Agent: dev3`）；不勾任务、不合并、推送、发布或归档。验收通过后由同一人仅在 PM 给的新固定合并检出做同一性和必要短核对；原件保留至 PM 确认。
+
+## 合并后只做短核对
+
+`da29a98b` 的候选 100/0 与坏/恢复证据已接受，中央原件已另存。固定合并版 `ef2e832c5eb746d0044ec553372df50c7d8b168b`，干净检出 `/var/tmp/p500-merged-ef2e832.EIU3Nq`。由同一 V198 会话追加报告。先比较 `32818d23..1a994aa5` 的 19 个候选变化文件在合并版逐字节相同；仅任取同样一个带私有 Pi 设置的新测试仓库，实际运行一次合并版 `team bootstrap --print`，查看四个值、无待补说明、无任何项目文件/链接变化。本轮不运行正式 init/bootstrap、全组、旧配置演练或反例。用 `TEAM_GATES` 指向这份短 runner、`team review P500 --dir /var/tmp/p500-merged-ef2e832.EIU3Nq --branch ef2e832c5eb746d0044ec553372df50c7d8b168b` 得原生记录，按后台作业规范交付。保留本轮证据，未核对不报通过；不部署、不改真实环境。

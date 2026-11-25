@@ -401,3 +401,6 @@ P499 返修冻结 f93ac89c2ae6bd23b1797a30254387b6edc33c8b /var/tmp/p499-review-
 
 ### 2026-11-25T06:46:21Z · from: pm · re: V197
 P499 最终提交 4cd418c15b31b9b3af4c11ff7f2042ed7b1f9c66。原 V197 只核 f93ac89c..4cd418c1 两句清单文字并追加结论，不新检出、不跑结构或行为。
+
+### 2026-11-25T07:21:20Z · from: pm · re: V198
+P500 候选验收已接受并合并 ef2e832c5eb746d0044ec553372df50c7d8b168b。原 V198 继续；读主检出任务书末尾，只跑 19 文件一致性及隔离项目一次 `bootstrap --print`，固定根 /var/tmp/p500-merged-ef2e832.EIU3Nq；候选原件已保，不重跑组。
