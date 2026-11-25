@@ -21,7 +21,7 @@
 | `openspec/changes/archive/2026-11-25-quick-init-model-defaults/**`、`openspec/specs/init-skill/spec.md`、`docs/team/reports/A17-dev2.md` | PM（A17 已接受） | 四条要求已核同步，五份工件原样移动；归档临时写权收回 |
 | `docs/team/reports/P501-dev2.md` | PM（P501 探索已接受） | 核实逐行时间来源的报告 |
 | `docs/team/reports/{P502-dev2,V199-dev3,P503-dev-bob,V200-dev3}.md`、`docs/team/reviews/{P503.md,P503-verify.log}` | PM（实施及合并短核已接受） | 方案、产品与验证临时写权撤回，不混入暂停的标签候选 |
-| `openspec/changes/pulse-board-recent-first/**` → `openspec/changes/archive/*-pulse-board-recent-first/**`、`openspec/specs/{panel,board-and-status}/spec.md`、`docs/team/reports/A18-dev2.md` | agent:dev2（A18 临时） | 只原生归档已通过的三个要求、六份规划及本人报告；不改其它工作或产品 |
+| `openspec/changes/archive/2026-11-25-pulse-board-recent-first/**`、`openspec/specs/{panel,board-and-status}/spec.md`、`docs/team/reports/A18-dev2.md` | PM（A18 已接受） | 三条要求与实际五份工件已核对，收回归档临时写权 |
 | `docs/team/reviews/P461.md`、`docs/team/reviews/P461-verify.log` | PM（V167已接受关闭） | verifier实际记录已收存；仅PM接受与结案，不再授权新执行 |
 | `docs/team/reviews/P465.md`、`docs/team/reviews/P465-verify.log` | PM（V170已接受关闭） | 两阶段实际记录由dev3执行，已接受merged证据；临时工具写权收回 |
 | `docs/team/reviews/P466.md`、`docs/team/reviews/P466-verify.log` | PM（V171已接受关闭） | 两阶段实际记录由verify执行，已接受merged证据；临时工具写权收回 |

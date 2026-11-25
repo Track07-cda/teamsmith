@@ -985,12 +985,33 @@ under 60 columns the card keeps its one-line form (state glyph, id, title), the 
 drops, and the title SHALL truncate last. The focused card SHALL be
 marked by a cursor glyph and the `selected` tone — never by color alone — and SHALL be tracked by **row
 identity**: the entry id together with the row's occurrence among the rows carrying that id, in BOARD.md order.
-A refresh that reorders or extends the board, a lane change, and a click MUST all keep addressing the same row,
-two rows that share an id are two separate stops with the cursor on exactly one of them, and when the focused row
-leaves the board the first row carrying its id SHALL take the focus — when no row carries the id, the lane's
-first card SHALL take the focus. A lane holding more cards than its visible window SHALL scroll (`↑`/`↓` past the
-edge, and the wheel over the lane) and SHALL mark each edge that hides cards with their count. The lane windows
-of the `done` and `dropped` history lanes SHALL anchor on the newest cards.
+In the interactive board page, each lane SHALL show rows with a valid task-table update time first, in descending
+time order. Equal times SHALL keep BOARD.md order. Rows without time follow: in `todo`, `wip`, `review` and
+`blocked` they keep BOARD.md order; in `done` and `dropped` they run from the file's tail towards its head. The
+history lanes' initial windows SHALL start at the head of that display order, not reproduce the old bottom-aligned
+offset. With no recorded times the first history window therefore starts with the rows from the old tail, without
+ascribing a time to those rows. In a grouped layout this is the order within each lane, not a new page-wide
+sort or a separate scroll window per lane. The update time MUST NOT be printed on the card.
+
+Rendering, the visible window, arrow navigation and pointer targets SHALL agree on that order at both layout widths.
+Clicking an unfocused card SHALL focus its original row; clicking a focused card SHALL open that frame's row,
+not a position reinterpreted after sorting. Enter SHALL open the selected original row. A refresh that changes
+the display order or the row's state SHALL keep addressing the same original row while its identity is still
+available. Two rows with one id remain separate stops with the cursor on exactly one; the occurrence is counted
+before sorting, not in the lane. The identity does not distinguish identical ids that a manual edit exchanges
+or inserts before an existing occurrence. When the focused occurrence is no longer addressable, the first row
+carrying its id SHALL take the focus; when none carries it, the old lane's first displayed card SHALL take the
+focus, or the first card of the first nonempty lane if that lane emptied. A lane holding more cards than its
+window SHALL scroll (`↑`/`↓` past the edge, and the wheel over the lane) and SHALL mark each edge that hides cards
+with its count. In the side-by-side layout, the wheel MAY deliberately scroll a lane away from its selection as
+before. Reordering SHALL adjust a window only when it would move a previously visible selection out of view,
+without resetting unrelated windows or undoing that deliberate scroll. The narrow grouped layout SHALL keep
+one page window and continue keeping its focused row in that window when scrolling and navigating. Folding,
+detail discovery and work-page actions keep their existing contracts.
+
+The display order SHALL NOT mutate the source rows, their counts, or the work page's order or history
+selection. The optional row time belongs to the existing internal board block; public `--json` keeps its
+existing output shape and `--print` keeps its existing order and window even when given page 4.
 
 #### Scenario: Six lanes at the reference geometry
 
@@ -1028,34 +1049,44 @@ of the `done` and `dropped` history lanes SHALL anchor on the newest cards.
 
 #### Scenario: Narrow terminals degrade to one grouped column
 
-- **GIVEN** the same fixture
-- **WHEN** the board page renders one bounded frame at 99 columns and one at 59 columns
-- **THEN** both frames stack the states in a single column in the legend order, and the 59-column frame renders
-  one line per card — state glyph, id and title — with no agent or phase field and with the id present
+- **GIVEN** a fixture whose board does not fit in one page window and contains a lane with timed rows
+- **WHEN** the board page renders at 99 and at 59 columns and arrow navigation moves past the window edge
+- **THEN** both widths stack the states in the legend order with the same within-lane order as in the wider
+  layout; the single window follows the selected row, and at 59 columns the card remains one line with
+  state glyph, id and title, without agent or phase
 
 #### Scenario: The focus survives a refresh
 
-- **GIVEN** the console on the board page in a fixture pane with the focus on entry `M9`
-- **WHEN** a refresh rebuilds the board block with `M9`'s row at a different position, and later with `M9` gone
-- **THEN** the focus marker still sits on `M9` after the first refresh, and lands on that lane's first card
-  after the second
+- **GIVEN** `M9` was added before `M8` with distinct times, the two tasks are in one lane, and the console
+  shows `M8` above the selected `M9`
+- **WHEN** `M9` actually changes agent later, the board page refreshes, a still later operation repeats
+  `M8`'s current agent, and the page refreshes again
+- **THEN** `M9` moves above `M8` in both grouped and side-by-side layouts, stays selected as the same row,
+  and the repeated operation changes neither `M8`'s time nor the displayed order
+- **AND** moving from `M9` to `M8` with `↓` and pressing Enter opens `M8`'s file; after returning, focusing
+  and opening `M9` by its drawn card opens `M9`'s distinct file
+- **AND** when the selected id later leaves the board, the same lane's first displayed card receives focus
 
 #### Scenario: A long lane scrolls and counts what it hides
 
-- **GIVEN** a fixture board whose `done` lane holds 20 cards and a lane window of six cards
+- **GIVEN** a side-by-side board with `done` and `dropped` lanes that each exceed their visible window,
+  each containing two rows with distinct times in the opposite file order and several rows with no valid time
 - **WHEN** the board page first renders, and the focus then moves down past the window's edge
-- **THEN** the first frame shows the newest six `done` cards with a `+14` style count at the bottom edge, the
-  window scrolls with the focus, and wheel-down over the lane scrolls it without moving the focus
+- **THEN** each history lane's first window starts with its two timed rows, newest first, followed by
+  the undated rows from the file's tail, with an edge count for what is hidden below
+- **AND** the window scrolls with the focus, and wheel-down over an unfolded history lane exposes
+  previously hidden older rows without changing the selected row
 
 #### Scenario: Two rows with one id are two stops
 
-- **GIVEN** a board whose drawn rows are `M39` (title "first duplicate", agent `dev1`), `M39` (title "second
-  duplicate", agent `dev2`) and `M48`, and the console on the board page
-- **WHEN** the page renders, `↓` is pressed twice, `r` refreshes, then `enter` opens the detail and `esc` returns
-- **THEN** exactly one row carries the cursor glyph at every step; the first `↓` stops on the second `M39` row
-  (the same id, the next occurrence — not a frozen cursor), the second `↓` reaches `M48`, `↑` twice returns to
-  the first `M39` row, and after `r`, `enter` and `esc` the cursor is still on the second `M39` row, with the
-  `M39` detail view opened in between
+- **GIVEN** two `M39` rows in one active lane with different titles and equal valid times in a task table,
+  followed by an undated `M48` and a row with an invalid time
+- **WHEN** the page renders, the user moves from the first `M39` row to the second, and an agent assignment
+  really changes only that selected row before a refresh
+- **THEN** the two `M39` rows were distinct stops in file order and the undated rows follow them in file
+  order; after refresh the second `M39` moves above the first and is still the only row with the cursor
+- **AND** `↓` can reach the first `M39` and continue to `M48`; pressing Enter on the second `M39` and
+  returning keeps that row selected by its title even though the detail files are shared by id
 
 ### Requirement: A focused card opens a read-only markdown detail view
 
