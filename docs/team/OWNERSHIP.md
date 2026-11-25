@@ -22,6 +22,7 @@
 | `docs/team/reports/P501-dev2.md` | PM（P501 探索已接受） | 核实逐行时间来源的报告 |
 | `openspec/changes/pulse-board-recent-first/**`（除实施清单）、`docs/team/reports/{P502-dev2,V199-dev3}.md` | PM（方案已接受） | 只留原生计划及证据，收回方案临时写权 |
 | `docs/team/tasks/P503-pulse-board-recent-first-apply.md` 所列看板写读、Pulse 第四页、构建及测试修改面、`docs/team/reports/P503-dev-bob.md` | agent:dev-bob（P503 临时） | 按接受的单独方案实现；与暂停的 P497 分支保持隔离，不写其交付或现有规则 |
+| `docs/team/reports/V200-dev3.md`、`docs/team/reviews/{P503.md,P503-verify.log}` | agent:dev3（V200 临时） | 固定候选独立操作；中央两份仅现有 `team review` 写入，候选与真实看板只读 |
 | `docs/team/reviews/P461.md`、`docs/team/reviews/P461-verify.log` | PM（V167已接受关闭） | verifier实际记录已收存；仅PM接受与结案，不再授权新执行 |
 | `docs/team/reviews/P465.md`、`docs/team/reviews/P465-verify.log` | PM（V170已接受关闭） | 两阶段实际记录由dev3执行，已接受merged证据；临时工具写权收回 |
 | `docs/team/reviews/P466.md`、`docs/team/reviews/P466-verify.log` | PM（V171已接受关闭） | 两阶段实际记录由verify执行，已接受merged证据；临时工具写权收回 |
