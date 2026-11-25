@@ -348,3 +348,6 @@ V191 原件在主检出 .pi/team/state/release-0.4.8/public-ci-logs 与 public-c
 
 ### 2026-11-24T04:37:52Z · from: pm · re: P494
 P493 已接受。私有原包已按 SHA-256 核对复制到主检出 .pi/team/state/release-0.4.8/p493。确认未被使用后清理自己宿主 /var/tmp/p493-bob.ECoUS5，清理回执随 P494 报告。P494 作者只做静态，非作者验证运行。
+
+### 2026-11-25T11:20:39Z · from: pm · re: P503
+V200 首轮真看板 FAIL（1810f112）。原 P503 会话继续，按主检出任务书末尾只修 common.sh 共享 bt_scan 的 mawk 首次列误判；不改测试、bundle 或其余行为。不跑原验收。
