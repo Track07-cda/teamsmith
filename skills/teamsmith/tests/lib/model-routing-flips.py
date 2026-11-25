@@ -88,7 +88,7 @@ elif name == 'init-legacy-proceeds':
     # 8 条红里没有它，且改前改后一模一样）。把解析器也一并短路，才真的是「闸门被拆掉」：
     # plain / force / bootstrap 三条都按覆盖式迁移红出来。
     function(lib / 'cmd-project.sh', 'team_init_model_policy_resolve',
-             '  printf \'%s\\n\' vendor/light; printf \'%s\\n\' vendor/pm:high # P238_FLIP_init-legacy-proceeds-policy')
+             '  printf \'%s\\n\' routine=vendor/light; printf \'%s\\n\' vendor/pm:high # P238_FLIP_init-legacy-proceeds-policy')
 elif name == 'template-retired-key':
     # P235 red side: the shipped template carries the retired worker key again.
     replace(root / 'skills/teamsmith/templates/config.sh.tmpl',

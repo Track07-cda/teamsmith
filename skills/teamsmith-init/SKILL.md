@@ -1,6 +1,6 @@
 ---
 name: teamsmith-init
-description: teamsmith-init is the new-project entry point of the teamsmith toolkit — organize multiple agents into a team, set up an agent collaboration protocol, and bootstrap this skill into a new project. It walks the questions to settle with the user first (dependencies, session and roster, the task-category mapping and the independent PM model, gates, VCS mode, install command, and the project's ROADMAP/OWNERSHIP/AGENTS.md red lines), then runs the one command that writes `.pi/team/config.sh` + the `docs/team/` skeleton + the `AGENTS.md` protocol section and starts the pulse, and finally hands day-to-day operation to the `teamsmith` skill. Use when the user wants to bootstrap teamsmith into a new repository, set up a brand-new team, organize multiple agents into a team, or set up an agent collaboration protocol where none exists yet.
+description: teamsmith-init is the new-project entry point of the teamsmith toolkit — organize multiple agents into a team, set up an agent collaboration protocol, and bootstrap this skill into a new project. It walks the questions to settle with the user first (dependencies, session and roster, gates, VCS mode, install command, and the project's ROADMAP/OWNERSHIP/AGENTS.md red lines), then runs the one command that writes `.pi/team/config.sh` + the `docs/team/` skeleton + the `AGENTS.md` protocol section and starts the pulse, and finally hands day-to-day operation to the `teamsmith` skill. Use when the user wants to bootstrap teamsmith into a new repository, set up a brand-new team, organize multiple agents into a team, or set up an agent collaboration protocol where none exists yet.
 license: MIT
 metadata:
   version: "0.4.8"
@@ -28,16 +28,16 @@ Alternatives to npm: `pi install …` at a released tag, `./install.sh` from a c
 1. **Preconditions.** A git repository with at least one commit, `tmux` in the room, and `team doctor` green
    (magic-context, OpenSpec, a JS runtime for the console, the shell — bash ≥ 4, which the npm entry checks).
    Fix what doctor reports *before* writing config — a missing dependency is a hard failure later, not a warning now.
-2. **Identity, a minimal starting roster, and two explicit models.** The tmux session name (`TEAM_SESSION` must
-   match the session the PM lives in — the pulse and every notification is delivered inside it), the PM window
-   name, the roster (`TEAM_AGENTS`) and `TEAM_MODEL_LIMITS` when a provider quota is tight. Models are **task
-   categories, not seats**: settle a `--task-models 'category=provider/model …'` map (routine for bounded ordinary
-   implementation, analysis for complex planning/judgment, verify for independent adversarial review — categories
-   are the project's own words) and a separate `--pm-model`; there is no default model to fall back on. **Start the
-   roster minimal — one `dev` plus one `verify`**; `team add-agent <name> --register` grows the roster and
+2. **Identity, a minimal starting roster, and models.** The tmux session name (`TEAM_SESSION` must match the
+   session the PM lives in — the pulse and every notification is delivered inside it), the PM window name,
+   the roster (`TEAM_AGENTS`) and `TEAM_MODEL_LIMITS` when a provider quota is tight. **Start the roster minimal —
+   one `dev` plus one `verify`**; `team add-agent <name> --register` grows the roster and
    `team teardown --agent <name> --register` shrinks it (both audited; a bare `team add-agent <name>` refuses a
    seat the roster does not carry), so the roster follows the board. (A PM-only start is legal too — `team doctor`
-   warns only.)
+   warns only.) The default model saved in Pi user settings is saved separately for the PM and for the initial
+   task categories: `routine` for ordinary work, `analysis` for planning or judgment, `verify` for independent review.
+   `--task-models` replaces the full map; `--pm-model` replaces only the PM model. Ask only for a model input not
+   already provided, and only when the user wants an override or Pi has no usable default for it.
 3. **Gates, install command, VCS mode, patrol rhythm.** `TEAM_GATES` is the command that decides pass/fail during
    every verification (it must run from a clean checkout of a task branch); `TEAM_INSTALL_CMD` runs after a worktree
    is created; `TEAM_VCS` is a label for the wording (`local` = no forge, the PM squash-merges locally);
@@ -57,14 +57,12 @@ Alternatives to npm: `pi install …` at a released tag, `./install.sh` from a c
 
    ```bash
    bash <teamsmith>/scripts/team bootstrap --print      # the plan: detect / config / docs / skills / worktrees / pulse
-   bash <teamsmith>/scripts/team bootstrap --agents "dev verify" \
-        --task-models 'routine=vendor/light analysis=vendor/strong verify=vendor/strong' --pm-model 'vendor/strong:high'
+   bash <teamsmith>/scripts/team bootstrap --agents "dev verify"
    bash <teamsmith>/scripts/team doctor                  # re-check after bootstrap
    openspec init --tools pi                              # required dependency: spec root + the five phase commands
    ```
 
-   Fresh projects must pass both model inputs (`--task-models`, `--pm-model`); a valid v2 policy is kept on
-   re-entry. A **legacy** config (retired TEAM_AGENT_MODELS / TEAM_DEFAULT_MODEL) is refused before any
+   A valid model policy is kept on re-entry. A **legacy** config (retired TEAM_AGENT_MODELS / TEAM_DEFAULT_MODEL) is refused before any
    install/ledger/worktree/pulse work and migrates on the next `team up` (the startup transaction derives the
    category pairs from the old keys, prints them, backs the file up and re-enters itself) or through the explicit
    `team config upgrade-models --task-models '<map>' --pm-model '<model>'` transaction; `bootstrap`, `init --force`

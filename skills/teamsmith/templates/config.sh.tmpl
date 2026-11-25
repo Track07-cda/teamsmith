@@ -13,7 +13,8 @@ TEAM_PM_WINDOW="{{PM_WINDOW}}"        # window running the PM; notifications are
 
 # ---- roster, task model policy and concurrency ----
 TEAM_AGENTS="{{AGENTS}}"
-# Task category → model policy (required; `team init --task-models '<map>'` writes it).
+# Task category → model policy (required; `team init` writes it using the default model saved in Pi user settings
+# unless `--task-models '<map>'` supplies the full map).
 # Categories are the project's own words: "routine=provider/light analysis=provider/strong verify=provider/strong".
 # A new dispatch picks its model from the brief's `category:` line; a same-task recovery keeps the model/SID it was
 # already assigned, even if the map later drops that category. One category: team config set-task-model <category> <model>;

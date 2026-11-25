@@ -11,10 +11,14 @@ report back concisely. Do not invent scope beyond them.
 ## 1. Bring the project up
 
 ```bash
-bash {{SKILL_DIR}}/scripts/team bootstrap --agents "<dev verify>" --session "<session>" \
-     --task-models '<routine=provider/light analysis=provider/strong verify=provider/strong>' --pm-model '<provider/strong>'   # idempotent
+bash {{SKILL_DIR}}/scripts/team bootstrap --agents "<dev verify>" --session "<session>" --print
+bash {{SKILL_DIR}}/scripts/team bootstrap --agents "<dev verify>" --session "<session>"
 bash {{SKILL_DIR}}/scripts/team doctor
 ```
+
+Use the default model saved in Pi user settings for `routine`, `analysis`, `verify`, and PM. Use `--task-models`
+to replace the full map or `--pm-model` to replace only the PM model. Ask only for an input not already provided,
+and only if the user wants an override or the preview shows it is missing.
 
 `bootstrap` does all of this idempotently:
 

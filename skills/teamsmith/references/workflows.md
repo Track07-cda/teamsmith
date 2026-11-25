@@ -34,9 +34,9 @@ verified one by one, archived only after the last one landed.
 ## A. Assembling a team in a new project
 
 New-project setup lives in the **`teamsmith-init`** skill: it carries the ordered question checklist (dependencies,
-session/roster and the task-category map + independent PM model, gates, VCS mode, install command, the project's
-ROADMAP/OWNERSHIP/AGENTS.md red lines), the `team bootstrap` command (fresh projects must pass
-`--task-models` and `--pm-model`; a legacy config is refused and migrates on the next `team up` (the startup
+session/roster, gates, VCS mode, install command, the project's ROADMAP/OWNERSHIP/AGENTS.md red lines),
+first-run model options, and the `team bootstrap` command (uses the default model saved in Pi user settings unless
+inputs are supplied explicitly; a legacy config is refused and migrates on the next `team up` (the startup
 transaction) or through the explicit `team config upgrade-models`) and
 the handoff back here. Read `skills/teamsmith-init/SKILL.md` before running anything; the command's own behaviour is in
 [../../teamsmith-init/references/bootstrap.md](../../teamsmith-init/references/bootstrap.md).

@@ -162,6 +162,7 @@ team_detect_install_cmd() {
 team_cmd_bootstrap() {
   local agents="" session="" pmwin="" with_pulse=1 print_only=0
   local task_models="" pm_model="" task_models_set=0 pm_model_set=0
+  team_init_config_paths_check bootstrap "$TEAM_MAIN_ROOT/.pi/team/config.sh" || return $?
   while [ $# -gt 0 ]; do
     case "$1" in
       --agents) agents="${2:?}"; shift 2 ;;
@@ -171,9 +172,7 @@ team_cmd_bootstrap() {
       --task-models) task_models="${2:?}"; task_models_set=1; shift 2 ;;
       --pm-model) pm_model="${2:?}"; pm_model_set=1; shift 2 ;;
       --model|--default-model)
-        team_err "bootstrap: $1 已退休：项目不再有席位/全局默认模型"
-        team_dim "  新项目：$TEAM_CLI bootstrap --agents 'dev verify' --task-models '<category=provider/model …>' --pm-model '<provider/model>'"
-        team_dim "  已有项目升级：$TEAM_CLI config upgrade-models --task-models '<完整映射>' --pm-model '<独立模型>' --dry-run"
+        team_init_retired_model_flag bootstrap "$1" "$TEAM_CONFIG"
         return 2 ;;
       --no-pulse) with_pulse=0; shift ;;
       --no-watchdog) with_pulse=0; shift ;;   # 旧旗标（别名期保留到 v2.0.0）：与 --no-pulse 同义
@@ -198,16 +197,20 @@ team_cmd_bootstrap() {
       return 1
     fi
   fi
-  local _policy _prc=0
-  if [ "$print_only" = "1" ] && [ "$had_config" != "1" ]; then
-    # 新鲜项目的 --print：只预览，模型输入必填这件事写在计划里（真跑才拒，且拒绝在任何写入之前）
-    :
-  else
-    _policy="$(team_init_model_policy_resolve "${TEAM_CONFIG:-}" "$task_models" "$pm_model" "$task_models_set" "$pm_model_set" bootstrap)" || _prc=$?
-    [ "$_prc" -eq 0 ] || return "$_prc"
-    task_models="$(printf '%s\n' "$_policy" | sed -n '1p')"
-    pm_model="$(printf '%s\n' "$_policy" | sed -n '2p')"
-  fi
+  local _policy _prc=0 first_run=0
+  if [ "$had_config" = 0 ]; then first_run=1; fi
+  _policy="$(team_init_model_policy_resolve "$TEAM_CONFIG" "$task_models" "$pm_model" "$task_models_set" "$pm_model_set" bootstrap "$first_run")" || _prc=$?
+  case "$_prc" in
+    5)
+      if [ "$print_only" = 0 ]; then
+        team_err "$(team_init_missing_model_text bootstrap "$task_models" "$pm_model" 1)"
+        return 4
+      fi ;;
+    0) ;;
+    *) return "$_prc" ;;
+  esac
+  # Command substitution drops trailing newlines; leave room for an empty second line in an incomplete plan.
+  { IFS= read -r task_models; IFS= read -r pm_model; } <<< "$_policy"$'\n'
   # 已有配置（不带 --force）原样保留：显式输入与现有策略不同就拒绝，不静默忽略。
   if [ "$had_config" = "1" ] && [ -n "$task_models" ]; then
     local cur_map cur_pm
@@ -277,22 +280,24 @@ team_cmd_bootstrap() {
   if [ -n "$rename_note" ]; then printf '      %s\n' "$rename_note"; fi
   if [ -n "$rename_cmd" ]; then printf '      %s\n' "改名：$rename_cmd"; fi
   printf '  名册        %s\n' "$agents"
-  printf '  模型策略    %s ［独立 PM：%s］\n' "${task_models:-<新鲜项目必填：--task-models '<category=provider/model …>'>}" "${pm_model:-<必填：--pm-model '<provider/model>'>}"
+  printf '  任务类型模型  %s\n' "${task_models:-缺少 --task-models}"
+  printf '  PM 模型      %s\n' "${pm_model:-缺少 --pm-model}"
   printf '  版本控制    %s ｜ 门禁 %s ｜ 安装 %s\n' "$vcs" "${gates:-<无>}" "${install_cmd:-<无>}"
   printf '  巡检        %s\n' "$([ "$with_pulse" = "1" ] && echo "tmux 窗口 $(team_slug "$session" 2>/dev/null || echo ''):$(team_pulse_window)（同 session）" || echo '跳过')"
 
   if [ "$print_only" = "1" ]; then
     printf '\n（--print：只看计划，什么都没改）\n'
     printf '计划步骤：\n'
-    local plan_models
-    if [ -n "$task_models" ] && [ -n "$pm_model" ]; then
-      plan_models="--task-models $(printf '%q' "$task_models") --pm-model $(printf '%q' "$pm_model")"
+    if [ "$had_config" = 1 ]; then
+      printf '  1. 保留项目配置：%s\n' "$TEAM_CONFIG"
+    elif [ "$_prc" = 5 ]; then
+      printf '  1. 初始化待补齐模型\n     %s\n' "$(team_init_missing_model_text bootstrap "$task_models" "$pm_model" 1)"
     else
-      plan_models="--task-models '<category=provider/model …>' --pm-model '<provider/model>'（新鲜项目必填）"
+      printf '  1. %s init --session %q --pm-window %q --agents %q --vcs %q --task-models %q --pm-model %q\n' \
+        "$TEAM_CLI" "$session" "$pmwin" "$agents" "$vcs" "$task_models" "$pm_model"
     fi
-    printf '  1. %s init --session %s --pm-window %s --agents "%s" --vcs %s %s\n' "$TEAM_CLI" "$session" "$pmwin" "$agents" "$vcs" "$plan_models"
     printf '  1b. 把 skill 与 /team 扩展装进项目 %s 与 %s（%s init 的同一实现；已存在则 skip —— 老项目的升级路径）\n' '.pi/skills/' '.pi/extensions/' "$TEAM_CLI"
-    printf '  2. 把门禁/安装命令写进 .pi/team/config.sh（%s / %s）\n' "${gates:-无}" "${install_cmd:-无}"
+    printf '  2. 把门禁/安装命令写进 %s（%s / %s）\n' "${TEAM_CONFIG:-.pi/team/config.sh}" "${gates:-无}" "${install_cmd:-无}"
     printf '  3. 为每个 agent 建 worktree：%s\n' "$(printf 'add-agent %s; ' $agents)"
     printf '  4. %s pulse up（巡检窗口：同 session 的 %s 窗口跑 monitor + 定时巡检）\n' "$TEAM_CLI" "$(team_pulse_window)"
     printf '  5. 打印下一步清单\n'

@@ -755,12 +755,18 @@ if has sid-readers; then
   check monitor-missing-A-unavailable contains "$OUT" 'committed SID unavailable'
 fi
 if has init; then
-  # P235 · S3 的前门：新鲜 init/bootstrap 必须拿显式类别映射 + 独立 PM 模型；旧配置在任何写入之前拒绝。
-  # 所有命令走真 CLI（不是 source 库），每条都记命令/rc/输出到 init-cmds.log。
-  iclean=(env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_ROOT_SOURCE -u TEAM_ROOT_WAS -u TEAM_PROJECT \
-    -u TEAM_SESSION -u TEAM_SESSION_FROM -u TEAM_PM_WINDOW -u TEAM_AGENTS -u TEAM_DOCS_DIR \
-    -u TEAM_WORKTREES_DIR -u TEAM_GATES -u TEAM_VCS -u TEAM_CONFIG -u TEAM_CONFIG_FILE \
-    -u TEAM_STATE_DIR -u TEAM_SKILL_DIR -u TEAM_PULSE_WINDOW -u TEAM_MODEL_RETIRED_ENV)
+  # Real CLI, private user settings, no inherited team/tmux/Pi identity and no Pi executable.
+  i_pi="$TMP/init-pi"; i_settings="$i_pi/settings.json"; i_bin="$TMP/init-bin"
+  mkdir -p "$i_pi" "$i_bin" || exit 3
+  i_js="$(team_js_runner)"
+  if [ -z "$i_js" ] || ! ln -s "$i_js" "$i_bin/${i_js##*/}"; then
+    printf 'ERROR init fixture: could not link an existing JS runner\n' >&2; exit 3
+  fi
+  i_path="$i_bin:/usr/bin:/bin"
+  if PATH="$i_path" type -P pi >/dev/null; then
+    printf 'ERROR init fixture: Pi is on the controlled PATH\n' >&2; exit 3
+  fi
+  iclean=(env -i HOME="$HOME" TMPDIR="$TMP" PI_CODING_AGENT_DIR="$i_pi" PATH="$i_path")
   i_new_repo() { # <dir>
     rm -rf "$1"; mkdir -p "$1"
     ( cd "$1" && git init -q -b main && git config user.name fixture && git config user.email fixture@example.invalid \
@@ -773,42 +779,82 @@ if has init; then
     return 0
   }
   i_hash_tree() { find "$1" -type f -print0 2>/dev/null | sort -z | xargs -0 -r sha256sum | sha256sum | cut -d' ' -f1; }
+  i_fresh_unchanged() { # <repo> <hash before> [extra paths expected absent]
+    local repo="$1" before="$2" path; shift 2
+    [ "$(i_hash_tree "$repo")" = "$before" ] || return 1
+    for path in .pi docs .worktrees AGENTS.md "$@"; do
+      [ ! -e "$repo/$path" ] && [ ! -L "$repo/$path" ] || return 1
+    done
+  }
+  i_policy_matches() { # <config list JSON> <expected map> <expected PM>
+    python3 -c 'import json, sys
+policy = json.loads(sys.argv[1])["models"]["policy"]
+assert policy["categories"] == [dict(category=k, model=v) for k, v in (p.split("=", 1) for p in sys.argv[2].split())], policy
+assert policy["pm"] == sys.argv[3], policy' "$@"
+  }
 
-  # ① 显式输入逐字渲染，绝不猜：配置里只有新策略键 + 用户给的值
+  # ① 两个显式值原样保留；只给一个时，另一项取 Pi 默认值。
+  printf '%s\n' '{"defaultProvider":"vendor","defaultModel":"personal"}' > "$i_settings"
+  i_personal_map='routine=vendor/personal analysis=vendor/personal verify=vendor/personal'
+  i_explicit_map='maintenance=vendor/light audit=vendor/audit:high'
   i_fresh="$TMP/init-fresh"; i_new_repo "$i_fresh"
   i_run "$i_fresh" init --no-skills --session init-fresh --agents 'dev verify' --vcs local --gates true \
-        --task-models 'maintenance=vendor/light audit=vendor/audit:high' --pm-model 'vendor/pm:max'
+        --task-models "$i_explicit_map" --pm-model 'vendor/pm:max'
   check init-fresh-rc eq "$RC" 0
-  check init-fresh-map eq "$(grep -c "^TEAM_TASK_MODELS='maintenance=vendor/light audit=vendor/audit:high'\$" "$i_fresh/.pi/team/config.sh" || true)" 1
+  check init-fresh-map grep -Fxq "TEAM_TASK_MODELS='$i_explicit_map'" "$i_fresh/.pi/team/config.sh"
   check init-fresh-pm eq "$(grep -c "^TEAM_PM_MODEL='vendor/pm:max'\$" "$i_fresh/.pi/team/config.sh" || true)" 1
   check init-fresh-no-retired-key bash -c '! grep -qE "^(export )?TEAM_(DEFAULT_MODEL|AGENT_MODELS)=" "$1"' _ "$i_fresh/.pi/team/config.sh"
   check init-fresh-ledger test -f "$i_fresh/docs/team/BOARD.md"
   check init-fresh-protocol grep -qF '<!-- teamsmith:begin -->' "$i_fresh/AGENTS.md"
   i_run "$i_fresh" config list --json
-  check init-fresh-machine python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["models"]["policy"]["categories"]==[{"category":"maintenance","model":"vendor/light"},{"category":"audit","model":"vendor/audit:high"}], d["models"]["policy"]["categories"]; assert d["models"]["policy"]["pm"]=="vendor/pm:max"' "$OUT"
+  check init-fresh-machine i_policy_matches "$OUT" "$i_explicit_map" 'vendor/pm:max'
+  i_pm_only="$TMP/init-fresh-pm"; i_new_repo "$i_pm_only"
+  i_run "$i_pm_only" init --no-skills --pm-model 'vendor/pm:max'
+  check init-fresh-pm-only-rc eq "$RC" 0
+  i_run "$i_pm_only" config list --json
+  check init-fresh-pm-only-policy i_policy_matches "$OUT" "$i_personal_map" 'vendor/pm:max'
+  i_map_only="$TMP/init-fresh-map"; i_new_repo "$i_map_only"
+  i_run "$i_map_only" init --no-skills --task-models "$i_explicit_map"
+  check init-fresh-map-only-rc eq "$RC" 0
+  i_run "$i_map_only" config list --json
+  check init-fresh-map-only-policy i_policy_matches "$OUT" "$i_explicit_map" 'vendor/personal'
 
-  # ② 缺输入在配置/账本/安装/工作树/state 任何写入之前拒绝；退休旗标给修正路线
+  # ② 无 Pi 默认值：正式命令零写入；带一个显式值的预览只标另一项缺失。
+  rm "$i_settings"
   i_missing="$TMP/init-missing"; i_new_repo "$i_missing"
+  i_missing0="$(i_hash_tree "$i_missing")"
   i_run "$i_missing" init --no-skills --session init-missing --agents dev --vcs local --gates true
-  check init-missing-refused bash -c '[ "$1" != 0 ]' _ "$RC"
-  check init-missing-route contains "$OUT" '--task-models'
-  check init-missing-no-side-effect bash -c '! test -e "$1/.pi/team/config.sh" && ! test -e "$1/.pi/team/state" && ! test -e "$1/.pi/skills" && ! test -e "$1/docs/team" && ! test -e "$1/AGENTS.md"' _ "$i_missing"
-  i_run "$i_missing" bootstrap --no-pulse --agents dev
-  check init-bootstrap-missing-refused bash -c '[ "$1" != 0 ]' _ "$RC"
-  check init-bootstrap-missing-no-side-effect bash -c '! test -e "$1/.pi/team/config.sh" && ! test -e "$1/.pi/team/state" && ! test -e "$1/.pi/skills" && ! test -e "$1/docs/team" && ! test -e "$1/.worktrees"' _ "$i_missing"
-  i_run "$i_missing" init --no-skills --session init-missing --agents dev --model p/old
+  check init-missing-refused eq "$RC" 4
+  check init-missing-route contains "$OUT" 'team init 加上 --task-models 和 --pm-model'
+  check init-missing-no-side-effect i_fresh_unchanged "$i_missing" "$i_missing0"
+  i_run "$i_missing" bootstrap --no-pulse --agents dev --pm-model vendor/pm
+  check init-bootstrap-missing-refused eq "$RC" 4
+  check init-bootstrap-missing-route contains "$OUT" 'team bootstrap 加上 --task-models'
+  check init-bootstrap-missing-only-task-map bash -c '[[ "$1" != *--pm-model* && "$1" != *upgrade-models* ]]' _ "$OUT"
+  check init-bootstrap-missing-no-side-effect i_fresh_unchanged "$i_missing" "$i_missing0"
+  i_run "$i_missing" bootstrap --no-pulse --print --pm-model vendor/pm
+  check init-bootstrap-missing-preview-rc eq "$RC" 0
+  check init-bootstrap-missing-preview-values bash -c '[[ "$1" == *"缺少 --task-models"* && "$1" == *vendor/pm* && "$1" != *--pm-model* ]]' _ "$OUT"
+  check init-bootstrap-missing-preview-pending bash -c '[[ "$1" == *"1. 初始化待补齐模型"* && "$1" == *"team bootstrap 加上 --task-models"* && "$1" != *"1. team init "* ]]' _ "$OUT"
+  check init-bootstrap-missing-preview-no-side-effect i_fresh_unchanged "$i_missing" "$i_missing0"
+  i_run "$i_missing" init --no-skills --default-model p/old
   check init-retired-flag eq "$RC" 2
-  check init-retired-route contains "$OUT" 'upgrade-models'
+  check init-retired-route bash -c '[[ "$1" == *"新项目：运行 team init"* && "$1" != *upgrade-models* ]]' _ "$OUT"
 
-  # ③ 非法输入拒绝且不落盘
+  # ③ 有默认值也不掩盖非法输入，预览同样拒绝。
+  printf '%s\n' '{"defaultProvider":"vendor","defaultModel":"changed"}' > "$i_settings"
   i_bad="$TMP/init-bad"; i_new_repo "$i_bad"
+  i_bad0="$(i_hash_tree "$i_bad")"
   i_run "$i_bad" init --no-skills --session init-bad --agents dev --task-models 'notamap' --pm-model 'vendor/pm'
   check init-bad-map eq "$RC" 4
   i_run "$i_bad" init --no-skills --session init-bad --agents dev --task-models 'routine=vendor/light' --pm-model 'badshape'
   check init-bad-pm eq "$RC" 4
-  check init-bad-no-config bash -c '! test -e "$1/.pi/team/config.sh"' _ "$i_bad"
+  i_run "$i_bad" bootstrap --no-pulse --print --task-models 'notamap'
+  check init-bad-preview eq "$RC" 4
+  check init-bad-preview-diagnostic bash -c '[[ "$1" == *"bootstrap: --task-models 不合法"* && "$1" != *"计划步骤"* ]]' _ "$OUT"
+  check init-bad-no-config i_fresh_unchanged "$i_bad" "$i_bad0"
 
-  # ④ 合法新策略项目可无输入重入（策略逐字节保留）；显式输入与现有策略不同时必须拒绝而不是静默忽略
+  # ④ 重入不随 Pi 默认值变化；也不把现有项目缺项当作首次设置。
   i_before="$(sha "$i_fresh/.pi/team/config.sh")"
   i_run "$i_fresh" init --no-skills --session init-fresh --agents dev --vcs local
   check init-reentry-rc eq "$RC" 0
@@ -816,6 +862,19 @@ if has init; then
   i_run "$i_fresh" init --no-skills --session init-fresh --agents dev --vcs local --task-models 'routine=other/x' --pm-model 'vendor/pm:max'
   check init-reentry-different-refused eq "$RC" 4
   check init-reentry-different-no-write eq "$(sha "$i_fresh/.pi/team/config.sh")" "$i_before"
+  i_run "$i_fresh" bootstrap --no-pulse --print
+  check init-reentry-preview-rc eq "$RC" 0
+  check init-reentry-preview-retains-config contains "$OUT" "保留项目配置：$i_fresh/.pi/team/config.sh"
+  check init-reentry-preview-no-init-command bash -c '[[ "$1" != *"team init --session"* ]]' _ "$OUT"
+  i_run "$i_fresh" bootstrap --no-pulse
+  check init-reentry-bootstrap-rc eq "$RC" 0
+  check init-reentry-bootstrap-keeps-policy eq "$(sha "$i_fresh/.pi/team/config.sh")" "$i_before"
+  i_incomplete="$TMP/init-incomplete"; i_new_repo "$i_incomplete"; mkdir -p "$i_incomplete/.pi/team"
+  grep -v '^TEAM_PM_MODEL=' "$i_fresh/.pi/team/config.sh" > "$i_incomplete/.pi/team/config.sh"
+  i_incomplete0="$(i_hash_tree "$i_incomplete")"
+  i_run "$i_incomplete" bootstrap --no-pulse
+  check init-existing-incomplete-refused eq "$RC" 4
+  check init-existing-incomplete-no-write eq "$(i_hash_tree "$i_incomplete")" "$i_incomplete0"
 
   # ⑤ 旧配置：init / init --force / bootstrap / bootstrap --print 全在写入之前拒绝；身份与账本哈希不变
   i_legacy="$TMP/init-legacy"; i_new_repo "$i_legacy"
@@ -892,16 +951,44 @@ EOF
   check init-underivable-startup-route contains "$OUT" '路线 ② 启动事务'
   check init-underivable-no-derived-map bash -c '! printf %s "$1" | grep -q "upgrade-models --task-models .dev="' _ "$OUT"
 
-  # ⑥ 新鲜 bootstrap：给输入才写；--print 只读
+  # ⑥ 相同新项目、相同输入：预览只读，正式 bootstrap 准确保存预览里的模型。
+  printf '%s\n' '{"defaultProvider":"vendor","defaultModel":"nested/model"}' > "$i_settings"
   i_boot="$TMP/init-boot"; i_new_repo "$i_boot"
-  i_run "$i_boot" bootstrap --no-pulse --agents dev --task-models 'routine=vendor/light' --pm-model 'vendor/pm:high'
-  check init-bootstrap-fresh-rc eq "$RC" 0
-  check init-bootstrap-fresh-map eq "$(grep -c "^TEAM_TASK_MODELS='routine=vendor/light'\$" "$i_boot/.pi/team/config.sh" || true)" 1
-  check init-bootstrap-fresh-pm eq "$(grep -c "^TEAM_PM_MODEL='vendor/pm:high'\$" "$i_boot/.pi/team/config.sh" || true)" 1
-  i_print="$TMP/init-print"; i_new_repo "$i_print"
-  i_run "$i_print" bootstrap --no-pulse --print
+  i_boot0="$(i_hash_tree "$i_boot")"
+  i_selected="$i_boot/selected-config.sh"
+  i_flags=(--config "$i_selected" --task-models "$i_explicit_map" --pm-model vendor/pm)
+  i_run "$i_boot" init --no-skills "${i_flags[@]}"
+  check init-selected-missing-refused eq "$RC" 4
+  check init-selected-missing-path contains "$OUT" "$i_selected"
+  check init-selected-missing-no-write i_fresh_unchanged "$i_boot" "$i_boot0" selected-config.sh
+  i_run "$i_boot" bootstrap --no-pulse --print "${i_flags[@]}"
+  check init-bootstrap-selected-missing-preview-refused eq "$RC" 4
+  check init-bootstrap-selected-missing-preview-path contains "$OUT" "$i_selected"
+  check init-bootstrap-selected-missing-preview-no-write i_fresh_unchanged "$i_boot" "$i_boot0" selected-config.sh
+  i_run "$i_boot" bootstrap --no-pulse "${i_flags[@]}"
+  check init-bootstrap-selected-missing-refused eq "$RC" 4
+  check init-bootstrap-selected-missing-path contains "$OUT" "$i_selected"
+  check init-bootstrap-selected-missing-no-write i_fresh_unchanged "$i_boot" "$i_boot0" selected-config.sh
+
+  i_run "$i_boot" bootstrap --no-pulse --agents dev --print
   check init-print-rc eq "$RC" 0
-  check init-print-no-writes bash -c '! test -e "$1/.pi/team" && ! test -e "$1/docs/team"' _ "$i_print"
+  i_plan_map="$(printf '%s\n' "$OUT" | sed -n 's/^ *任务类型模型  //p')"
+  i_plan_pm="$(printf '%s\n' "$OUT" | sed -n 's/^ *PM 模型      //p')"
+  check init-print-map eq "$i_plan_map" 'routine=vendor/nested/model analysis=vendor/nested/model verify=vendor/nested/model'
+  check init-print-pm eq "$i_plan_pm" 'vendor/nested/model'
+  check init-print-no-writes i_fresh_unchanged "$i_boot" "$i_boot0"
+  i_run "$i_boot" bootstrap --no-pulse --agents dev
+  check init-bootstrap-fresh-rc eq "$RC" 0
+  check init-bootstrap-fresh-map grep -Fxq "TEAM_TASK_MODELS='$i_plan_map'" "$i_boot/.pi/team/config.sh"
+  check init-bootstrap-fresh-pm grep -Fxq "TEAM_PM_MODEL='$i_plan_pm'" "$i_boot/.pi/team/config.sh"
+
+  # The same command and JSON are used for the verifier's direct contrast with lookup disabled.
+  printf '%s\n' '{"defaultProvider":"vendor","defaultModel":"nested/model","modelThinkingLevels":{"vendor/nested/model":"high"},"defaultThinkingLevel":"low"}' > "$i_settings"
+  i_saved="$TMP/init-saved"; i_new_repo "$i_saved"
+  i_run "$i_saved" init --no-skills
+  check init-saved-rc eq "$RC" 0
+  i_run "$i_saved" config list --json
+  check init-saved-machine i_policy_matches "$OUT" 'routine=vendor/nested/model:high analysis=vendor/nested/model:high verify=vendor/nested/model:high' 'vendor/nested/model:high'
 
   # ⑦ 共享来源 vs 未链接的私有集成树：私有树里的 init/升级不碰保留源与链接；指南点名共享读取与四个门
   i_shared="$TMP/shared-source"; rm -rf "$i_shared"; mkdir -p "$i_shared"

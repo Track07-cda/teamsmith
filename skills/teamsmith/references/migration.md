@@ -200,8 +200,8 @@ one audit line), turns a removed line's inline comment into a standalone one and
 Shapes it cannot locate unambiguously (export/multiline/variable expansion/duplicate keys) are refused with the
 file and line plus the manual-normalization route. `team up --print` writes nothing (it prints the same
 prediction, with the backup path it would use) and `team up --no-migrate` refuses instead of writing, naming the
-manual command. `team init --force`, `bootstrap` and inference are **not** migration routes; a fresh project
-passes `--task-models`/`--pm-model` to `init`/`bootstrap` instead. For the step-by-step upgrade of an existing
+manual command. `team init --force`, `bootstrap` and inference are **not** migration routes. On a fresh project,
+`init` and `bootstrap` use the default model saved in Pi user settings for inputs not supplied explicitly. For the step-by-step upgrade of an existing
 project, including the npm install, the configuration backup and the rollback, see §6.
 
 **How the shape is detected.** Detection is a version table with **one row per migration** — the shape it matches

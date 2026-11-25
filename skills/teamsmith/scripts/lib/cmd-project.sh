@@ -210,31 +210,81 @@ team_config_legacy_model_keys() { # <file> → 每行一个仍在文件里的退
   return 0
 }
 
-# init/bootstrap 的模型输入解析：显式输入 > 文件里的合法新策略（重入）。
-# 两个键都是必填；没有可继承的合法值就拒绝，拒绝发生在任何写入之前。
-# 显式值用与唯一 writer 同一个校验器（team_config_validate_value）验，拒绝时给真路线。
-team_init_model_policy_resolve() { # <cfg> <task_models|''> <pm_model|''> <task_models_set 0|1> <pm_model_set 0|1> <cmd 名>
-  local cfg="${1:-}" in_map="${2:-}" in_pm="${3:-}" map_set="${4:-0}" pm_set="${5:-0}" cmd="${6:-init}"
-  local file_map="" file_pm="" file_map_ok=0 file_pm_ok=0 reason=""
-  if [ -n "$cfg" ] && [ -f "$cfg" ]; then
-    file_map="$(team_config_file_value "$cfg" TEAM_TASK_MODELS 2>/dev/null || true)"
-    file_pm="$(team_config_file_value "$cfg" TEAM_PM_MODEL 2>/dev/null || true)"
-    team_task_map_violation "$file_map" >/dev/null 2>&1 && file_map_ok=1
-    team_config_model_shape_ok "$file_pm" && file_pm_ok=1
+# Discovery stays in team_load_config. For a selected file that cannot be read, its initial
+# fingerprint read already stops the CLI and names the path, before sourcing anything.
+team_init_config_paths_check() { # <cmd> <init target>
+  local cmd="$1" target="$2" selected="${TEAM_CONFIG_FILE:-}" discovered="${TEAM_CONFIG:-}"
+  # With no discovery result no config was sourced, so this is still the caller's selection.
+  if [ -z "$discovered" ] && [ -n "$selected" ]; then
+    team_err "$cmd: 所选配置不可用：$selected"
+    return 4
   fi
+  # Bootstrap with a discovered config will not use the init target.
+  if [ "$cmd" = bootstrap ] && [ -n "$discovered" ]; then return 0; fi
+  if [ -e "$target" ] || [ -L "$target" ]; then
+    if [ ! -f "$target" ] || [ ! -r "$target" ]; then
+      team_err "$cmd: 项目配置不可用，请检查：$target"
+      return 4
+    fi
+    if [ "$cmd" = bootstrap ]; then
+      team_err "bootstrap: 未找到项目配置，但主工作目录已有配置：$target"
+      team_dim "  请在主工作目录运行，或用 --config $(printf '%q' "$target") 指定该配置。" >&2
+      return 4
+    fi
+  fi
+  return 0
+}
+
+team_init_retired_model_flag() { # <cmd> <flag> <existing config or init target>
+  local cmd="$1" flag="$2" cfg="$3" legacy_keys
+  team_err "$cmd: $flag 已退休：项目不再有席位或全局模型设置"
+  if [ ! -f "$cfg" ]; then
+    team_dim "  新项目：运行 $TEAM_CLI $cmd，使用 Pi 用户设置中保存的默认模型；也可用 --task-models 或 --pm-model 覆盖。" >&2
+  else
+    legacy_keys="$(team_config_legacy_model_keys "$cfg")"
+    if [ -n "$legacy_keys" ]; then
+      team_dim "  已有项目升级：$TEAM_CLI config upgrade-models --task-models '<完整映射>' --pm-model '<独立模型>' --dry-run" >&2
+    else
+      team_dim "  已有项目：$TEAM_CLI config set-task-model <category> <model>，或 $TEAM_CLI config set TEAM_PM_MODEL '<独立模型>' --yes。" >&2
+    fi
+  fi
+}
+
+team_init_missing_model_text() { # <cmd> <resolved task map> <resolved PM> <first run 0|1>
+  local cmd="$1" in_map="$2" in_pm="$3" first_run="$4" missing flags
+  if [ -z "$in_map" ] && [ -z "$in_pm" ]; then
+    missing='任务类型模型和 PM 模型'; flags='--task-models 和 --pm-model'
+  elif [ -z "$in_map" ]; then
+    missing='任务类型模型'; flags='--task-models'
+  else
+    missing='PM 模型'; flags='--pm-model'
+  fi
+  if [ "$first_run" = 1 ]; then
+    printf '%s: 缺少%s。无法从 Pi 用户设置取得可用的默认模型。请在 Pi 保存默认模型，或给 %s %s 加上 %s。\n' \
+      "$cmd" "$missing" "$TEAM_CLI" "$cmd" "$flags"
+  else
+    printf '%s: 缺少%s。请给 %s %s 加上 %s。\n' "$cmd" "$missing" "$TEAM_CLI" "$cmd" "$flags"
+  fi
+}
+
+team_init_saved_model_candidates() {
+  local runner
+  runner="$(team_js_runner)"
+  [ -n "$runner" ] || return 0 # No JS runner means there is no saved default available to this command.
+  # An unavailable runner cannot supply a default either; keep its diagnostics out of the plan.
+  "$runner" "$TEAM_SKILL_DIR/scripts/pi-saved-model.mjs" 2>/dev/null
+}
+
+# Output two model lines. Status 5 carries a partial first-run result for the read-only preview.
+team_init_model_policy_resolve() { # <cfg> <task map> <PM> <map set 0|1> <PM set 0|1> <cmd> <first run 0|1>
+  local cfg="$1" in_map="$2" in_pm="$3" map_set="$4" pm_set="$5" cmd="$6" first_run="$7"
+  local reason
   if [ "$map_set" = "1" ]; then
     if ! reason="$(team_config_validate_value TEAM_TASK_MODELS "$in_map")"; then
       team_err "$cmd: --task-models 不合法：$reason"
       team_dim "  形如 'routine=provider/light analysis=provider/strong verify=provider/strong'（类别 [a-z][a-z0-9-]*，模型 provider/model，第一个 / 分 provider）" >&2
       return 4
     fi
-  elif [ "$file_map_ok" = "1" ]; then
-    in_map="$file_map"
-  else
-    team_err "$cmd: 缺少 --task-models（项目类别映射是必填输入；没有默认模型可猜）"
-    team_dim "  新项目：$TEAM_CLI init --task-models '<category=provider/model …>' --pm-model '<provider/model>'
-  已有项目：$TEAM_CLI config set-task-model <category> <model>（或 config set TEAM_TASK_MODELS '<完整映射>' --yes；破坏式升级走 config upgrade-models）" >&2
-    return 4
   fi
   if [ "$pm_set" = "1" ]; then
     if ! reason="$(team_config_validate_value TEAM_PM_MODEL "$in_pm")"; then
@@ -242,15 +292,43 @@ team_init_model_policy_resolve() { # <cfg> <task_models|''> <pm_model|''> <task_
       team_dim "  独立 PM 模型：provider/model（可选 :suffix），例如 provider/strong-model:high" >&2
       return 4
     fi
-  elif [ "$file_pm_ok" = "1" ]; then
-    in_pm="$file_pm"
-  else
-    team_err "$cmd: 缺少 --pm-model（独立 PM 模型是必填输入；PM 不再回落到任何 worker/默认模型）"
-    team_dim "  新项目：$TEAM_CLI init --task-models '<category=provider/model …>' --pm-model '<provider/model>'
-  已有项目：$TEAM_CLI config set TEAM_PM_MODEL '<provider/model>' --yes（破坏式升级走 config upgrade-models）" >&2
-    return 4
+  fi
+
+  if [ -f "$cfg" ]; then
+    if [ "$map_set" = 0 ]; then
+      if ! in_map="$(team_config_file_value "$cfg" TEAM_TASK_MODELS)" ||
+         ! team_task_map_violation "$in_map" >/dev/null; then
+        team_err "$cmd: $cfg 的任务类型模型缺失或不合法。请用 $TEAM_CLI config set TEAM_TASK_MODELS '<完整映射>' --yes 修正。"
+        return 4
+      fi
+    fi
+    if [ "$pm_set" = 0 ]; then
+      if ! in_pm="$(team_config_file_value "$cfg" TEAM_PM_MODEL)" ||
+         ! team_config_model_shape_ok "$in_pm"; then
+        team_err "$cmd: $cfg 的 PM 模型缺失或不合法。请用 $TEAM_CLI config set TEAM_PM_MODEL '<独立模型>' --yes 修正。"
+        return 4
+      fi
+    fi
+  elif [ "$map_set" = 0 ] || [ "$pm_set" = 0 ]; then
+    if [ "$first_run" = 0 ]; then
+      team_err "$(team_init_missing_model_text "$cmd" "$in_map" "$in_pm" 0)"
+      return 4
+    fi
+    local candidates model map
+    if candidates="$(team_init_saved_model_candidates)"; then
+      while IFS= read -r model; do
+        [ -n "$model" ] || continue
+        map="routine=$model analysis=$model verify=$model"
+        if [ "$map_set" = 0 ] && ! team_config_validate_value TEAM_TASK_MODELS "$map" >/dev/null; then continue; fi
+        if [ "$pm_set" = 0 ] && ! team_config_validate_value TEAM_PM_MODEL "$model" >/dev/null; then continue; fi
+        if [ "$map_set" = 0 ]; then in_map="$map"; fi
+        if [ "$pm_set" = 0 ]; then in_pm="$model"; fi
+        break
+      done <<< "$candidates"
+    fi
   fi
   printf '%s\n%s\n' "$in_map" "$in_pm"
+  if [ -z "$in_map" ] || [ -z "$in_pm" ]; then return 5; fi
   return 0
 }
 
@@ -271,6 +349,8 @@ team_init_protocol_skill_dir() { # <install-mode>
 team_cmd_init() {
   local session="" agents="" vcs="" gates="" docs="" pmwin="" force=0 install_mode=""
   local task_models="" pm_model="" task_models_set=0 pm_model_set=0
+  local cfg="$TEAM_MAIN_ROOT/.pi/team/config.sh"
+  team_init_config_paths_check init "$cfg" || return $?
   while [ $# -gt 0 ]; do
     case "$1" in
       --session) session="${2:?}"; shift 2 ;;
@@ -282,9 +362,7 @@ team_cmd_init() {
       --task-models) task_models="${2:?}"; task_models_set=1; shift 2 ;;
       --pm-model) pm_model="${2:?}"; pm_model_set=1; shift 2 ;;
       --model|--default-model)
-        team_err "init: $1 已退休：项目不再有席位/全局默认模型"
-        team_dim "  新项目：$TEAM_CLI init --task-models '<category=provider/model …>' --pm-model '<provider/model>'"
-        team_dim "  已有项目升级：$TEAM_CLI config upgrade-models --task-models '<完整映射>' --pm-model '<独立模型>' --dry-run"
+        team_init_retired_model_flag init "$1" "${TEAM_CONFIG:-$cfg}"
         return 2 ;;
       --copy) install_mode="--copy"; shift ;;
       --no-skills) install_mode="--no-skills"; shift ;;
@@ -294,7 +372,7 @@ team_cmd_init() {
   done
 
   local project; project="$(basename "$TEAM_MAIN_ROOT")"
-  local cfg="$TEAM_MAIN_ROOT/.pi/team/config.sh" had_config=0; [ -f "$cfg" ] && had_config=1
+  local had_config=0; [ -f "$cfg" ] && had_config=1
   local gates_from_config=0
   # P402：既有契约（且不是 --force 重渲染）时，命令行上没给的渲染参数取**契约里的现值** —— 受管块是
   # agent 读到的「PM 在哪、有谁」的权威说明，写目录名/硬编码默认就是文档撒谎（2026-11-03 现场：
@@ -327,11 +405,15 @@ team_cmd_init() {
       return 1
     fi
   fi
-  local _policy _rc=0
-  _policy="$(team_init_model_policy_resolve "$cfg" "$task_models" "$pm_model" "$task_models_set" "$pm_model_set" init)" || _rc=$?
-  [ "$_rc" -eq 0 ] || return "$_rc"
-  task_models="$(printf '%s\n' "$_policy" | sed -n '1p')"
-  pm_model="$(printf '%s\n' "$_policy" | sed -n '2p')"
+  local _policy _rc=0 first_run=0
+  if [ "$force" = 0 ] && [ "$had_config" = 0 ] && [ -z "${TEAM_CONFIG:-}" ]; then first_run=1; fi
+  _policy="$(team_init_model_policy_resolve "$cfg" "$task_models" "$pm_model" "$task_models_set" "$pm_model_set" init "$first_run")" || _rc=$?
+  case "$_rc" in
+    5) team_err "$(team_init_missing_model_text init "$task_models" "$pm_model" 1)"; return 4 ;;
+    0) ;;
+    *) return "$_rc" ;;
+  esac
+  { IFS= read -r task_models; IFS= read -r pm_model; } <<< "$_policy"
   # 已有配置（不带 --force）原样保留：显式输入与现有策略不同就拒绝，不静默忽略。
   if [ "$had_config" = "1" ] && [ "$force" != "1" ]; then
     local cur_map cur_pm
@@ -399,7 +481,7 @@ team_cmd_init() {
       rm -f "$cfg"
       return 1
     fi
-    # 模型两键走同一个加固写入器（值已用同一个校验器验过）：不是模板插值、没有默认值可猜。
+    # 显式值、项目值和 Pi 默认值都走同一个写入器，不把模型直接插入模板。
     # 任一步失败就删掉这次的半成品配置，绝不留下缺键的契约。
     if ! team_config_set_in_file "$cfg" TEAM_TASK_MODELS "$task_models" \
        || ! team_config_set_in_file "$cfg" TEAM_PM_MODEL "$pm_model"; then

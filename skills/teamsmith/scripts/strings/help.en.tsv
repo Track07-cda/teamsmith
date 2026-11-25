@@ -96,28 +96,28 @@ cmd.help.write	nothing
 cmd.help.see	`team version`, `team changelog`
 cmd.bootstrap.title	set up a whole project in one command
 cmd.bootstrap.what	Initialises the project and everything that makes it dispatchable: the contract, the document skeleton, the protocol section in the agents file, the skill copy under `.pi/skills`, one worktree per seat and the patrol window. It is idempotent, so running it again repairs what is missing instead of starting over.
-cmd.bootstrap.when	Use it once on a fresh checkout, before the first dispatch. Come back to it after a version upgrade, or when a seat's worktree, the protocol section or the patrol window went missing.
-cmd.bootstrap.example	team bootstrap --agents "dev verify" --task-models "code=provider/model" --pm-model "provider/strong"
-cmd.bootstrap.read	the repository, the template skill
+cmd.bootstrap.when	Review the plan, then run `team bootstrap` on a fresh checkout before the first dispatch. Come back to it after a version upgrade, or when a seat's worktree, the protocol section or the patrol window went missing.
+cmd.bootstrap.example	team bootstrap --print
+cmd.bootstrap.read	the repository, the template skill, Pi user settings for missing first-run model inputs
 cmd.bootstrap.write	the contract, the document skeleton, the protocol section, the skill copy, the worktrees and the state directory
 cmd.bootstrap.see	`team init`, `team doctor`
 cmd.bootstrap.arg.--agents	the seats to register, as one space separated list.
-cmd.bootstrap.arg.--task-models	the category to model map; a fresh project has no model to guess from, so it is required.
-cmd.bootstrap.arg.--pm-model	the model the PM itself runs on; the PM never borrows a worker model.
-cmd.bootstrap.arg.--print	diagnose and print the plan without writing anything.
+cmd.bootstrap.arg.--task-models	replace the full task model map. On first setup, `routine`, `analysis`, and `verify` otherwise use the default model saved in Pi user settings.
+cmd.bootstrap.arg.--pm-model	set only the PM model. On first setup, it otherwise uses the default model saved in Pi user settings.
+cmd.bootstrap.arg.--print	show the plan and the models to be saved or the missing options without writing anything.
 cmd.init.title	write the contract and the document skeleton
 cmd.init.what	Writes the project contract and the document skeleton, and copies the skills into the project (under `.pi/skills`) so the project keeps working when the machine's skills are upgraded. It is the step of `team bootstrap` that does not touch worktrees or windows.
 cmd.init.when	Use it when you want a project that is initialised but has no seats running yet, or when you are repairing only the contract and the skeleton.
-cmd.init.example	team init --no-skills --agents "dev verify" --task-models "code=provider/model"
-cmd.init.read	the templates that ship with the skill
+cmd.init.example	team init
+cmd.init.read	the templates that ship with the skill, Pi user settings for missing first-run model inputs
 cmd.init.write	the contract and the document skeleton
 cmd.init.see	`team bootstrap`, `team doctor`
 cmd.init.arg.--copy	copy the skill instead of linking it, so the project does not follow skill updates.
 cmd.init.arg.--no-skills	write the contract and the skeleton but leave the skill copy alone.
 cmd.init.arg.--force	overwrite entries that already exist instead of reporting the conflict.
 cmd.init.arg.--agents	the seats to register, as one space separated list.
-cmd.init.arg.--task-models	the category to model map; required for a fresh project.
-cmd.init.arg.--pm-model	the model the PM itself runs on.
+cmd.init.arg.--task-models	replace the full task model map. On first setup, `routine`, `analysis`, and `verify` otherwise use the default model saved in Pi user settings.
+cmd.init.arg.--pm-model	set only the PM model. On first setup, it otherwise uses the default model saved in Pi user settings.
 cmd.doctor.title	check that the machine and the project can carry the team
 cmd.doctor.what	Checks the things every dispatch depends on: git, tmux, the agent launcher, the gate, the forge and the free capacity, and then the project's own contract and skeleton. It reports what is missing and what to run next.
 cmd.doctor.when	Use it after installing the skill, after a machine change, and whenever a dispatch refuses for a reason that does not look like the task's own.

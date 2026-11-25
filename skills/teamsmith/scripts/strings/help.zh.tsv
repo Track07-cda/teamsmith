@@ -82,28 +82,28 @@ cmd.help.write	不写任何东西
 cmd.help.see	`team version`、`team changelog`
 cmd.bootstrap.title	一条命令把整个项目准备好
 cmd.bootstrap.what	把项目初始化到可派单的状态：契约、文档骨架、协议段落、`.pi/skills` 下的 skill 副本、每个席位一份工作树，以及巡检窗口。它是幂等的，再跑一次是补齐缺失的东西，而不是从头再来。
-cmd.bootstrap.when	在一个新检出的仓库上跑一次，赶在第一次派单之前。版本升级之后、或者某个席位的工作树、协议段落、巡检窗口丢了的时候，也回到它这里。
-cmd.bootstrap.example	team bootstrap --agents "dev verify" --task-models "code=provider/model" --pm-model "provider/strong"
-cmd.bootstrap.read	仓库本身与模板中的 skill
+cmd.bootstrap.when	在新检出的仓库里先看计划，再运行 `team bootstrap`，准备第一次派单。版本升级后，或工作树、协议段落、巡检窗口缺失时，可以再次运行。
+cmd.bootstrap.example	team bootstrap --print
+cmd.bootstrap.read	仓库、安装模板；首次缺少模型参数时读取 Pi 用户设置
 cmd.bootstrap.write	契约、文档骨架、协议段落、skill 副本、工作树与状态目录
 cmd.bootstrap.see	`team init`、`team doctor`
 cmd.bootstrap.arg.--agents	要登记的席位，一个空格分隔的列表。
-cmd.bootstrap.arg.--task-models	类别到模型的映射；新项目没有默认模型可猜，所以它是必填的。
-cmd.bootstrap.arg.--pm-model	PM 自己用的模型；PM 从不借用 worker 的模型。
-cmd.bootstrap.arg.--print	只诊断并打印计划，什么都不写。
+cmd.bootstrap.arg.--task-models	替换整份任务类型模型设置。首次不指定时，`routine`、`analysis`、`verify` 使用 Pi 用户设置中保存的默认模型。
+cmd.bootstrap.arg.--pm-model	只设置 PM 模型。首次不指定时，使用 Pi 用户设置中保存的默认模型。
+cmd.bootstrap.arg.--print	显示计划、拟保存的模型或缺少的参数，不写入文件。
 cmd.init.title	写契约与文档骨架
 cmd.init.what	写项目契约和文档骨架，并把随包发布的 skill 都复制进项目（放在 `.pi/skills`），这样机器上的 skill 升级时项目照旧能用。它是 `team bootstrap` 里不碰工作树、不碰窗口的那一步。
 cmd.init.when	当你想要一个已初始化、但还没有席位在跑的项目时用它；只修契约和骨架时也用它。
-cmd.init.example	team init --no-skills --agents "dev verify" --task-models "code=provider/model"
-cmd.init.read	随 skill 一起发布的模板
+cmd.init.example	team init
+cmd.init.read	随 skill 发布的模板；首次缺少模型参数时读取 Pi 用户设置
 cmd.init.write	契约与文档骨架
 cmd.init.see	`team bootstrap`、`team doctor`
 cmd.init.arg.--copy	复制一份 skill 而不是软链，项目从此不跟随 skill 更新。
 cmd.init.arg.--no-skills	只写契约和骨架，不动 skill 副本。
 cmd.init.arg.--force	覆盖已经存在的条目，而不是报告冲突。
 cmd.init.arg.--agents	要登记的席位，一个空格分隔的列表。
-cmd.init.arg.--task-models	类别到模型的映射；新项目必填。
-cmd.init.arg.--pm-model	PM 自己用的模型。
+cmd.init.arg.--task-models	替换整份任务类型模型设置。首次不指定时，`routine`、`analysis`、`verify` 使用 Pi 用户设置中保存的默认模型。
+cmd.init.arg.--pm-model	只设置 PM 模型。首次不指定时，使用 Pi 用户设置中保存的默认模型。
 cmd.doctor.title	检查机器和项目撑不撑得住这支团队
 cmd.doctor.what	检查每次派单都依赖的东西：git、tmux、agent 启动器、门禁、forge 与剩余容量，然后检查项目自己的契约与骨架。它报告缺什么、下一步该跑什么。
 cmd.doctor.when	装完 skill 之后、机器有变动之后，以及派单因为不像任务本身的原因被拒时用它。
