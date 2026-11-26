@@ -3,7 +3,7 @@ id: P510
 title: 统一默认 PM 待命指令并删掉巡检的相反提示
 agent: dev-bob
 deps: P508,V201
-category: routine
+category: code
 phase: apply
 change: clarify-pm-standby-guidance
 specs: init-skill
