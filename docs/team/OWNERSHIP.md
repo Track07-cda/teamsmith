@@ -25,8 +25,8 @@
 | `openspec/changes/archive/2026-11-25-pulse-board-recent-first/**`、`openspec/specs/{panel,board-and-status}/spec.md`、`docs/team/reports/A18-dev2.md` | PM（A18 已接受） | 三条要求与实际五份工件已核对，收回归档临时写权 |
 | `docs/team/reports/P504-dev-bob.md` | PM（P504 已接受） | PM 待命指令冲突与采用边界 |
 | `openspec/changes/clarify-pm-standby-guidance/**`、`docs/team/reports/P508-dev-bob.md`、`docs/team/reports/V201-verify.md` | PM（已审方案与原报告） | 保持 `defb5f1b` 和 `a95ac8be` 的接受证据，原 V196 会话和证据不动 |
-| `docs/team/tasks/P510-pm-standby-guidance-apply.md` 所列十个产品落点、上述 change 的 `tasks.md`、`docs/team/reports/P510-dev-bob.md` | agent:dev-bob（P510 临时） | 仅实施已独立审阅的默认说明与一行普通巡检消息，不动运行状态、现有项目或测试 |
-| `docs/team/reports/V204-verify.md` | agent:verify（V204 临时） | 只读对照固定修订和之后合并版的十处文字，不运行产品或写候选 |
+| `docs/team/reports/{P510-dev-bob,V204-verify}.md`、`docs/team/reviews/{P510,V204}.md` | PM（候选及合并文字比对已接受） | 十个产品文件与经审方案范围已核，临时产品和验收写权收回 |
+| `openspec/changes/clarify-pm-standby-guidance/**`、相应唯一归档目录、`openspec/specs/init-skill/spec.md` 的单个目标要求、`docs/team/reports/A19-dev2.md` | agent:dev2（A19 临时） | 只原生同步已核对正文与移入五份原件，不改产品、当前项目指令或其它规格 |
 | `docs/team/reports/P505-dev3.md` | PM（P505 已接受） | 现行及标签候选的连续键读数 |
 | `docs/team/reports/{P509-dev3,V202-verify}.md`、`docs/team/reviews/{P509.md,P509-verify.log}` | PM（P509/V202 已接受） | 候选与合并的实际帧结论已核，产品/测试和中央验证临时写权撤回 |
 | `docs/team/reports/P506-dev2.md` | PM（P506 已接受） | 项目设置的标签操作与唯一写入入口探索 |

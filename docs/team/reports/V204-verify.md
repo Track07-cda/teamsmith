@@ -1,6 +1,8 @@
 # V204 · 独立核对 PM 待命说明与普通巡检消息
 
-**候选通过（2.2），合并版待核（2.3）。** 新默认仅在没有可推进工作、没有任务或复验运行、也没有自动结果待返回时，允许 PM 带理由自行进入待命；项目要求由人决定时，仍由人决定。普通巡检消息只保留待办摘要和查看详情指令。整份 `common.sh` 的字节对照只差这一处尾句，不改变巡检、待命或提醒的处理方式。
+**候选和合并版均通过（2.2、2.3）。** 合并版 `dad295e2` 与已验候选的十个产品文件和清单字节一致；范围只包含这十处改动、清单和两份报告。合并版的只读回执在末节。
+
+候选核对确认：新默认仅在没有可推进工作、没有任务或复验运行、也没有自动结果待返回时，允许 PM 带理由自行进入待命；项目要求由人决定时，仍由人决定。普通巡检消息只保留待办摘要和查看详情指令。整份 `common.sh` 的字节对照只差这一处尾句，不改变巡检、待命或提醒的处理方式。
 
 agent: verify · status: PASS（候选文字及范围） · time: 2026-11-26T02:07:21Z
 
@@ -55,7 +57,7 @@ branch: `task/V204-pm-standby-guidance-wording-verify` · PR/MR: -
 
 无。
 
-## Final assessment
+## Final assessment · 候选阶段（2.2）
 
 - CRITICAL 0 · WARNING 0 · SUGGESTION 0。接受冻结候选的文字和范围；不能据此称合并版已核对或可收尾定稿。
 - 2.3 仅在 PM 固定合并版后由本席做相同文字的字节比对和写集核对。只复用作者报告的单变更 strict、`spec-refs --check` 和 `bash -n`（作者所记退出码均为 0），未在本轮重跑。未执行现有文字匹配测试、行为测试、全仓检查、模型、会话读取、模板生成、真实会话、升级、Pulse 或待命操作；不改变发布前检查要求。
@@ -126,4 +128,48 @@ ledger-ban rc=0
 
 ## Decisions and deviations
 
-无偏离。只提交本报告，不写固定源、现有项目文件、运行状态或 V196，不推送、不合并。PM 如接受本轮，可固定合并版后交由本席完成 2.3。
+无偏离。只提交本报告，不写固定源、现有项目文件、运行状态或 V196，不推送、不合并。
+
+## 2.3 合并版短核 · 2026-11-26T02:11:58Z
+
+**通过。** 本席从干净的固定检出 `/var/tmp/p510-merged-dad295e2.5Jy7eB` 核对 `dad295e20d8f1ccbbde512b4aa247e1254613c37`。和已验收交付 `efe923d16c9e59c052a6590888b4e3d7e7cea429` 相比，十份产品文件、`tasks.md`、四份受审方案工件、正式 `init-skill` 及作者报告的 Git 内容标识逐份相等。合并提交相对唯一父提交 `301291df34da09776635d9f3b860a90fb51d160e` 仅修改原 11 个路径、新增作者报告及原 `938b22c3` 版 V204 报告；无正式规格、测试、生成文件或运行状态变化。勾选未改。
+
+```text
+$ git -C "$f" diff --check "$m^..$m"
+merged diff-check rc=0
+$ git -C "$f" diff --name-status "$m^..$m"
+M  README.md
+A  docs/team/reports/P510-dev-bob.md
+A  docs/team/reports/V204-verify.md
+M  openspec/changes/clarify-pm-standby-guidance/tasks.md
+M  skills/teamsmith-init/references/bootstrap.md
+M  skills/teamsmith/SKILL.md
+M  skills/teamsmith/references/protocol.md
+M  skills/teamsmith/references/troubleshooting.md
+M  skills/teamsmith/references/workflows.md
+M  skills/teamsmith/scripts/lib/common.sh
+M  skills/teamsmith/templates/AGENTS.section.md.tmpl
+M  skills/teamsmith/templates/PROTOCOL.md.tmpl
+M  skills/teamsmith/templates/pm-prompt.md.tmpl
+merged paths rc=0
+$ git -C "$f" diff --exit-code "$c..$m" -- "${verified[@]}" "${proposal[@]}" docs/team/reports/P510-dev-bob.md
+candidate/merged product+checklist+proposal+baseline+author report rc=0
+$ git -C "$f" diff --exit-code "$m^..$m" -- "${proposal[@]}"
+proposal and baseline unchanged in merge rc=0
+$ for path in "${verified[@]}" "${proposal[@]}" docs/team/reports/P510-dev-bob.md; do
+>   base_id=$(g rev-parse "$c:$path"); merged_id=$(g rev-parse "$m:$path"); test "$base_id" = "$merged_id"
+>   printf 'same %s %s\n' "$merged_id" "$path"
+> done
+[节录]
+same 039f9fbc72173fe6d2c7e836be88d48c18b698f4 skills/teamsmith/scripts/lib/common.sh
+same cb4407adf3d20d5a3a7f8daf3f7a95594dcf6b9d openspec/changes/clarify-pm-standby-guidance/tasks.md
+verifier report source blob same rc=0
+exact merge set (11 M + 2 A) rc=0
+$ GIT_OPTIONAL_LOCKS=0 git -C "$f" status --porcelain=v1 --branch
+## HEAD (no branch)
+frozen status rc=0
+```
+
+`f` 为本段固定检出，`c/m` 为候选交付与合并 SHA。`verified` 是上述 11 个 `M` 路径；`proposal` 是该变更的 `.openspec.yaml`、`design.md`、`proposal.md`、`specs/init-skill/spec.md` 和正式 `openspec/specs/init-skill/spec.md`。比较逐文件 `rev-parse <sha>:<path>`；再将实际 `--name-status` 与原 11 个 `M` 和两份 `A` 报告的排序清单比较。合并版本报告与 `938b22c3` 版做同样的内容标识比较。
+
+仍是文字和范围核对，未重做候选审阅、重新运行检查、启动会话、生成模板或刷新项目，未写运行状态。候选阶段的原始回执保留；本轮等待 PM 接受。
