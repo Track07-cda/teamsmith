@@ -35,3 +35,9 @@ branch: task/V206-project-label-management-behaviour-verify
 冻结 `3fd44aac4373506208c7ca6eb52cd86ca8a320f5`，独立干净 `/var/tmp/p511-review-3fd44aac.mHMIZV`。`882ecc2e` 只修 `panel-p21.sh` 的逐字输入并显示其失败；相对 `eb95c48e` 产品、包及规格完全一致。作者隔离空窗对相同名称和负权重的旧写法均 rc=1，新 rc=0 且收到逐字相同；这是输入工具的对照，而非产品验收。首轮 15/1 原生 FAIL 和原件留 `.pi/team/state/evidence/P511/round1/`，静态结果沿用。
 
 按上节私有环境与证据要求，只跑原 `TEAM_P21_KEEP=1 bash skills/teamsmith/tests/panel-p21.sh settings </dev/null` 一次，由于前段是同一场景的必要准备而随跑，不另跑已通过项或作者空窗。此前未到达的文字进入、真实保存、只改精确权重、取消和拒删、设置保留操作及英文窄屏均要达，保留真实 argv/原始帧/读回、失败与没到达的边界。只改绑定为 `TEAM_GATES='bash /var/tmp/<你的私有根>/run.sh' bash skills/teamsmith/scripts/team review P511 --dir /var/tmp/p511-review-3fd44aac.mHMIZV --branch 3fd44aac4373506208c7ca6eb52cd86ca8a320f5`。沿用原 V206 任务、会话和分支，后台通知收取，不重跑全套或代码静态批次，不动当前 Pulse。
+
+## 行为通过后，只复核提示去重
+
+固定 `5a0f6bde7834dfcce547108908fba0fa8ed63455`，独立 `/var/tmp/p511-review-5a0f6bde.B3okud`，构建包 SHA-256 `235415d9e172719fcacae7b86b01ae9b0484b5ddef3c686e9ca8861d94c92e3d`。与已实测的 `3fd44aac` 仅删除 `layout.ts` 那一个重复内容行、重新构建同一包、加作者报告。原 49/0 接受、实测未覆盖的分支仍不得记为实跑。原实际 `label-refused.txt:10,13` 与 T21、当前标签、原 argv 保存在 `.pi/team/state/evidence/P511/round2/`，保留原始 PASS，不覆盖。
+
+用一个私有只读布局调用（不假造终端帧、不预制预期输出）或一次最短实际拒删核对，把同一真实现场的 T21、目录与读取/拒绝状态传给现有布局。检查同句只剩一处，T21 和当前标签仍在，无删除成功，原状态、调用与测试不变；给出真实命令/原件、退出码和保留的证据。若用布局调用，尽量用同一方法对 `3fd44aac` 得两次、此版一次，不将布局核对写成新的用户实测；不要启动整批或重复设置 49 项。用 `TEAM_GATES` 指向这一个短脚本，绑定上述固定源及完整 SHA 的 `team review P511`，不走默认全量。只写本人报告以及原生中央记录，不重建、不改产品或当前 Pulse、暂不做合并后检查。
