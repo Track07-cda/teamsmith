@@ -24,6 +24,7 @@
 | `openspec/changes/archive/2026-11-25-pulse-board-recent-first/**`、`openspec/specs/{panel,board-and-status}/spec.md`、`docs/team/reports/A18-dev2.md` | PM（A18 已接受） | 三条要求与实际五份工件已核对，收回归档临时写权 |
 | `docs/team/reports/P504-dev-bob.md` | PM（P504 已接受） | PM 待命指令冲突与采用边界 |
 | `openspec/changes/clarify-pm-standby-guidance/**`、`docs/team/reports/P508-dev-bob.md` | agent:dev-bob（P508 临时） | 只写最小默认待命说明的正式方案，不改产品或项目 |
+| `docs/team/reports/V201-verify.md` | agent:verify（V201 临时） | 只审待命方案，原 V196 分支、会话文件及证据保留，在本任务不写 |
 | `docs/team/reports/P505-dev3.md` | PM（P505 已接受） | 现行及标签候选的连续键读数 |
 | `docs/team/tasks/P509-panel-board-batched-keys-fix.md` 中的局部看板导航、生成构建及原场景断言、`docs/team/reports/P509-dev3.md` | agent:dev3（P509 临时） | 现行主线只修已有看板快速方向键，不写 P497/V196 或工作页 |
 | `docs/team/reports/P506-dev2.md` | PM（P506 已接受） | 项目设置的标签操作与唯一写入入口探索 |
