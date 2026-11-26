@@ -31,7 +31,7 @@
 | `docs/team/reports/P506-dev2.md` | PM（P506 已接受） | 项目设置的标签操作与唯一写入入口探索 |
 | `docs/team/reports/{P507-dev2,V203-dev3}.md`、`openspec/changes/project-label-management/` 方案及需求正文 | PM（受审方案） | 项目设置原方案已独立接受，不改受审范围 |
 | `docs/team/reports/{P511-dev-bob,V206-dev3}.md`、`docs/team/reviews/{V206,P511}.md` 与 `P511-verify.log` | PM（P511/V206 已接受） | 合并后 284 文件一致与入口实测通过；候选/合并原件分存，收回临时写权 |
-| `openspec/changes/project-label-management/**`、原生唯一归档目录、`openspec/specs/{board-and-status,panel}/spec.md` 五个目标条款及 `docs/team/reports/A21-dev2.md` | agent:dev2（A21 临时） | 只同步已审核条款、原样移动工件；A20 标签规则、范围外规格、产品及实际状态不变 |
+| `openspec/changes/archive/2026-11-26-project-label-management/**`、正式 `board-and-status`、`panel` 五个目标条款及 `docs/team/reports/A21-dev2.md` | PM（A21 已接受） | 六份工件及现有标签定义不变，收回临时写权 |
 | `docs/team/reviews/P461.md`、`docs/team/reviews/P461-verify.log` | PM（V167已接受关闭） | verifier实际记录已收存；仅PM接受与结案，不再授权新执行 |
 | `docs/team/reviews/P465.md`、`docs/team/reviews/P465-verify.log` | PM（V170已接受关闭） | 两阶段实际记录由dev3执行，已接受merged证据；临时工具写权收回 |
 | `docs/team/reviews/P466.md`、`docs/team/reviews/P466-verify.log` | PM（V171已接受关闭） | 两阶段实际记录由verify执行，已接受merged证据；临时工具写权收回 |

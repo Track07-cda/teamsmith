@@ -1786,11 +1786,11 @@ the pulse: it runs inside the pulse window and would kill itself; the restart co
 Every block the console shows SHALL come from read-only reads, and the only state-changing actions the console
 offers SHALL be the ones that invoke the owning command as a subprocess: `m`/Enter → `team draft send`, `f` →
 `team outbox flush` (both `delivery-guard`), `s` → `team standby on|off` (`watchdog`), and the project-settings
-view's confirmed edit → `team config set` or `team config set-task-model` (`memory-and-deps`, which owns the contract's write path). The console
+view's confirmed configuration edit → `team config set` or `team config set-task-model` (`memory-and-deps`, which owns the contract's write path). The same view's task-label definition form, on Save or confirmed Delete, invokes `team board label define|edit|delete` (`board-and-status`). The console
 process itself MUST NOT write patrol, queue, inbox, board, ledger or contract files: the contract is written by
 the command, never by the panel, and the only files the console writes on its own are its three
-(`state/draft.md`, `state/panel.conf`, `state/panel-page`). v1 SHALL NOT grow a fifth action — an in-panel pulse
-restart is deliberately not one, because the console runs inside the pulse window and would kill itself; a
+(`state/draft.md`, `state/panel.conf`, `state/panel-page`). No other project write is offered. An in-panel pulse
+restart is deliberately not an action, because the console runs inside the pulse window and would kill itself; a
 "restart this seat now" action is not one either, because spawning a seat is dispatch (`dispatch`/`resume` with a
 brief, the PM's guards and the `--fresh`-or-continue decision the console cannot make) — the view prints the
 restart command for the pulse and the resume/dispatch route for a seat instead. The validation call
@@ -1813,7 +1813,7 @@ made falsifiable.
 
 - **GIVEN** a fixture project with the hashes of `state/`, `docs/`, the inbox and the contract recorded
 - **WHEN** the console runs through several undocumented keys and every read-only navigation key, including the
-  project-settings view's navigation and a cancelled edit
+  project-settings view's navigation, including the label list, and a cancelled edit
 - **THEN** no file outside the console's own three changed, and the contract's audit log did not grow
 
 #### Scenario: The paste writes outside the project and runs no command
@@ -1823,6 +1823,12 @@ made falsifiable.
 - **WHEN** `C-v` is pressed in the compose line and the paste settles
 - **THEN** the temp file exists under `TMPDIR` with the image bytes and the draft holds its path, while no file
   outside the console's own three changed and the wrapper's log gained no line
+
+#### Scenario: The label form invokes only its definition command
+
+- **WHEN** a user navigates the label list, cancels an edit or declines the separate deletion confirmation, then saves a change to an existing definition
+- **THEN** reading and cancellation invoke no label write; saving invokes only `team board label edit` for the current project with the changed fields
+- **AND** no config writer runs and the configuration, its audit, panel preferences and board bytes, including task-update times, remain unchanged
 
 ### Requirement: The delivery warning covers a degraded wake channel
 
@@ -2313,13 +2319,13 @@ by itself; it says where user-facing replies land, and publishing stays the PM's
 
 ### Requirement: Project settings expose selected user operations rather than the complete configuration table
 
-Project settings SHALL select operations for models and automatic checks, with project-command and model-record secondary views, not mirror the CLI schema. Values, defaults, choices, permissions and errors SHALL remain command-owned. Categories SHALL follow project data without a fixed vocabulary or count; excluded keys SHALL remain in the CLI, not return through search.
+Project settings SHALL select operations for models and automatic checks, with project-command, model-record and task-label secondary views, not mirror the CLI schema. Values, defaults, choices, permissions and errors SHALL remain command-owned. Categories SHALL follow project data without a fixed vocabulary or count; excluded keys SHALL remain in the CLI, not return through search.
 
 #### Scenario: Models precede settings and every project category is reachable
 - **GIVEN** valid identical input with C=3 categories, A=5 assignment rows, one PM launch and no unknown keys
 - **WHEN** the default view opens
-- **THEN** it has ten focusable rows: all three categories first, then PM model, concurrent tasks by model, check interval, PM recoveries per hour and startup update check, then project-command and model-record entries
-- **AND** every reported category remains directly editable in its reported order for larger or differently named project category sets; C+7 is a count formula, not a limit
+- **THEN** it has eleven focusable rows: all three categories first, then PM model, concurrent tasks by model, check interval, PM recoveries per hour and startup update check, then project-command, model-record and task-label entries
+- **AND** every reported category remains directly editable in its reported order for larger or differently named project category sets; C+8 is a count formula, not a limit
 
 #### Scenario: Command editing has a small named destination
 - **WHEN** project commands opens by Enter or mouse
@@ -2357,11 +2363,11 @@ Project settings SHALL select operations for models and automatic checks, with p
 #### Scenario: Filtering narrows only the current view
 - **WHEN** a retained operation is filtered by label, raw identifier or value case-insensitively and then Esc is pressed
 - **THEN** only matching operations from the current selected list appear under their user labels, and Esc clears the filter without closing the view
-- **AND** model-record filtering searches its own record facts rather than reopening excluded settings
+- **AND** model-record filtering searches its own record facts rather than reopening excluded settings; the default search can find the Task labels entry, not individual definitions from its list
 
 #### Scenario: Navigation preserves the overlay and two secondary origins
-- **WHEN** the overlay's project-settings entry opens, each secondary entry opens and Esc is used to return
-- **THEN** title/tabs/key band remain, each secondary view returns to its originating default entry, and default Esc restores the original overlay focus without collapsing the console
+- **WHEN** the overlay's project-settings entry opens, Project commands and Model records each open and Esc is used to return
+- **THEN** title/tabs/key band remain, each of these views returns to its originating default entry, and default Esc restores the original overlay focus without collapsing the console
 - **AND** navigation writes no configuration/preference/audit, adds no top-level page or persisted navigation state, leaves page 5 and state/panel-page unchanged, and q outside editors retains global collapse behavior
 
 #### Scenario: Focus wheel and clicks use the actual current list
@@ -2442,7 +2448,7 @@ Settings SHALL group selected operations by user purpose, not CLI group order, w
 #### Scenario: Purpose order does not follow schema section order
 - **GIVEN** retained keys whose CLI groups differ and categories in project order
 - **WHEN** the default view renders
-- **THEN** Models and Automatic checks are the two content groups followed by the two named secondary entries; changing a retained key's group does not move its operation and adding an excluded key/group adds no UI heading
+- **THEN** Models and Automatic checks are the two content groups followed by the three named secondary entries: Project commands, Model records and Task labels; changing a retained key's group does not move its operation and adding an excluded key/group adds no UI heading
 
 #### Scenario: Headings are visible without becoming interaction targets
 - **WHEN** groups render and are walked by keyboard/mouse in both languages
@@ -2540,3 +2546,53 @@ names and score alongside its file details. These controls SHALL NOT write label
 - **WHEN** both board frames and the labeled task's detail render
 - **THEN** both card lines carry the same glyph, ID and title text, both frames fit the width, each choice is
   reachable with keyboard and mouse where applicable, and detail shows name text without changing the card
+
+### Requirement: Project settings manage the current project's task label definitions
+
+Task labels SHALL open a project-local definition list with name, color and weight. Users SHALL be able to add and edit a definition with one save, cancel without writing, and delete only after a separate confirmation. The view MUST use the same reads, identity and writes as `team board label`, not a board card's displayed data.
+
+#### Scenario: The first label can be saved from a normal form
+
+- **GIVEN** the current project's catalog is absent or valid and empty
+- **WHEN** Task labels is opened and a user fills Name, chooses a named color and saves Weight as an integer, initially zero
+- **THEN** the empty list had no prefilled labels; the saved row shows the exact name, the named color with a swatch and its weight; listing definitions through the CLI for that project shows that same row
+- **AND** no field asks for a color code, configuration expression, path or command
+
+#### Scenario: Editing one field preserves unedited fields and existing links
+
+- **GIVEN** a definition with a custom color and an existing task association
+- **WHEN** its weight alone is changed to an integer such as `-9007199254740993`, or separately its name alone is changed
+- **THEN** only the changed field is submitted with its full value, the exact decimal and original custom color survive, and the association still refers to the edited definition under its current name
+- **AND** a custom color has text and a keep-current choice; opening and leaving the color picker without a choice does not modify the draft color; a name with spaces, a leading dash or non-ASCII text is passed literally
+
+#### Scenario: Cancel and refused deletion do not change current definitions
+
+- **GIVEN** a label in use and another unused label
+- **WHEN** an edit is changed and cancelled, deletion of the in-use label is confirmed, then deletion of the unused label is confirmed
+- **THEN** after cancellation the list reads the current catalog and reopening has no cancelled draft; in-use deletion reports the refusal and its blocking IDs, shows fresh definitions and removes no association or definition; only the confirmed deletion of the unused label succeeds
+- **AND** duplicate names and invalid fields show the command's reason in ordinary words, keep the entered draft for correction and do not show a save receipt
+
+#### Scenario: A failed catalog read is not an empty project
+
+- **WHEN** opening or reloading the list fails to read the catalog, or reading back after a refusal fails
+- **THEN** the view reports that it could not read labels rather than showing No labels yet or offering a write on an assumed empty catalog; any rejected draft remains separate from the current catalog
+
+#### Scenario: The console does not automatically retry an unconfirmed write
+
+- **WHEN** the write cannot be confirmed, including a missing or invalid command result after launch
+- **THEN** the form shows that the outcome is unconfirmed, not that the change succeeded or that nothing changed, keeps the draft and separately reads the catalog to show what is now visible
+- **AND** it makes no automatic or blind repeat write; a further write requires a fresh read and a new explicit decision with the current values available
+
+#### Scenario: The board observes the completed edit rather than a read already in flight
+
+- **GIVEN** a board read started before a successful definition edit and has not yet completed
+- **WHEN** the console finishes the save and returns to the board or selects priority
+- **THEN** the labels list and interactive board use reads started after that write, not the earlier sample as the post-save result
+- **AND** if a read fails, the console identifies the refresh failure rather than presenting old data as current; the board still defaults to recent updates, explicit priority still uses the existing weights and original-row tie-break, and task times do not change
+
+#### Scenario: Label controls work within the settings stack in either language
+
+- **GIVEN** a narrow terminal and the setting opened by keyboard or mouse in either supported language
+- **WHEN** the user selects a row, uses the fields and color picker, and returns from the list
+- **THEN** text identifies the actions and colors, controls remain reachable, and the active list or picker, not the view behind it, receives its keys, clicks and scroll
+- **AND** returning restores the Task labels entry and then the original settings overlay position; no label entry is available on the top-level pages or in machine output
