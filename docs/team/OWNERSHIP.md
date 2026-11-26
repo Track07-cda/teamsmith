@@ -25,7 +25,7 @@
 | `docs/team/reports/P504-dev-bob.md` | PM（P504 已接受） | PM 待命指令冲突与采用边界 |
 | `openspec/changes/clarify-pm-standby-guidance/**`、`docs/team/reports/P508-dev-bob.md`、`docs/team/reports/V201-verify.md` | PM（已审方案与原报告） | 保持 `defb5f1b` 和 `a95ac8be` 的接受证据，原 V196 会话和证据不动 |
 | `docs/team/reports/{P510-dev-bob,V204-verify}.md`、`docs/team/reviews/{P510,V204}.md` | PM（候选及合并文字比对已接受） | 十个产品文件与经审方案范围已核，临时产品和验收写权收回 |
-| `openspec/changes/clarify-pm-standby-guidance/**`、相应唯一归档目录、`openspec/specs/init-skill/spec.md` 的单个目标要求、`docs/team/reports/A19-dev2.md` | agent:dev2（A19 临时） | 只原生同步已核对正文与移入五份原件，不改产品、当前项目指令或其它规格 |
+| `openspec/changes/archive/2026-11-26-clarify-pm-standby-guidance/**`、`openspec/specs/init-skill/spec.md` 的目标要求、`docs/team/reports/A19-dev2.md` | PM（A19 已接受） | 原件 5/5 一致，现行说明只同步单个目标；收回临时写权 |
 | `docs/team/reports/P505-dev3.md` | PM（P505 已接受） | 现行及标签候选的连续键读数 |
 | `docs/team/reports/{P509-dev3,V202-verify}.md`、`docs/team/reviews/{P509.md,P509-verify.log}` | PM（P509/V202 已接受） | 候选与合并的实际帧结论已核，产品/测试和中央验证临时写权撤回 |
 | `docs/team/reports/P506-dev2.md` | PM（P506 已接受） | 项目设置的标签操作与唯一写入入口探索 |

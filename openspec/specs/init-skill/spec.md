@@ -625,6 +625,10 @@ Immediately after the role table, the default shared section SHALL give PMs of e
 
 The PM startup prompt and the daily skill’s PM loop SHALL point to the shared rule instead of restating it. The startup prompt and the daily skill’s adoption rule SHALL present the four existing separately recorded steps and their per-command preview and authorization as applying to Teamsmith tool-source upgrades, not as a routine PM workflow. Required local approval statements and the independent reviewer’s duties SHALL remain in place. The new shared text SHALL use the existing new-project generation and explicit existing-project refresh paths; the guidance MUST NOT imply automatic refresh, relocation of local rules, or that refresh writes only AGENTS.
 
+The generated shared AGENTS section SHALL be the single complete rule for the PM’s standby decision. For projects that use the new default, the PM MAY run `team standby on --reason "…"` without asking again only when there is no work to advance, no task or verification is running, and no result is expected to return automatically. Project-specific standby rules take precedence; if the project reserves entry for the user, the PM SHALL leave it to them. Waiting only for a human decision may qualify under those conditions; an empty board or a turn ending alone does not. The guidance SHALL leave manual `team standby off` to a human, state that standby suppresses ordinary Pulse wake-ups, and preserve the existing exception for an actual correlated scheduled Reminder wake and its provably bound current standby state. It SHALL NOT introduce a new automatic state change.
+
+In the PM startup checklist, standby guidance SHALL only say to start Pulse if Pulse is down and the PM is not on standby. The later PM paragraph and the generated PROTOCOL summary SHALL point to the shared standby rule; the daily skill and reference guidance SHALL NOT grant conflicting standby authority. The PM’s existing legal turn endings and instructions to return on background completion SHALL remain. The new default applies to new projects set up with the revised instructions or existing projects that explicitly adopt them. Changing the tool source or restarting Pulse alone SHALL NOT be presented as replacing an existing project’s instructions or a running session’s context.
+
 #### Scenario: Each role can enter through the shipped instructions
 
 - **WHEN** a reviewer reads the generated shared AGENTS section, PM startup prompt, worker dispatch prompt, daily skill index, generated PROTOCOL summary and their referenced procedures
@@ -659,9 +663,18 @@ The PM startup prompt and the daily skill’s PM loop SHALL point to the shared 
 
 #### Scenario: The new rule does not change installation or refresh
 
-- **WHEN** a reviewer reads the final source diff and compares the adoption description to the existing explicit-init refresh requirement
+- **WHEN** a reviewer reads the final source diff for the change introducing the proceed-within-authorization rule and compares its adoption description to the existing explicit-init refresh requirement
 - **THEN** the diff changes only the three instruction sources, not the generation or loading paths; new projects use existing setup and existing project AGENTS files receive the rule only on an explicit refresh, with rules outside the managed markers preserved
 - **AND** the description does not promise auto-refresh, automatic relocation of local rules inside the markers, AGENTS-only writes, or automatic updates to running sessions
+
+#### Scenario: Standby entry has one default rule and does not bypass project policy
+
+- **WHEN** a non-author reads the final AGENTS template, PM startup prompt, daily skill, PROTOCOL template, affected reference and README passages, and the ordinary Pulse message sent to a running PM
+- **THEN** the shared text clearly permits PM entry with a reason and no further approval under the adopted default when there is no work to advance and no task, verification or automatic result outstanding, but defers to the user where project rules reserve the decision
+- **AND** the text permits a wait only on a human decision under the same conditions, does not treat an empty board or a finished turn as sufficient, and distinguishes waiting for background completion from entering standby
+- **AND** the other passages do not grant competing authority; the startup checklist says to start Pulse only if it is down and the PM is not on standby, and the human exit, ordinary Pulse suppression and existing actual Reminder exception are unchanged
+- **AND** the ordinary Pulse message keeps its existing prefix, pending summary, digest instruction and language, dropping the standby command and wake-up promise with no replacement suffix
+- **AND** the final diff changes only the named instruction sources and that one message string, not generation, loading, or runtime behavior such as counts, delivery, queueing, deduplication, recovery or standby/Reminder handling; the adoption description does not promise unattended project, state or session changes
 
 ### Requirement: Explicit init refreshes a well-formed managed AGENTS block and describes its other effects honestly
 
