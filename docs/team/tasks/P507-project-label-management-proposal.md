@@ -4,7 +4,7 @@ title: 编写项目设置直接管理标签的方案
 agent: dev2
 deps: P506
 category: analysis
-phase: opsx-propose
+phase: propose
 change: project-label-management
 specs: panel,board-and-status
 deltas: panel,board-and-status

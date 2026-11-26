@@ -13,7 +13,7 @@
 | `docs/team/reports/**`、`docs/team/threads/**` | agent:* | 报告与线程（只写自己的报告文件） |
 | `docs/team/reports/P495-dev2.md`、`docs/team/reviews/P495.md` | PM（P495 已接受） | 保留探索记录，无后续写权 |
 | `openspec/changes/task-labels/**`（除实施任务勾选）、`docs/team/reports/{P496-dev2,V195-dev3}.md` | PM（原方案接受，最近更新兼容修订待审） | 原方案和回执保留；仅接入现行看板的五份方案变更锁定 `a0911dfe`，P497 暂未复工 |
-| `docs/team/reports/V205-dev3.md` | agent:dev3（V205 临时，排在 V203 后） | 只复核接入现行看板的方案差异，产品和方案只读 |
+| `docs/team/reports/V205-dev3.md` | agent:dev3（V205 临时） | 只复核接入现行看板的方案差异，产品和方案只读 |
 | `docs/team/tasks/P497-task-labels-apply.md` 明授的标签 CLI、Pulse 看板、相关测试及实施勾选范围，`docs/team/reports/P497-dev.md` | agent:dev（P497 临时） | V196 后只修 CLI 的标签分隔符及 §28-h 取行、§26-a 隔离重建；不改其它入口、设置或巡检 |
 | `docs/team/reports/V196-verify.md`、`docs/team/reviews/P497.md` 与 `P497-verify.log` | agent:verify（V196 临时） | 冻结候选独立验证；中央两份证据只由原生 `team review` 生成，产品只读 |
 | `docs/team/reports/P498-dev2.md`、`docs/team/reviews/P498.md` | PM（探索接受） | 仅保留探索及接入裁定 |
@@ -30,8 +30,7 @@
 | `docs/team/reports/P505-dev3.md` | PM（P505 已接受） | 现行及标签候选的连续键读数 |
 | `docs/team/reports/{P509-dev3,V202-verify}.md`、`docs/team/reviews/{P509.md,P509-verify.log}` | PM（P509/V202 已接受） | 候选与合并的实际帧结论已核，产品/测试和中央验证临时写权撤回 |
 | `docs/team/reports/P506-dev2.md` | PM（P506 已接受） | 项目设置的标签操作与唯一写入入口探索 |
-| `openspec/changes/project-label-management/**`、`docs/team/reports/P507-dev2.md` | agent:dev2（P507 临时） | 正式方案及必要变更条款；不写产品或被暂停的标签候选 |
-| `docs/team/reports/V203-dev3.md` | agent:dev3（V203 临时） | 只审项目设置中的标签管理方案，不动固定候选或实际项目 |
+| `openspec/changes/project-label-management/**`、`docs/team/reports/{P507-dev2,V203-dev3}.md` | PM（方案已接受） | 等原标签独立验收合并并核接口；尚不开放产品写入 |
 | `docs/team/reviews/P461.md`、`docs/team/reviews/P461-verify.log` | PM（V167已接受关闭） | verifier实际记录已收存；仅PM接受与结案，不再授权新执行 |
 | `docs/team/reviews/P465.md`、`docs/team/reviews/P465-verify.log` | PM（V170已接受关闭） | 两阶段实际记录由dev3执行，已接受merged证据；临时工具写权收回 |
 | `docs/team/reviews/P466.md`、`docs/team/reviews/P466-verify.log` | PM（V171已接受关闭） | 两阶段实际记录由verify执行，已接受merged证据；临时工具写权收回 |
