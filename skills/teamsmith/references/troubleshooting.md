@@ -564,9 +564,8 @@ means the previous dispatch never got going — the same refusal repeats until i
   nothing at all.
   It will not resume agents for you, does not create tmux sessions/windows (unless `TEAM_PULSE_REBUILD_TMUX=1`), and
   does not merge code.
-- **The PM keeps being woken / does not want to be woken**: `team standby on --reason "…"` deliberately stands the PM
-  down (both "there really is nothing to do without a human" and "stuck waiting for someone" qualify); `team standby
-  off` resumes. While on standby the backlog is still recorded in `state/watchdog.log`.
+- **The PM keeps being woken / does not want to be woken**: see [Standby](workflows.md#standby) for pausing ordinary
+  Pulse wake-ups without losing the backlog.
 - **Wake-up frequency**: every 15 minutes by default (`TEAM_PULSE_INTERVAL=900`, 300~3600 recommended); repeated
   reminders for the same pending work are limited by `TEAM_PULSE_NUDGE_GAP`. To go slower or faster, change these two
   values.

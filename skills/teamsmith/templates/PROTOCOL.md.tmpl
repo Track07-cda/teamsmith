@@ -88,7 +88,7 @@ bash {{SKILL_DIR}}/scripts/team pulse up      # the pulse window runs the monito
 
 - The pulse is a **metronome that wakes the PM**: every 15 minutes by default it checks for work and wakes the PM only
   when there is pending work. It never manages tmux layout, agents or quota — a stopped worker is pending work, not an
-  automatic resume. Nothing to do, or a human is needed: `team standby on --reason "…"`; only a human clears it.
+  automatic resume. Follow **PM standby** in `AGENTS.md`.
 - **Capacity floor**: neither RAM nor disk swap may bottom out — the dispatch contract judges `MemAvailable`,
   RAM+swap, free disk swap (zram excluded), and the free bytes and inodes of the filesystem the worker writes to (the
   resolved temp root and the worktree), refusing below `TEAM_MIN_AVAIL_MB` / `TEAM_MIN_TOTAL_MB` /

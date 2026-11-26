@@ -110,8 +110,14 @@ and the knock on `{{SESSION}}:{{PM_WINDOW}}` happen at turn end automatically. B
   `{{SKILL_DIR}}/references/workflows.md` §A.
 - The pulse is the PM's metronome, not a daemon: `team pulse up|status|logs|down` every `TEAM_PULSE_INTERVAL`
   seconds (default 900), waking the PM only when work is pending. It never manages tmux layout, agents or quota,
-  and a stopped worker is pending work for the PM to `resume`, not an automatic dispatch; `team standby on|off` is
-  a human's call. Mechanism: `{{SKILL_DIR}}/references/protocol.md` §8; patrol: `references/workflows.md` §D/§I.
+  and a stopped worker is pending work for the PM to `resume`, not an automatic dispatch.
+  Mechanism: `{{SKILL_DIR}}/references/protocol.md` §8; patrol: `references/workflows.md` §D/§I.
+- **PM standby.** Follow your project's standby rules. By default, you may run `team standby on --reason "…"`
+  without asking when no work can advance, no task or verification is running, and no result is expected back
+  automatically. Waiting only for a human decision can qualify; an empty board or a finished turn alone cannot.
+  If your project leaves entry to the user, do not enter on your own. Standby pauses ordinary Pulse wake-ups.
+  Leave `team standby off` to a human. A scheduled Reminder that actually wakes you can still clear its matching
+  standby state.
 - Capacity floor (`team ps`): neither RAM nor disk swap may bottom out; model quotas are a separate limit
   (`{{SKILL_DIR}}/references/protocol.md` §9).
 - Cross-project meetings are PM-to-PM only: workers do not attend, and no agent touches another project's

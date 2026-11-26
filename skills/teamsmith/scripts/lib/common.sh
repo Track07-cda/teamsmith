@@ -4810,7 +4810,7 @@ team_nudge() { # <摘要文本> [<叫醒键>]
   mkdir -p "$TEAM_STATE_DIR"
   printf '%s %s\n' "$(team_timestamp)" "$text" >> "$TEAM_STATE_DIR/nudges.log"
   printf '%s %s\n' "$(date +%s)" "$key" > "$TEAM_STATE_DIR/watchdog.nudge"
-  msg="[pulse] 待办：$text → 跑 $TEAM_CLI digest 看详情；若确实没活可推或需人工介入，跑 $TEAM_CLI standby on --reason \"…\" 让自己停下（之后不会再叫醒你）"
+  msg="[pulse] 待办：$text → 跑 $TEAM_CLI digest 看详情"
   # 叫醒语也走投递守卫（delivery-guard）：PM 输入框里有草稿时入队，不粘字。
   # nudges.log / watchdog.nudge 的 durable 记录（state 文件名别名期不动，D22）已经在上面写完了，所以排队不会丢消息。
   if team_pm_alive; then

@@ -404,8 +404,6 @@ agents is still the PM's job.
 
 ```bash
 bash <skill>/scripts/team pulse status        # patrol interval, standby, pending work, PM state, capacity
-bash <skill>/scripts/team standby on --reason "waiting for the user to pick a stack"   # the PM stands down (no more wake-ups)
-bash <skill>/scripts/team standby off         # resume wake-ups
 bash <skill>/scripts/team up                  # manual rescue: build the tmux stage + start the PM (agents untouched)
 bash <skill>/scripts/team up --agents         # also resume agents that have a task but no window
 bash <skill>/scripts/team resume --dry-run    # the PM looks for itself: which agents should be resumed
@@ -460,8 +458,7 @@ Every tick has three steps: ① append one capacity trend line to `state/capacit
 ③ **only wake the PM when there is pending work** — while it is running, send one `[pulse] pending: …` line (the
 same batch is rate-limited by `TEAM_PULSE_NUDGE_GAP`), otherwise bring it up in its original window with `pi -c`;
 **with nothing pending it does nothing at all**.
-`team standby on --reason "…"` lets the PM stand down deliberately (the pulse stops waking it; the backlog is still
-logged).
+Standby pauses ordinary Pulse wake-ups; the backlog is still logged. See [Standby](#standby).
 
 ### Boundaries (deliberate)
 
@@ -480,16 +477,17 @@ logged).
 - Runaway protection: a restart quota for the PM (`TEAM_PULSE_MAX_RESTARTS`, default 5 per hour) turns into a warning
   when exceeded; the pulse itself holds a pid lock.
 
-### Standby (the PM or a human deliberately stops)
+### Standby
+
+Follow **PM standby** in `AGENTS.md`.
 
 ```bash
-bash <skill>/scripts/team standby on --reason "waiting for user authorization to merge"   # the pulse stops waking it
+bash <skill>/scripts/team standby on --reason "waiting for user authorization to merge"   # pause ordinary Pulse wake-ups
 bash <skill>/scripts/team standby status                        # see reason/start time/backlog
-bash <skill>/scripts/team standby off                          # done, resume wake-ups
+bash <skill>/scripts/team standby off                          # human action: resume wake-ups
 ```
 
-When it applies: there really is nothing to push forward, or a human has to step in (authorization/choice of stack/
-outside information). Going on standby loses nothing: the backlog still lands in `state/watchdog.log` and
+Going on standby loses nothing: the backlog still lands in `state/watchdog.log` and
 `team digest` still shows it. A due PM self-Reminder is the narrow exception: it may start the built-in Pi PM
 without the generic startup prompt, but ordinary backlog stays suppressed until the correlated wake. A newer
 Standby generation whose ordering is ambiguous stays on. See `skills/teamsmith/references/reminders.md`.

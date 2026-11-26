@@ -427,8 +427,8 @@ What each liveness state means and what the PM should do:
 merely busy with something else in this project (the pre-`exec` start command, a `sleep`, an editor) is `unknown:<cmd>`
 — it does not suppress starting the PM. The internal pane-busy probe is only used to tell an empty prompt (`idle`) from
 an occupant (`unknown`).
-- The PM can stand down deliberately: `team standby on --reason "…"` (nothing to do / a human has to step in), after
-  which it is not woken; a backlog is still logged; once a human has dealt with it, `team standby off`.
+- Standby pauses ordinary Pulse wake-ups; the backlog is still logged. Follow **PM standby** in `AGENTS.md`.
+  See [Standby](workflows.md#standby) for commands and the Reminder exception.
 - Repeated reminders for the same batch are limited by `TEAM_PULSE_NUDGE_GAP`; a PM that is busy can simply ignore a
   reminder.
 - Division of labour with instant notifications: the notification at the end of an agent's turn is **instant** (the

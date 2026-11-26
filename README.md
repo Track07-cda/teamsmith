@@ -14,7 +14,7 @@ not "more agents chatting with each other".
 | Dispatch | Task briefs are self-contained (context / deliverables / boundaries / copy-pasteable acceptance commands); `team dispatch` puts a worker agent into its own tmux window and git worktree |
 | **Independent verification** | The agent's report is a **claim**; a non-implementer verifier runs `team review <ID> --dir …` on the PM-prepared independent checkout, and the PM accepts that evidence without running the gates |
 | Ledger | `BOARD.md` (state), `reviews/` (verification evidence), `threads/` (decision trail), `DECISIONS.md` (the "why") |
-| Not rigid | The watchdog only wakes the owner when there is pending work; the PM can `standby` deliberately; when capacity is tight, work queues instead of thrashing |
+| Not rigid | The watchdog only wakes the owner when there is pending work; standby pauses ordinary Pulse wake-ups; when capacity is tight, work queues instead of thrashing |
 | Boundaries | Cross-project interaction is discussion only (`team meeting`) — never command; git/forge work stays with the PM's own tools |
 
 Design rationale: [references/philosophy.md](skills/teamsmith/references/philosophy.md) (8 principles) and

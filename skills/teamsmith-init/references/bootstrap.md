@@ -72,4 +72,4 @@ team digest                     # pending work: notifications + reports awaiting
 |---|---|
 | `container not created` | stale error from before v1.12.0 (the container backend was removed) — `team pulse up` uses the tmux window, no image is built |
 | The window is there but nothing patrols | `team pulse logs` to read the panel; `team watch --once` runs a single patrol tick to locate the problem |
-| Want to shut it down completely | `team pulse down` (followed by `team standby on` so the PM stops being woken) |
+| Stop the periodic patrol | `team pulse down` |

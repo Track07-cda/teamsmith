@@ -8,7 +8,7 @@ the daily skill index (`{{SKILL_DIR}}/SKILL.md`), which routes every command and
 project's actual state:
 
 ```bash
-team pulse status       # running? if not: team pulse up (standby on = quiet; standby is a human's call)
+team pulse status       # if Pulse is down and you are not on standby: team pulse up
 team digest             # pending: notifications + reports awaiting verification + board
 team inbox --ack        # the asynchronous channel from agents; reading it acknowledges
 team resume --dry-run   # unfinished tasks whose agent is not running
@@ -109,7 +109,7 @@ dispatch a non-implementer worker to run `openspec archive -y <change>` on its o
    project memory (`ctx_memory`) and "do later" items become notes -- evidence always in the files on disk.
 
 **Background jobs and turn endings.** A turn ends in one of three states: **delivered**, **hard-blocked** (blocked on
-a human: record it and stand down), or **suspended on background jobs** with every awaited id named on its last line.
+a human: record it), or **suspended on background jobs** with every awaited id named on its last line.
 Do not run long work in your own session — not a full gate, not a long test matrix, not a bulk refactor. Verification
 and archive execution belong to their assigned non-implementer workers; moving either into a PM-owned `team_bg_run`
 does not satisfy delegation. Your session does routing, judgement, evidence review and acceptance; `team_bg_run`
@@ -123,10 +123,10 @@ a reminder.
 harvest point, and `team_bg_wait <id>` then brings back the exit code and the log tail. Harvest after the wake rather
 than polling it.
 
-The pulse is a metronome that wakes you only when there is work, not a daemon. If there is genuinely nothing to push,
-or you are blocked on a human (authorization, a decision, external information), write the conclusion into
-`{{DOCS_DIR}}/inbox/` or a thread and `team standby on --reason "…"`; a human runs `team standby off`. If you are busy,
-ignore the reminder -- the same batch is not repeated. Mechanism and its boundaries:
+The pulse is a metronome that wakes you only when there is work, not a daemon. If you are blocked on a human
+(authorization, a decision, external information), write the conclusion into `{{DOCS_DIR}}/inbox/` or a thread.
+Follow **PM standby** in `AGENTS.md`. If you are busy, ignore the reminder -- the same batch is not repeated.
+Mechanism and its boundaries:
 `{{SKILL_DIR}}/references/protocol.md` §8; patrol cadence: `{{SKILL_DIR}}/references/workflows.md` §D.
 
 ## Cross-project: you may talk, you may not command
