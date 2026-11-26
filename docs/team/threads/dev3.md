@@ -434,3 +434,6 @@ V206 新候选 3fd44aac 固定 /var/tmp/p511-review-3fd44aac.mHMIZV；只修测�
 
 ### 2026-11-26T03:52:12Z · from: pm · re: V206
 V206 新候选 5a0f6bde /var/tmp/p511-review-5a0f6bde.B3okud 只删重复拒删提示；已通过 49/0 复用。按任务书末段给一次实际或只读布局对照，核同句一次、T21 和当前标签仍在。不要重跑设置。
+
+### 2026-11-26T03:57:37Z · from: pm · re: V206
+V206 合并版 80bcf2eb 固定 /var/tmp/p511-merged.HnkzfL，按任务书末段只核同一性和私有项目真实入口打开/返回，保留帧及读取 argv，不重跑设置 49 项。候选原件已另存。

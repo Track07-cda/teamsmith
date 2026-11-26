@@ -41,3 +41,9 @@ branch: task/V206-project-label-management-behaviour-verify
 固定 `5a0f6bde7834dfcce547108908fba0fa8ed63455`，独立 `/var/tmp/p511-review-5a0f6bde.B3okud`，构建包 SHA-256 `235415d9e172719fcacae7b86b01ae9b0484b5ddef3c686e9ca8861d94c92e3d`。与已实测的 `3fd44aac` 仅删除 `layout.ts` 那一个重复内容行、重新构建同一包、加作者报告。原 49/0 接受、实测未覆盖的分支仍不得记为实跑。原实际 `label-refused.txt:10,13` 与 T21、当前标签、原 argv 保存在 `.pi/team/state/evidence/P511/round2/`，保留原始 PASS，不覆盖。
 
 用一个私有只读布局调用（不假造终端帧、不预制预期输出）或一次最短实际拒删核对，把同一真实现场的 T21、目录与读取/拒绝状态传给现有布局。检查同句只剩一处，T21 和当前标签仍在，无删除成功，原状态、调用与测试不变；给出真实命令/原件、退出码和保留的证据。若用布局调用，尽量用同一方法对 `3fd44aac` 得两次、此版一次，不将布局核对写成新的用户实测；不要启动整批或重复设置 49 项。用 `TEAM_GATES` 指向这一个短脚本，绑定上述固定源及完整 SHA 的 `team review P511`，不走默认全量。只写本人报告以及原生中央记录，不重建、不改产品或当前 Pulse、暂不做合并后检查。
+
+## 合并后：只核定稿与入口接入
+
+候选 `5a0f6bde` 的去重对照（旧真实正文 10 行逐行相等，新 9 行，仅去重，T21 保留）及 `3fd44aac` 的独立设置实测 49/0 已接受；预处理误判原 FAIL 保留。合并 `80bcf2ebb412472c762d79c0303d915cf0fa9dbb` 已同步 `public/dev`，固定独立源 `/var/tmp/p511-merged.HnkzfL`；清单 8/8。
+
+你只对比候选与此合并版的 `skills/teamsmith/` 与构建包的实际文件一致性，并在一个独立私有项目用现成设置准备、入口操作实际走「项目设置 → 任务标签 → 返回项目设置」，留帧、标签读取 argv、实际 rc。不保存、不测删除、不重复两轮设置、布局对照、构建或全量。需要的短 driver 留私有根，不加产品或测试文件。用 `TEAM_GATES='bash /var/tmp/<你的私有根>/run.sh' bash skills/teamsmith/scripts/team review P511 --dir /var/tmp/p511-merged.HnkzfL --branch 80bcf2ebb412472c762d79c0303d915cf0fa9dbb` 绑定这次短核。针对实际范围交付最终报告，候选与合并记录分开，不改已结论的记录；实测边界和全仓 strict 旧失败仍明列。保留私有根，等 PM 收件，不操作当前 Pulse 或项目。
