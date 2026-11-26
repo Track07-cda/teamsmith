@@ -70,3 +70,7 @@ TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh --select 4c,6d,28 </dev/n
 本节取代以上开跑范围。`f9bb3f3512e1efc96f2f21a5b5d36ce7bc77f9d8`，干净独立检出 `/var/tmp/p497-review-f9bb3f35.O6jsX5`。对 `2309f8c5` 仅一个测试及作者报告变化；四轮原生 FAIL 保留。第四轮 43/1 录到真实连键、改色权重、两种排序、筛选、表外和坏数据等，原件 `.pi/team/state/evidence/P497/round4/`；旧 CLI/缓存/机器及静态画面不要再跑。读作者报告和 `4597518c`，用第四轮原帧或候选同一次实际画面核读完整卡：窄屏 ID 空格可变，完整标题、唯一焦点、表外另行和实际点击目标不被混用。
 
 只补原 `panel-b3.sh board` 英文 59 列从 `en-default` 至 `fallback-detail`：实际复现鼠标选择两个长名的不同任务，鼠标改排序，普通 Ctrl+o 无动作而草稿内 Ctrl+o 走编辑器，项目标签与用户界面偏好未被浏览选择写入；刷新过程中删掉最后一条匹配同号、保留表外行的真实 JSON，焦点落到符合筛选的另一任务，Enter 显示正确正文。复用现有段落和前置输入；如能直接用原独立私有场景的输入重建英文段，不再执行前段动作；如果必须经过同一选段的前半段建立现场，只走该选段一次，不把前段计为新增覆盖，也不另造入口或改变测试要求。原生 `TEAM_GATES='bash /var/tmp/<你的私有根>/<runner>' bash skills/teamsmith/scripts/team review P497 --dir /var/tmp/p497-review-f9bb3f35.O6jsX5 --branch f9bb3f3512e1efc96f2f21a5b5d36ce7bc77f9d8`。只在私有终端后台运行，保留原帧、回执、首个失败和未到达项，旧原件只读；原分支追加实际做法和结果。不跑整套、不改产品或真实项目。
+
+## 合并后：只查同一实现和一次排序入口
+
+候选 `f9bb3f35` 的原生 **PASS**（72 秒、真实终端 46/0）已接受。固定合并 `c9fbb5e705e15763048c803adee9187ca18cfef5`，独立 `/var/tmp/p497-merged.4qrHfV`；仅本段开跑，其余不重跑。从合并树对照候选实际 `skills/teamsmith/` 差异、确认分支和面板 bundle，列差异路径数和字节同一性；计划文本 3.1 尚待 PM 收口。用同一原验证者、同一任务追加一条短执行：独立私有项目实际走公开 `team board ls --sort priority`。可复制已保留的六行看板和真实 TSV，核 `T2=8`、一次正向排序；不得用当前团队账本、不得重新做错误算分、重新构建、启动终端或扫任何组选段。通过 `TEAM_GATES='bash /var/tmp/<你的私有根>/<runner>' bash skills/teamsmith/scripts/team review P497 --dir /var/tmp/p497-merged.4qrHfV --branch c9fbb5e705e15763048c803adee9187ca18cfef5` 绑定实际输出和退出值。保留候选与合并证据分开；只提交 V196 追加报告，不勾任务、不归档、不碰正运行的 Pulse。
