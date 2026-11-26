@@ -966,7 +966,8 @@ existing machine content, without reading key-reply blocks or exposing key-reply
 
 ### Requirement: The board page is a kanban over the board's states
 
-The board page SHALL render every BOARD.md row as a card in one of six state lanes, in the fixed order the
+With no label filter, the board page SHALL render every BOARD.md row as a card. An explicit label selection
+SHALL limit cards to matching task-table rows. The six state lanes SHALL keep the fixed order the
 BOARD.md header legend declares (`todo`, `wip`, `review`, `done`, `blocked`, `dropped`). Every lane SHALL render
 even when it holds no card — an unfolded empty lane shows a dim empty marker, an empty lane folded by default
 shows its folded line — so lanes never shift position between frames. A card's line SHALL carry the entry's id,
@@ -977,7 +978,7 @@ key band SHALL carry the focused card's demoted pair from the width its own key 
 `agent · phase`, and, as that width shrinks, the phase alone before the pair disappears — the agent is dropped
 before the phase, and the pair before the band's chips are disturbed. The degradation order SHALL therefore be
 explicit — agent, then phase, then the title — and the card line starts at the title, so no width exists at which
-a card truncates its title to keep an agent or a phase.
+a card truncates its title to keep an agent or a phase. Labels and priority MUST NOT occupy card-line space.
 At 100 columns and wider the lanes SHALL be side by side with an even share of the usable width among the lanes
 that are not folded (a folded lane's one line takes the width it needs; the lane-fold requirement owns that
 share); under 100 columns the page SHALL degrade to a single column grouped by state in the same lane order;
@@ -985,23 +986,28 @@ under 60 columns the card keeps its one-line form (state glyph, id, title), the 
 drops, and the title SHALL truncate last. The focused card SHALL be
 marked by a cursor glyph and the `selected` tone — never by color alone — and SHALL be tracked by **row
 identity**: the entry id together with the row's occurrence among the rows carrying that id, in BOARD.md order.
-In the interactive board page, each lane SHALL show rows with a valid task-table update time first, in descending
+In the interactive board page's default order, each lane SHALL show rows with a valid task-table update time first, in descending
 time order. Equal times SHALL keep BOARD.md order. Rows without time follow: in `todo`, `wip`, `review` and
 `blocked` they keep BOARD.md order; in `done` and `dropped` they run from the file's tail towards its head. The
 history lanes' initial windows SHALL start at the head of that display order, not reproduce the old bottom-aligned
 offset. With no recorded times the first history window therefore starts with the rows from the old tail, without
 ascribing a time to those rows. In a grouped layout this is the order within each lane, not a new page-wide
-sort or a separate scroll window per lane. The update time MUST NOT be printed on the card.
+sort or a separate scroll window per lane. The update time MUST NOT be printed on the card. A label filter
+without a priority selection SHALL preserve this order among matching rows. In explicit priority order each
+lane SHALL start at its highest ranks, subject to the existing focus and scroll behavior.
 
 Rendering, the visible window, arrow navigation and pointer targets SHALL agree on that order at both layout widths.
 Clicking an unfocused card SHALL focus its original row; clicking a focused card SHALL open that frame's row,
 not a position reinterpreted after sorting. Enter SHALL open the selected original row. A refresh that changes
 the display order or the row's state SHALL keep addressing the same original row while its identity is still
-available. Two rows with one id remain separate stops with the cursor on exactly one; the occurrence is counted
-before sorting, not in the lane. The identity does not distinguish identical ids that a manual edit exchanges
-or inserts before an existing occurrence. When the focused occurrence is no longer addressable, the first row
-carrying its id SHALL take the focus; when none carries it, the old lane's first displayed card SHALL take the
-focus, or the first card of the first nonempty lane if that lane emptied. A lane holding more cards than its
+available and the row is eligible. A row is eligible if it belongs to the current view's filtered set, including
+cards outside its current window or in a folded lane, or to the unfiltered view when no filter is selected.
+Two rows with one id remain separate stops with the cursor on exactly one; the occurrence is counted before
+sorting, not in the lane. The identity does not distinguish identical ids that a manual edit exchanges or
+inserts before an existing occurrence. When that occurrence is unavailable or ineligible, the first eligible
+row carrying its id SHALL take the focus. If no eligible row carries that id, the old lane's first included card
+SHALL take the focus, or the first included card of the first nonempty lane if that lane emptied. If none exists,
+Enter SHALL open no card. A lane holding more cards than its
 window SHALL scroll (`↑`/`↓` past the edge, and the wheel over the lane) and SHALL mark each edge that hides cards
 with its count. In the side-by-side layout, the wheel MAY deliberately scroll a lane away from its selection as
 before. Reordering SHALL adjust a window only when it would move a previously visible selection out of view,
@@ -1009,8 +1015,8 @@ without resetting unrelated windows or undoing that deliberate scroll. The narro
 one page window and continue keeping its focused row in that window when scrolling and navigating. Folding,
 detail discovery and work-page actions keep their existing contracts.
 
-The display order SHALL NOT mutate the source rows, their counts, or the work page's order or history
-selection. The optional row time belongs to the existing internal board block; public `--json` keeps its
+Filtering and ordering SHALL NOT mutate the source rows, their counts, or the work page's order or history
+selection; when a label is selected the board page SHALL show matching counts. The optional row time belongs to the existing internal board block; public `--json` keeps its
 existing output shape and `--print` keeps its existing order and window even when given page 4.
 
 #### Scenario: Six lanes at the reference geometry
@@ -2445,3 +2451,92 @@ Settings SHALL group selected operations by user purpose, not CLI group order, w
 #### Scenario: String completeness follows purpose references
 - **WHEN** a presented purpose/navigation label is missing, or a new CLI group belongs only to excluded keys
 - **THEN** the missing displayed label fails its existing string check, but the unrelated CLI group requires no new UI label or page
+
+### Requirement: Board labels and priority are optional read-only views
+
+The interactive board SHALL default to all tasks in recent-first order. An explicit priority choice uses
+descending shared score within each lane, breaking ties by original board row order. The single-label filter applies
+to either order. Display and navigation SHALL use the same matching rows. Task detail SHALL show label
+names and score alongside its file details. These controls SHALL NOT write labels or view choices.
+
+#### Scenario: Filtered cards and interactions use one row order
+
+- **GIVEN** a lane with two separately focusable rows sharing an ID and label, another card in between, and
+  other cards including a score tie and a label with no matching card anywhere
+- **WHEN** the second row is focused and priority is selected, `r` refreshes after a peer's weight is changed,
+  and a keyboard or mouse selection applies a filter hiding the originally focused row
+- **THEN** the second original occurrence retains focus while eligible, including across detail and back;
+  renderer, arrows, mouse, windows and Enter use the same new order; filtering moves focus to the first matching
+  card in its prior lane's shown order, or the first matching card of the first lane with matches
+- **AND** each lane and its edge counts reflect matches, folded lanes with matches still open the focused matching
+  card, and no-match selection gives zero counts, follows the existing empty-fold policy and opens no detail
+- **AND** if an eligible task is focused under the filter and a refresh removes its last matching occurrence
+  while a same-ID row outside the task table remains, focus moves to an eligible card and Enter cannot open
+  the hidden row; with no eligible card, Enter opens nothing
+
+#### Scenario: A same-ID row outside the task table never inherits labels
+
+- **GIVEN** two task-table rows sharing an ID, its label and score, and a separate table below with a different title
+  but the same ID at the same column position and a valid `todo` state
+- **WHEN** the board opens in its default view, the three original rows are opened in detail separately, and
+  the label filter is then applied
+- **THEN** the default still shows all three rows in the normal recent-first view; the two real rows are separate focus stops
+  and their details show the shared labels and score; the unrelated row's detail keeps its normal file result
+  but no label area; the filter matches only the two real rows, and cannot open the unrelated row
+- **AND** when the unrelated row is opened from the work page and a same-ID task is inserted before it, `r`
+  refreshes the same open detail without adding any labels, even if its former occurrence now identifies a task
+- **AND** detail from either page shows labels on refresh only if its source was a task-table row when opened
+  and its current row reference still points into that table; file lookup still uses the original ID
+
+#### Scenario: Explicit priority and default history anchor are different views
+
+- **GIVEN** a board whose done and dropped history exceed the lane windows and whose highest scores are not on its newest rows
+- **WHEN** page 4 opens with default choices, then selects priority, then returns to recent-first order
+- **THEN** the default and restored order put valid times first, newest first, then the undated history
+  rows from the file's tail; the priority windows start at the highest ranks subject to the focused card
+- **AND** a label filter retains matching rows in the chosen order; two equal priorities keep original
+  BOARD.md row order even when their update times differ; page 2's order, machine exits and board file stay unchanged
+- **AND** with no filter, any displayed same-lane non-task rows remain visible but unranked after ranked rows
+
+#### Scenario: Choices are local to the current console session
+
+- **GIVEN** a board with definitions and a client using keyboard, and a second client using mouse in the other locale
+- **WHEN** each selects a label and priority, switches page and returns, and then restarts the console
+- **THEN** each control displays its current value using zh/en interface strings, the choices survive page changes
+  but restart opens all tasks in recent-first order, and no choice is written to panel preferences or project files
+- **AND** when no definitions are present and the catalog read has no error, the original board display has no added controls
+
+#### Scenario: The chooser acts on exact names and owns its inputs
+
+- **GIVEN** distinct project labels that differ by case or beyond the chip's displayed width
+- **WHEN** plain `t` or `o` on the board opens a choice, the human selects by keyboard or mouse, and later
+  uses `Ctrl+o` while composing
+- **THEN** the selection matches the full unchanged label value, never its shortened text; arrows, wheel,
+  clicks, Enter and Esc in the picker act on the list, not the board behind it; plain `t` and `o` do not open
+  these controls elsewhere or over another modal, and `Ctrl+o` still opens the compose editor
+
+#### Scenario: A task with no file still exposes its labels
+
+- **GIVEN** a task with no task brief, report or review and a label with a custom color
+- **WHEN** task detail is opened, then only that color is edited through the CLI and the board refreshes
+- **THEN** detail opened from either owning page shows the name, updated color and unchanged score separately
+  from the existing no-file result, the name remains visible without color, and opening or closing it does not
+  change labels or make a filtered-out card reachable
+- **AND** a task with files retains its file tabs and Markdown; a task without a label on a board with definitions
+  shows no labels and score 0; a board without definitions adds no label row; the labels and score are reachable
+  by scrolling, with no write or edit action
+
+#### Scenario: Missing label choices and invalid data do not hide the board
+
+- **GIVEN** a selected label that is renamed through the CLI and a catalog that is later damaged and repaired
+- **WHEN** the same running board refreshes after the rename, the damage and the repair
+- **THEN** the rename clears only the filter and shows the new name in its choices; the damaged source shows
+  the default board with a labels-unavailable notice, all original rows and neither old nor false zero scores
+  in detail; the repair restores current names and scores on refresh without restarting the board
+
+#### Scenario: The 59-column card keeps its text
+
+- **GIVEN** the same focused row at 59 columns with and without labels, and no filter or lane-fold change
+- **WHEN** both board frames and the labeled task's detail render
+- **THEN** both card lines carry the same glyph, ID and title text, both frames fit the width, each choice is
+  reachable with keyboard and mouse where applicable, and detail shows name text without changing the card

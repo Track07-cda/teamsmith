@@ -1,0 +1,1 @@
+- 2026-11-26T03:23:45Z · `team close A20 --status done` · OK：复验记录 docs/team/reviews/A20.md（判定 PASS）

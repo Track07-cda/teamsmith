@@ -14,7 +14,7 @@
 | `docs/team/reports/P495-dev2.md`、`docs/team/reviews/P495.md` | PM（P495 已接受） | 保留探索记录，无后续写权 |
 | `openspec/changes/task-labels/**`（除实施任务勾选）、`docs/team/reports/{P496-dev2,V195-dev3,V205-dev3}.md` | PM（原范围和兼容修订均已接受） | 保留原方案、修订 `f36d1e51` 和独立回执，规划只读 |
 | `docs/team/reports/{P497-dev,V196-verify}.md`、`docs/team/reviews/P497.md` 与 `P497-verify.log` | PM（P497/V196 已接受） | 候选和合并记录已分别保全，临时写权收回 |
-| `openspec/changes/task-labels/**`、原生唯一归档目录、`openspec/specs/{board-and-status,panel}/spec.md` 的五个目标条款、`docs/team/reports/A20-dev2.md` | agent:dev2（A20 临时） | 只同步既定条款、原样移入六文件；不写项目设置变更、产品或实际运行状态 |
+| `openspec/changes/archive/2026-11-26-task-labels/**`、正式 `board-and-status`、`panel` 的五个目标条款及 `docs/team/reports/A20-dev2.md` | PM（A20 已接受） | 六个原件与目标正文一致；收回临时写权，不影响设置实施 |
 | `docs/team/reports/P498-dev2.md`、`docs/team/reviews/P498.md` | PM（探索接受） | 仅保留探索及接入裁定 |
 | `docs/team/reports/{P499-dev2,V197-dev3}.md` | PM（方案接受） | 已接受的初始化方案审阅记录，收回原写权 |
 | `docs/team/reports/P500-dev-bob.md`、`docs/team/reports/V198-dev3.md`、`docs/team/reviews/P500.md` 与 `P500-verify.log` | PM（候选与合并证据接受） | P500/V198 已完成，收回产品与中央记录暂时写权 |
