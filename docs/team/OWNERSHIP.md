@@ -25,13 +25,12 @@
 | `docs/team/reports/P504-dev-bob.md` | PM（P504 已接受） | PM 待命指令冲突与采用边界 |
 | `openspec/changes/clarify-pm-standby-guidance/**`、`docs/team/reports/P508-dev-bob.md`、`docs/team/reports/V201-verify.md` | PM（已审方案与原报告） | 保持 `defb5f1b` 和 `a95ac8be` 的接受证据，原 V196 会话和证据不动 |
 | `docs/team/tasks/P510-pm-standby-guidance-apply.md` 所列十个产品落点、上述 change 的 `tasks.md`、`docs/team/reports/P510-dev-bob.md` | agent:dev-bob（P510 临时） | 仅实施已独立审阅的默认说明与一行普通巡检消息，不动运行状态、现有项目或测试 |
-| `docs/team/reports/V204-verify.md` | agent:verify（V204 临时，在 V202 后） | 只读对照固定修订和之后合并版的十处文字，不运行产品或写候选 |
+| `docs/team/reports/V204-verify.md` | agent:verify（V204 临时） | 只读对照固定修订和之后合并版的十处文字，不运行产品或写候选 |
 | `docs/team/reports/P505-dev3.md` | PM（P505 已接受） | 现行及标签候选的连续键读数 |
-| `docs/team/tasks/P509-panel-board-batched-keys-fix.md` 中的局部看板导航、生成构建及原场景断言、`docs/team/reports/P509-dev3.md` | agent:dev3（P509 临时） | 现行主线只修已有看板快速方向键，不写 P497/V196 或工作页 |
-| `docs/team/reports/V202-verify.md`、`docs/team/reviews/{P509.md,P509-verify.log}` | agent:verify（V202 临时，排在 V201 后） | 仅独立私有实景短验，中央两份仅由 `team review` 生成 |
+| `docs/team/reports/{P509-dev3,V202-verify}.md`、`docs/team/reviews/{P509.md,P509-verify.log}` | PM（P509/V202 已接受） | 候选与合并的实际帧结论已核，产品/测试和中央验证临时写权撤回 |
 | `docs/team/reports/P506-dev2.md` | PM（P506 已接受） | 项目设置的标签操作与唯一写入入口探索 |
 | `openspec/changes/project-label-management/**`、`docs/team/reports/P507-dev2.md` | agent:dev2（P507 临时） | 正式方案及必要变更条款；不写产品或被暂停的标签候选 |
-| `docs/team/reports/V203-dev3.md` | agent:dev3（V203 临时，排在 P509 完结后） | 只审项目设置中的标签管理方案，不动固定候选或实际项目 |
+| `docs/team/reports/V203-dev3.md` | agent:dev3（V203 临时） | 只审项目设置中的标签管理方案，不动固定候选或实际项目 |
 | `docs/team/reviews/P461.md`、`docs/team/reviews/P461-verify.log` | PM（V167已接受关闭） | verifier实际记录已收存；仅PM接受与结案，不再授权新执行 |
 | `docs/team/reviews/P465.md`、`docs/team/reviews/P465-verify.log` | PM（V170已接受关闭） | 两阶段实际记录由dev3执行，已接受merged证据；临时工具写权收回 |
 | `docs/team/reviews/P466.md`、`docs/team/reviews/P466-verify.log` | PM（V171已接受关闭） | 两阶段实际记录由verify执行，已接受merged证据；临时工具写权收回 |

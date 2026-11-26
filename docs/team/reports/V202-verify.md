@@ -1,16 +1,16 @@
 # V202 · 独立验证看板连续方向键
 
-agent: verify   status: PASS（候选定点）   time: 2026-11-26T01:57:56Z
+agent: verify   status: PASS（候选与合并版定点）   time: 2026-11-26T02:02:36Z
 
 branch: `task/V202-panel-board-batched-keys-verify`   PR/MR: -
 
-**P509 候选 `f6182e925c5480e41e5d403d906c6ce6a3cf2500` 定点通过。** 在同一份看板数据、同样的 160×32 终端中，一条命令连发三次 ↑，旧版停在 `M51 Other`，新版到 `M39 Second`。随后一条命令连发两次 ↓ 并按 Enter，打开的是最后一张卡片 `M51`，不是起点 `M39` 或中途的 `M48`。宽屏车道窗口和同号卡片刷新后的焦点也通过实测。此结论只绑定候选，合并版未验。
+**P509 候选 `f6182e925c5480e41e5d403d906c6ce6a3cf2500` 定点通过。** 在同一份看板数据、同样的 160×32 终端中，一条命令连发三次 ↑，旧版停在 `M51 Other`，新版到 `M39 Second`。随后一条命令连发两次 ↓ 并按 Enter，打开的是最后一张卡片 `M51`，不是起点 `M39` 或中途的 `M48`。宽屏车道窗口和同号卡片刷新后的焦点也通过实测。**合并版 `c0d2cfd9` 已短核通过：四份文件与候选逐字节一致，仍到 `M39 Second`。** 其余动作沿用候选实测，未在合并版重复运行。
 
 ## 交付与实测
 
 | 检查 | 回执与原件 |
 |---|---|
-| 正式复验 | `docs/team/reviews/P509.md`、`docs/team/reviews/P509-verify.log`；执行者 `verify`，冻结检出干净，用时 7 秒、排队 0 秒，原生判定 PASS。日志与私有 `frames/run.log` 逐字节相同。 |
+| 正式复验 | `docs/team/reviews/P509.md`、`docs/team/reviews/P509-verify.log`；候选时执行者 `verify`，冻结检出干净，用时 7 秒、排队 0 秒，原生判定 PASS；当时日志与候选私有 `frames/run.log` 逐字节相同。PM 已保存候选记录两份原件；这两个正式路径现记录下文的合并版短核。 |
 | 同批键后立即打开 | `send 6: Down Down Enter`；`frames/enter.txt` 显示 `M51 · fixture brief`，未出现 `M39` 或 `M48` 的详情标题。退出后唯一光标为 `M51 Other`，`x=3 y=7`。 |
 | 宽屏窗口跟随 | 已完成栏首窗为 `D40…D16`，从窗底的 `D16` 一次发送 `Down Down Up`；新窗口是 `D38…D14`、唯一光标在 `D15`（`x=83 y=28`），边沿标记 `↑2`、`↓13`。隔壁已放弃栏仍显示 `X40…X16`。见 `frames/window-{before,after}.txt`。 |
 | 同号行、刷新与新断言 | 从原 `scn_board` 取相同 `BOARD.md` 行序，真实读取和写入只在私有项目。`dup-1`/`dup-2` 分别唯一选中 `M39 第一条`/`M39 第二条`；真实 `board assign M39 reviewer` 只给第二条补新更新时间（`2026-11-26T01:57:15Z`），再发 `r` 后第二条从第 5 屏行移到第 4 屏行，唯一光标跟随。Enter 显示 `Board body M39 proof`；退出后还在第二条。一条 `Down Down` 按顺序从第二条经第一条到 `M48 第三条`，最终只在第三条显示光标（第 6 屏行）。见 `frames/dup-*.txt`、`frames/board-{before,after}.json`。 |
@@ -63,4 +63,25 @@ ledger-ban: scope=published files=3142 hits=0 names=ok user=resolved
 ledger rc=0
 ```
 
-**下一步：** PM 接受候选证据后，由本席位在另一个干净固定检出上短核合并版。本分支只提交本报告，不推送或合并；私有原件保留供 PM 保存。
+## 合并版短核 · 2026-11-26T02:02:21Z
+
+在 PM 提供的干净固定检出 `/var/tmp/p509-merged-c0d2cfd9.BPUVzs` 上运行，对照候选 `f6182e92` 的 Git 文件内容逐一与合并版实际文件 `cmp`。`panel/README.md`、`panel/panel.js`、`panel/src/App.tsx`、`tests/panel-b3.sh` 四份均一致，完整 SHA-256 在 `P509-verify.log`。实际 Node 进程参数指向该检出的 `panel.js`，SHA-256 仍是 `215a8f9106745664a44e21251c6b0c1c266fe3637e9c8142a8a0de9a2ed9d8be`；输入与候选及 P505 的原数据副本 `cmp` 均为 `rc=0`。
+
+```text
+$ TMPDIR=/var/tmp/v202-merged.GeH51G/tmp TEAM_GATES='bash /var/tmp/v202-merged.GeH51G/run.sh' bash skills/teamsmith/scripts/team review P509 --dir /var/tmp/p509-merged-c0d2cfd9.BPUVzs --branch c0d2cfd9d4e76639d72d2b999d19eb866a366baa
+✓ 门禁输出：docs/team/reviews/P509-verify.log（PASS，2s）
+✓ 复验记录：docs/team/reviews/P509.md（PASS）
+rc=0（后台作业 v202-p509-merged 已收取）
+
+# 正式日志的实景读数
+burst-outside: M39 Outside x=3 y=8
+send 5: Up Up Up
+send rc=0
+burst-up-first: M39 Second x=3 y=5
+burst-up-next-tick: M39 Second x=3 y=5
+merged three-key assertion rc=0
+```
+
+同一 160×32 私有 tmux 中一次发送三键；两张帧均只有一个光标，且在第二条 `M39` 上。结束后专用 socket 的 `has-session` 返回 `rc=1`、`no server running`。本轮不重跑候选其它动作、旧版、构建或整套测试。正式记录与日志副本、输入、启动脚本和画面原件在 `/var/tmp/v202-merged.GeH51G/`，`sha256sum -c SHA256SUMS` 九项通过。候选原件仍在 `/var/tmp/v202.x5UGhS/`；两处均保留，未改 V196。
+
+本分支只提交本报告，不推送或合并。待 PM 接收合并版证据与两轮原件。
