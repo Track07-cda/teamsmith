@@ -1,10 +1,10 @@
 # V196 · 任务标签与看板独立验证
 
-agent: verify   status: BLOCKED / NEEDS CHANGES   time: 2026-11-26T02:40:25Z
+agent: verify   status: BLOCKED / NEEDS CHANGES   time: 2026-11-26T02:50:05Z
 
 branch: `task/V196-task-labels-behaviour-verify`   PR/MR: -
 
-**接入现行看板的候选 `4a8bf012fe1fc0c38dfb2e359719f40206cd3b40` 仍不能合并。** 新旧普通命令、带更新时间的写入、缓存前后数据、新 59 列画面和机器输出均有通过证据。真实终端 26 项通过、1 项失败：测试要求任务没有文件，但同一个私有项目已为该任务放了一份真实任务书；另外，当前测试入口不会保存后续刷新断言所需的实际回执。后续标签操作未到达。详见第三轮；三轮正式 FAIL 都保留。
+**候选 `2309f8c564306affaf374f67e87fb4619a1f39b4` 仍不能合并。** 真实终端 43 项通过、1 项失败。空详情与真实回执已修正；连续按键、改色、改权重、两种排序、表外详情刷新、标签表损坏和恢复均实测。最后在英文 59 列画面等 `M39 Outside`，卡片实际已显示，检查没认出编号后的四个排版空格，后续鼠标选择和隐藏同号刷新未验证。详见第四轮；四轮正式 FAIL 保留。
 
 ## 首轮 `6ce75ccf` 历史结果
 
@@ -142,7 +142,7 @@ T2    todo    5    ["Bug","Urgent"]    Offline drafts
 
 **第二轮 BLOCKED 处置：** PM 另派 P509 验证并修复不带标签的连续按键，再按新方案接入。第二轮原生记录与原件保留。返修根 `/var/tmp/v196-r2.LAN0n4/` 含 `run.sh`、`results.tsv`、五项分别的日志、`finish-cli.sh`、`finish-cli.log` 和 59 列副本；此前 CLI 环境错误也留作原始记录。
 
-## 第三轮 · 接入现行看板 `4a8bf012fe1fc0c38dfb2e359719f40206cd3b40`
+## 第三轮 · 接入现行看板 `4a8bf012fe1fc0c38dfb2e359719f40206cd3b40`（历史结果）
 
 正式记录 `docs/team/reviews/P497.md`、`P497-verify.log` 绑定该冻结 SHA，由 `verify` 实际执行，74 秒，FAIL、外层退出 1。固定检出 `/var/tmp/p497-review-4a8bf012.g5PgLX` 运行前后均干净；合并 `2494ac7b` 的实际父提交为 `4cbc5bc7` 与 `d8968556`。首两轮正式记录仍在 `.pi/team/state/evidence/P497/{round1,round2}`。
 
@@ -172,4 +172,33 @@ python3 /var/tmp/v196-r3.cFA6ko/check-cache-artifacts.py /var/tmp/v196-r3.cFA6ko
 
 **当前 OpenSpec 评估：** 源与读写、机器及初始画面接合有证据；`2.1/2.2` 在标签段只到默认窗、焦点、标签和分数的首次详情。同批连续 ↑ 与立即 `Down Down Enter` **在有标签终端未到达**（P509 的旧无标签证据不替代）；同界面改色/权重、等分逆时序切换、跨排序与键鼠筛选、空结果、隐藏同号焦点、坏表恢复、工作页表外详情同号插入后的更新，以及后续双语与会话选择均未到达。F5/F6 是本轮两处验证阻塞，未把它们定性为产品缺陷。3.1 仍未完整，不进入合并版检查。首轮 15 段、§38、全库规格检查、新候选隔离构建、模型、安装及发布均未重跑。无真实团队界面、真实项目数据或设置改动。
 
-**BLOCKED:** PM 请作者修同一 `panel-b3.sh board` 的 F5 与 F6；新冻结候选只复验实际终端必要路径，复用已取得的命令、缓存和窄屏证据。第三轮原件 `/var/tmp/v196-r3.cFA6ko/` 保存 runner、时间与各退出值、旧/新命令原件、缓存 JSON、对比器原红与离线读数、新 ANSI 帧及机器参数；真实终端原件 `/var/tmp/teamsmith-panel-b3-pm_skills-deb708fe.VC9PHK/board/`。未延长等待、重启或重跑该终端场景。第三轮报告暂存后在本任务分支执行上述 `ledger-ban.sh` 命令，回执 `scope=published files=3065 hits=0 names=ok user=resolved`，退出 0。
+**第三轮 BLOCKED 处置：** PM 让作者修同一 `panel-b3.sh board` 的 F5 与 F6；第四轮只复验实际终端，复用已取得的命令、缓存和窄屏证据。第三轮原件 `/var/tmp/v196-r3.cFA6ko/` 保存 runner、时间与各退出值、旧/新命令原件、缓存 JSON、对比器原红与离线读数、新 ANSI 帧及机器参数；真实终端原件 `/var/tmp/teamsmith-panel-b3-pm_skills-deb708fe.VC9PHK/board/`。未延长等待、重启或重跑该终端场景。第三轮报告暂存后在本任务分支执行上述 `ledger-ban.sh` 命令，回执 `scope=published files=3065 hits=0 names=ok user=resolved`，退出 0。
+
+## 第四轮 · `2309f8c564306affaf374f67e87fb4619a1f39b4`（仅实时终端）
+
+**F5、F6 已闭合；新失败 F7 阻断最后一段。** 相对 `4a8bf012` 只改 `tests/panel-b3{,-stub}.sh` 和作者报告，`git diff --exit-code 4a8bf012..HEAD -- skills/teamsmith/scripts openspec/changes/task-labels` 为 0，bundle 仍是 `0dbbc61704aa1f9c960c8c9fad00964cf4ca1c57ea13af307098b0412a09108e`。前三轮中央记录保存在 `.pi/team/state/evidence/P497/round{1,2,3}/`，当前中央记录绑定新候选、不替换旧结论。
+
+```sh
+bash -n /var/tmp/v196-r4.hMakmE/run.sh
+TEAM_GATES='bash /var/tmp/v196-r4.hMakmE/run.sh' bash skills/teamsmith/scripts/team review P497 \
+  --dir /var/tmp/p497-review-2309f8c5.tGOIki --branch 2309f8c564306affaf374f67e87fb4619a1f39b4
+# runner: TMPDIR=/var/tmp, private TMUX_TMPDIR=/var/tmp/tl-pty.5rOTkx, preparation_s=0
+TEAM_B3_KEEP=1 bash skills/teamsmith/tests/panel-b3.sh board </dev/null
+# board_pty_rc=1 seconds=107；43 项通过、1 项失败（en-default）；原生 review FAIL，rc=1
+```
+
+下面的文件相对 `/var/tmp/teamsmith-panel-b3-pm_skills-deb708fe.pgzoOP/board/`。所有读取均为本次终端实际使用的输入与输出，不事后另查 CLI 补数。
+
+| 场景 | 实际画面与回执 |
+|---|---|
+| 空详情（F5）及实际回执（F6） | `dup-detail.txt` 先显示 `Board body M39 proof`；同一项目内任务书移至 `live-labels/pre-label-M39-board.md` 后，`dup-first-detail.txt` 显示 `优先级 8`、`Bug / Urgent`、`没有关联文件`；`live-labels/first-detail-reply.json` 的真实 `files=[]`。同一个真实入口（`board-cli`）把数据同时交给面板和保存原件，以下三次独立刷新各留了实际 `board` JSON。 |
+| 连续按键、历史位置 | `batch-detail.txt` 在一条 `Down Down Enter` 后打开 `M51` 和 `Label board M51 proof`，而非起点或中间的 `M48`；`dup-batched-up.txt` 从 Outside 连送三次 ↑ 唯一光标到 `M39 First`，下一步 `dup-priority-from.txt` 到 `M39 Second`。`label-history-default.txt` / `history-restored.txt` 的两栏开头为 `D04 D02 D40` / `X04 X02 X40`（有时间优先，然后无时间从表尾）；显式优先级 `priority-start.txt` 把 `D01/X01` 放在前面。 |
+| 同终端改色、权重和焦点 | `swatch-before.txt` / `swatch-after.txt` 中 Bug 色标从 `38;2;9;105;218` 到 `38;2;51;187;119`，`swatch-plain.txt` 仍为 8 和两名称。实际 `priority-board-reply.json` 的两条 M39 均为 11，Outside 无标签与分数；`priority-start.txt` 的次序是 `Neighbor, First, Second, Outside`，`dup-back.txt` 是 `First, Second, Neighbor, Outside`，唯一光标一直在 `M39 Second`。 |
+| 等分、筛选与无结果 | `tie-recent.txt` 的同分显示 `Second, First`，`tie-priority.txt` 显示 `First, Second`，选中 `Second` 和 `Bug` 筛选保留。`filter-wheel.txt` / `filter-modal.txt` 见候选列表接收滚轮和方向键；`filter-same.txt`、`filter-cross.txt` 分别在 `M48 Neighbor`、`M52 Cross lane`，`filter-no-open.txt` 的空结果按 Enter 未打开详情；`filter-renamed.txt` 回到全部任务但保留优先级，`remember-return.txt` 翻页后恢复同一筛选与排序。 |
+| 表外同号、损坏和恢复 | `insert-board-reply.json` 原序的 M39 为 `First(true), Second(true), Inserted(true), Outside(false)`，计划中的第三次同号已指向新任务。开着的表外详情确实从 `Outside report before refresh` 更新为 `Outside report after refresh`，帧均无标签、无优先级。`invalid-board-reply.json` 有 88 条原行、`unavailable: true` 且无旧标签/分数，终端显示标签不可用，详情仍无文件；恢复后同终端的 `recovered-detail.txt` 又显示 `Bug / Urgent` 与优先级 11。 |
+
+**F7 · 59 列的卡片已显示，检查拿宽屏间距找它。** `tests/panel-b3.sh:1579` 用字面 `M39 Outside` 等待；`en-default.txt` 同时有 `t Labels: All tasks` / `o Sort: Recent updates`，还确有唯一该卡行 `'   · M39    Outside'`。对该原帧离线读数：`'M39 Outside' in line → False`，`re.fullmatch(r' +· M39 +Outside', line) → True`；增加等待无效，不是产品丢卡。`:1583–1594` 和 `:1608–1618` 后面的 59 列步骤仍以单空格检查其他卡片（同一原帧的 `M48    Neighbor` 和 `M51    Other` 同理，包含／排除都会读错）。请一次改正确认窄卡行身份的方法，复用已有行匹配方式，保留完整标题、焦点和应当不出现的卡片检查，不放宽标签名本身。
+
+**当前 OpenSpec 状态：** 沿用第三轮 CLI、缓存及新候选产物同一性；第四轮实测通过上述实时操作，不等于整个 `3.1` 通过。英文 59 列已看见重启后回到全部任务和最近更新，但随后点击精确的长标签、鼠标切换排序、`Ctrl+o` 打开草稿编辑器、配置不写入，以及筛选中刷新移除最后一条同号后的实际焦点和 Enter 未到达。无新增产品缺陷证据；该终端检查仍阻塞合并。不重跑前面通过项、§38、全套、模型或构建安装。
+
+**BLOCKED:** 请 PM 交作者修同一个终端案例的 F7，并明确下一次只补尚未达到的终端操作，不再验已保留的普通 CLI/缓存/59 列静态帧和机器输出。原始终端画面、原读取 JSON 和现场都保留，完整 `pty.log`、`pty.rc`、`pty-socket-path`、`run.sh` 在 `/var/tmp/v196-r4.hMakmE/`；未重启、重跑或延长等待。
