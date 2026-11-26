@@ -4,7 +4,7 @@ title: 编写消除 PM 待命指令矛盾的方案
 agent: dev-bob
 deps: P504
 category: analysis
-phase: opsx-propose
+phase: propose
 change: clarify-pm-standby-guidance
 specs: init-skill
 deltas: init-skill

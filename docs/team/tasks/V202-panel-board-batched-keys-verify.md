@@ -4,7 +4,7 @@ title: 独立验证看板连续方向键逐步移动
 agent: verify
 deps: P505
 category: verify
-phase: opsx-verify
+phase: verify
 change: -
 specs: panel#The board page is a kanban over the board's states
 deltas: -

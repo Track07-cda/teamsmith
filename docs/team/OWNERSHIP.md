@@ -23,8 +23,8 @@
 | `docs/team/reports/{P502-dev2,V199-dev3,P503-dev-bob,V200-dev3}.md`、`docs/team/reviews/{P503.md,P503-verify.log}` | PM（实施及合并短核已接受） | 方案、产品与验证临时写权撤回，不混入暂停的标签候选 |
 | `openspec/changes/archive/2026-11-25-pulse-board-recent-first/**`、`openspec/specs/{panel,board-and-status}/spec.md`、`docs/team/reports/A18-dev2.md` | PM（A18 已接受） | 三条要求与实际五份工件已核对，收回归档临时写权 |
 | `docs/team/reports/P504-dev-bob.md` | PM（P504 已接受） | PM 待命指令冲突与采用边界 |
-| `openspec/changes/clarify-pm-standby-guidance/**`、`docs/team/reports/P508-dev-bob.md` | agent:dev-bob（P508 临时） | 只写最小默认待命说明的正式方案，不改产品或项目 |
-| `docs/team/reports/V201-verify.md` | agent:verify（V201 临时） | 只审待命方案，原 V196 分支、会话文件及证据保留，在本任务不写 |
+| `openspec/changes/clarify-pm-standby-guidance/**`、`docs/team/reports/P508-dev-bob.md`、`docs/team/reports/V201-verify.md` | PM（已审方案与原报告） | 保持 `defb5f1b` 和 `a95ac8be` 的接受证据，原 V196 会话和证据不动 |
+| `docs/team/tasks/P510-pm-standby-guidance-apply.md` 所列十个产品落点、上述 change 的 `tasks.md`、`docs/team/reports/P510-dev-bob.md` | agent:dev-bob（P510 临时） | 仅实施已独立审阅的默认说明与一行普通巡检消息，不动运行状态、现有项目或测试 |
 | `docs/team/reports/P505-dev3.md` | PM（P505 已接受） | 现行及标签候选的连续键读数 |
 | `docs/team/tasks/P509-panel-board-batched-keys-fix.md` 中的局部看板导航、生成构建及原场景断言、`docs/team/reports/P509-dev3.md` | agent:dev3（P509 临时） | 现行主线只修已有看板快速方向键，不写 P497/V196 或工作页 |
 | `docs/team/reports/V202-verify.md`、`docs/team/reviews/{P509.md,P509-verify.log}` | agent:verify（V202 临时，排在 V201 后） | 仅独立私有实景短验，中央两份仅由 `team review` 生成 |
