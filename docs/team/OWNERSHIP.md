@@ -30,6 +30,7 @@
 | `docs/team/reports/V202-verify.md`、`docs/team/reviews/{P509.md,P509-verify.log}` | agent:verify（V202 临时，排在 V201 后） | 仅独立私有实景短验，中央两份仅由 `team review` 生成 |
 | `docs/team/reports/P506-dev2.md` | PM（P506 已接受） | 项目设置的标签操作与唯一写入入口探索 |
 | `openspec/changes/project-label-management/**`、`docs/team/reports/P507-dev2.md` | agent:dev2（P507 临时） | 正式方案及必要变更条款；不写产品或被暂停的标签候选 |
+| `docs/team/reports/V203-dev3.md` | agent:dev3（V203 临时，排在 P509 完结后） | 只审项目设置中的标签管理方案，不动固定候选或实际项目 |
 | `docs/team/reviews/P461.md`、`docs/team/reviews/P461-verify.log` | PM（V167已接受关闭） | verifier实际记录已收存；仅PM接受与结案，不再授权新执行 |
 | `docs/team/reviews/P465.md`、`docs/team/reviews/P465-verify.log` | PM（V170已接受关闭） | 两阶段实际记录由dev3执行，已接受merged证据；临时工具写权收回 |
 | `docs/team/reviews/P466.md`、`docs/team/reviews/P466-verify.log` | PM（V171已接受关闭） | 两阶段实际记录由verify执行，已接受merged证据；临时工具写权收回 |
