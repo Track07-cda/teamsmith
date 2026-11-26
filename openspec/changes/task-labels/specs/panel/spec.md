@@ -2,11 +2,10 @@
 
 ### Requirement: Board labels and priority are optional read-only views
 
-The interactive board SHALL offer a read-only single-label filter and an optional within-lane priority order.
-The default is all tasks in the board's existing recent-first order. Only an explicit choice of priority
-replaces that order with descending shared score and then original BOARD.md row order. The same label
-filter can be used with either order. Display and navigation SHALL address the same matching row identities. Task detail SHALL show label
-names and score without replacing file details. Neither labels nor view choices are written by these controls.
+The interactive board SHALL default to all tasks in recent-first order. An explicit priority choice uses
+descending shared score within each lane, breaking ties by original board row order. The single-label filter applies
+to either order. Display and navigation SHALL use the same matching rows. Task detail SHALL show label
+names and score alongside its file details. These controls SHALL NOT write labels or view choices.
 
 #### Scenario: Filtered cards and interactions use one row order
 
@@ -19,6 +18,9 @@ names and score without replacing file details. Neither labels nor view choices 
   card in its prior lane's shown order, or the first matching card of the first lane with matches
 - **AND** each lane and its edge counts reflect matches, folded lanes with matches still open the focused matching
   card, and no-match selection gives zero counts, follows the existing empty-fold policy and opens no detail
+- **AND** if an eligible task is focused under the filter and a refresh removes its last matching occurrence
+  while a same-ID row outside the task table remains, focus moves to an eligible card and Enter cannot open
+  the hidden row; with no eligible card, Enter opens nothing
 
 #### Scenario: A same-ID row outside the task table never inherits labels
 
@@ -125,11 +127,14 @@ Rendering, the visible window, arrow navigation and pointer targets SHALL agree 
 Clicking an unfocused card SHALL focus its original row; clicking a focused card SHALL open that frame's row,
 not a position reinterpreted after sorting. Enter SHALL open the selected original row. A refresh that changes
 the display order or the row's state SHALL keep addressing the same original row while its identity is still
-available. Two rows with one id remain separate stops with the cursor on exactly one; the occurrence is counted
-before sorting, not in the lane. The identity does not distinguish identical ids that a manual edit exchanges
-or inserts before an existing occurrence. When the focused occurrence is no longer addressable, the first row
-carrying its id SHALL take the focus; when none carries it, the old lane's first displayed card SHALL take the
-focus, or the first card of the first nonempty lane if that lane emptied. A lane holding more cards than its
+available and the row is eligible. A row is eligible if it belongs to the current view's filtered set, including
+cards outside its current window or in a folded lane, or to the unfiltered view when no filter is selected.
+Two rows with one id remain separate stops with the cursor on exactly one; the occurrence is counted before
+sorting, not in the lane. The identity does not distinguish identical ids that a manual edit exchanges or
+inserts before an existing occurrence. When that occurrence is unavailable or ineligible, the first eligible
+row carrying its id SHALL take the focus. If no eligible row carries that id, the old lane's first included card
+SHALL take the focus, or the first included card of the first nonempty lane if that lane emptied. If none exists,
+Enter SHALL open no card. A lane holding more cards than its
 window SHALL scroll (`↑`/`↓` past the edge, and the wheel over the lane) and SHALL mark each edge that hides cards
 with its count. In the side-by-side layout, the wheel MAY deliberately scroll a lane away from its selection as
 before. Reordering SHALL adjust a window only when it would move a previously visible selection out of view,
