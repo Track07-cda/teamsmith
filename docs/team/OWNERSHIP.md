@@ -12,9 +12,8 @@
 | `ci/collect-scene.sh` | PM | P324已合入，临时写权收回；当前无实现任务改此文件 |
 | `docs/team/reports/**`、`docs/team/threads/**` | agent:* | 报告与线程（只写自己的报告文件） |
 | `docs/team/reports/P495-dev2.md`、`docs/team/reviews/P495.md` | PM（P495 已接受） | 保留探索记录，无后续写权 |
-| `openspec/changes/task-labels/**`（除实施任务勾选）、`docs/team/reports/{P496-dev2,V195-dev3}.md` | PM（原方案接受，最近更新兼容修订待审） | 原方案和回执保留；仅接入现行看板的五份方案变更锁定 `a0911dfe`，P497 暂未复工 |
-| `docs/team/reports/V205-dev3.md` | agent:dev3（V205 临时） | 只复核接入现行看板的方案差异，产品和方案只读 |
-| `docs/team/tasks/P497-task-labels-apply.md` 明授的标签 CLI、Pulse 看板、相关测试及实施勾选范围，`docs/team/reports/P497-dev.md` | agent:dev（P497 临时） | V196 后只修 CLI 的标签分隔符及 §28-h 取行、§26-a 隔离重建；不改其它入口、设置或巡检 |
+| `openspec/changes/task-labels/**`（除实施任务勾选）、`docs/team/reports/{P496-dev2,V195-dev3,V205-dev3}.md` | PM（原范围和兼容修订均已接受） | 保留原方案、修订 `f36d1e51` 和独立回执，规划只读 |
+| `docs/team/tasks/P497-task-labels-apply.md` 明授的标签 CLI、Pulse 看板、相关测试及实施勾选范围，`docs/team/reports/P497-dev.md` | agent:dev（P497 恢复） | 只把原标签接入已有最近更新、连续方向键和时间布局；不得改设置、巡检或其它项目 |
 | `docs/team/reports/V196-verify.md`、`docs/team/reviews/P497.md` 与 `P497-verify.log` | agent:verify（V196 临时） | 冻结候选独立验证；中央两份证据只由原生 `team review` 生成，产品只读 |
 | `docs/team/reports/P498-dev2.md`、`docs/team/reviews/P498.md` | PM（探索接受） | 仅保留探索及接入裁定 |
 | `docs/team/reports/{P499-dev2,V197-dev3}.md` | PM（方案接受） | 已接受的初始化方案审阅记录，收回原写权 |
