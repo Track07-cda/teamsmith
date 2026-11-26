@@ -29,3 +29,9 @@ branch: task/V206-project-label-management-behaviour-verify
 3. 一次后台启动即结束回合，完成后收取；发生失败，留真实帧、子结果、命令记录、输入前后及第一个缺口，区分业务失败、断言误判和未达到，不当场改代码、换场景或重跑。不能验证已确认未使用删除、其它拒绝、未确认回复及旧读竞态时，把静态证据与实际执行分开。不跑原标签看板 46 项、§38、完整 smoke、重建/依赖安装、模型、发布或当前 Pulse。不得写实际项目配置、看板、标签、巡检、待命状态。
 
 只本地提交 `docs/team/reports/V206-dev3.md`；由原生 CLI 写主检出的 `docs/team/reviews/P511.md`、`P511-verify.log`，除此之外不写主检出/清单。报告先给是否可接受、真实执行范围、通过失败数、命令退出及具体帧与 argv 路径，然后给 Completeness/Correctness/Coherence 和所有未执行限制；原件保留待 PM 核收。本次尚不合并、不归档、不发布。合并后另由你对固定合并做一致性以及必要的短接入，不重复此次设置场景。
+
+## 首轮失败后的唯一补验
+
+冻结 `3fd44aac4373506208c7ca6eb52cd86ca8a320f5`，独立干净 `/var/tmp/p511-review-3fd44aac.mHMIZV`。`882ecc2e` 只修 `panel-p21.sh` 的逐字输入并显示其失败；相对 `eb95c48e` 产品、包及规格完全一致。作者隔离空窗对相同名称和负权重的旧写法均 rc=1，新 rc=0 且收到逐字相同；这是输入工具的对照，而非产品验收。首轮 15/1 原生 FAIL 和原件留 `.pi/team/state/evidence/P511/round1/`，静态结果沿用。
+
+按上节私有环境与证据要求，只跑原 `TEAM_P21_KEEP=1 bash skills/teamsmith/tests/panel-p21.sh settings </dev/null` 一次，由于前段是同一场景的必要准备而随跑，不另跑已通过项或作者空窗。此前未到达的文字进入、真实保存、只改精确权重、取消和拒删、设置保留操作及英文窄屏均要达，保留真实 argv/原始帧/读回、失败与没到达的边界。只改绑定为 `TEAM_GATES='bash /var/tmp/<你的私有根>/run.sh' bash skills/teamsmith/scripts/team review P511 --dir /var/tmp/p511-review-3fd44aac.mHMIZV --branch 3fd44aac4373506208c7ca6eb52cd86ca8a320f5`。沿用原 V206 任务、会话和分支，后台通知收取，不重跑全套或代码静态批次，不动当前 Pulse。
