@@ -24,7 +24,8 @@
 | `openspec/changes/archive/2026-11-25-pulse-board-recent-first/**`、`openspec/specs/{panel,board-and-status}/spec.md`、`docs/team/reports/A18-dev2.md` | PM（A18 已接受） | 三条要求与实际五份工件已核对，收回归档临时写权 |
 | `docs/team/reports/P504-dev-bob.md` | agent:dev-bob（P504） | 只读 PM 待命指令、建议统一措辞 |
 | `docs/team/reports/P505-dev3.md` | agent:dev3（P505） | 只查任务标签键盘阻塞，独立临时目录，不碰 P497/V196 原件 |
-| `docs/team/reports/P506-dev2.md` | agent:dev2（P506） | 只读探索项目设置任务标签的图形操作 |
+| `docs/team/reports/P506-dev2.md` | PM（P506 已接受） | 项目设置的标签操作与唯一写入入口探索 |
+| `openspec/changes/project-label-management/**`、`docs/team/reports/P507-dev2.md` | agent:dev2（P507 临时） | 正式方案及必要变更条款；不写产品或被暂停的标签候选 |
 | `docs/team/reviews/P461.md`、`docs/team/reviews/P461-verify.log` | PM（V167已接受关闭） | verifier实际记录已收存；仅PM接受与结案，不再授权新执行 |
 | `docs/team/reviews/P465.md`、`docs/team/reviews/P465-verify.log` | PM（V170已接受关闭） | 两阶段实际记录由dev3执行，已接受merged证据；临时工具写权收回 |
 | `docs/team/reviews/P466.md`、`docs/team/reviews/P466-verify.log` | PM（V171已接受关闭） | 两阶段实际记录由verify执行，已接受merged证据；临时工具写权收回 |
