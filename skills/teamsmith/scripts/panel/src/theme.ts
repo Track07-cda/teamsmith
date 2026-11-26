@@ -109,8 +109,8 @@ const BASIC: Record<Tone, string> = {
 }
 
 /** The SGR parameters for a tone: truecolor when the terminal claims it, 16-color otherwise. */
-export function toneSgr(tone: Tone, palette: Palette, truecolor = true): string {
+export function toneSgr(tone: Tone, palette: Palette, truecolor = true, rgb?: string): string {
   if (!truecolor) return BASIC[tone] ?? '39'
-  const [r, g, b] = hexRgb(palette.tones[tone] ?? '#ffffff')
+  const [r, g, b] = hexRgb(rgb ?? palette.tones[tone] ?? '#ffffff')
   return `38;2;${r};${g};${b}`
 }

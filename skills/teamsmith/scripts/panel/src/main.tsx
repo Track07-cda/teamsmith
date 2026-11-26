@@ -433,6 +433,7 @@ async function main(): Promise<void> {
       teamCli,
       activity: rawActivityOn,
       events,
+      boardLabels: true,
       detailId: detailArg || null,
       detailSource: detailArg ? detailSourceArg : null,
       replyListOpen: page === 5 && !replyNoArg,
@@ -449,6 +450,9 @@ async function main(): Promise<void> {
       replyBody: replyNoArg || null,
       overlay: wantOverlay,
       detail: detailArg || null,
+      detailRow: detailArg && detailSourceArg === 'entry'
+        ? { ref: { id: detailArg, lane: '' }, taskTable: res.blocks?.board?.rows.find((row) => row.id === detailArg)?.taskTable === true }
+        : null,
       // P123: the snapshot is the TUI's own render path, so it reads the fold keys (the machine exits
       // stay on `defaultView` and never look at them).
       boardFold: settings.boardFold,
@@ -518,7 +522,7 @@ async function main(): Promise<void> {
   const palette = PALETTES[resolveTheme(settings.theme)]
   // Activity precedence inside the TUI: CLI flag > panel.conf > TEAM_MONITOR_ACTIVITY.
   const activityOn = activityPinned ? rawActivityOn : settings.activity
-  const opts: DataOptions = { root, teamCli, activity: activityOn, events }
+  const opts: DataOptions = { root, teamCli, activity: activityOn, events, boardLabels: true }
   const cache: PanelCache = createPanelCache(opts)
   const first = await cache.refresh({ force: true })
   let current = frameOrFail(first, activityOn)

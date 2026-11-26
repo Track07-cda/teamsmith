@@ -5009,6 +5009,54 @@ team_board_duplicate_line() { # → "BOARD 有重复 ID：M4.3 ×2、M6.3 ×2"�
   printf '%s' "$dups" | awk 'NR>1{printf "、"} {printf "%s", $0} END{printf "\n"}'
 }
 
+# Shared awk source for the opted-in board/label views. The legacy inspection still scans all pipe rows.
+_team_board_label_awk='
+    function label_task(ic, tc, sc,    id, title, st) {
+      if (label_table == 2) return 0
+      if ($0 !~ /^\|/) { if (label_table == 1) label_table = 2; return 0 }
+      id = trim($(ic)); title = trim($(tc)); st = trim($(sc))
+      if ((id == "ID" || id == "编号") && title ~ /^(任务|标题|Title|Task)$/ && st ~ /^(状态|Status)$/) {
+        label_table = label_table == 1 ? 2 : 1
+        return 0
+      }
+      return label_table == 1 && id != "" && id !~ /^[-–—: ]+$/ && st ~ /^(todo|wip|review|done|blocked|dropped)$/
+    }
+    function label_json(s,    i, j, ch, out) {
+      for (i=1; i<=length(s); i++) {
+        ch = substr(s,i,1)
+        if (ch == "\\" || ch == "\"") out = out "\\" ch
+        else if (ch == "\t") out = out "\\t"
+        else if (ch == "\r") out = out "\\r"
+        else if (ch ~ /[\001-\037]/) {
+          for (j=1; j<32; j++) if (ch == sprintf("%c",j)) { out = out sprintf("\\u%04x",j); break }
+        } else out = out ch
+      }
+      return out
+    }'
+
+team_board_label_rows() {
+  local f="$TEAM_DOCS_ABS/BOARD.md" ic tc sc
+  if [ ! -e "$f" ] && [ ! -L "$f" ]; then printf '[]'; return 0; fi
+  ic="$(team_board_col id)"; tc="$(team_board_col task)"; sc="$(team_board_col status)"
+  awk -F'|' -v ic="$ic" -v tc="$tc" -v sc="$sc" "$_team_board_label_awk"'
+    function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
+    BEGIN { printf "[" }
+    label_task(ic,tc,sc) {
+      printf "%s{\"id\":\"%s\",\"state\":\"%s\",\"title\":\"%s\"}", (n++ ? "," : ""), label_json(trim($(ic))), label_json(trim($(sc))), label_json(trim($(tc)))
+    }
+    END { printf "]" }' "$f"
+}
+
+team_board_labels_run() {
+  local runner
+  runner="$(team_js_runner)"
+  if [ -z "$runner" ]; then
+    team_err "task-labels.tsv: 找不到可用的 JavaScript 运行时"
+    return 1
+  fi
+  "$runner" "$TEAM_SKILL_DIR/scripts/task-labels.mjs" "$TEAM_DOCS_ABS" "$@"
+}
+
 # 注意：team_board_row 对「没有这一行」也返回 0（awk 正常结束），所以判存在必须看输出
 # 是否非空 —— F29 的根因就是「写」从不检查行是否存在。
 team_board_has() { # <id> → 0=表里有这一行

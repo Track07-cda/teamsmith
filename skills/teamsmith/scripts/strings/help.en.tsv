@@ -219,13 +219,18 @@ cmd.task.arg.--agent	the seat the brief is meant for; without it the first seat 
 cmd.task.arg.--deps	the ids this task depends on, space separated.
 cmd.task.arg.--issue	the forge issue number this task came from, when there is one.
 cmd.board.title	read and write the board rows
-cmd.board.what	Manages the board: add a row, assign it to a seat, set its status, print one row, or list the whole board. The board is the PM's summary of where every task stands.
+cmd.board.what	Manage board rows and project labels. List the whole board as Markdown, or explicitly filter by label or sort by priority. Separate leading-dash label names from options with `--`.
 cmd.board.when	Use it when a task moves between stages, when you want to see the whole board at once, or when a row needs correcting.
 cmd.board.example	team board set P1 wip
 cmd.board.read	the board
-cmd.board.write	the board
+cmd.board.write	the board or the label catalog next to it, depending on the command
 cmd.board.see	`team task`, `team close`
 cmd.board.arg.--allow-dup	allow a row whose id already exists, for the rare case where two rows really are wanted.
+cmd.board.arg.--label	Filter by the exact label name.
+cmd.board.arg.--sort	Use `priority` to sort by the sum of the task's label weights, highest first.
+cmd.board.arg.--color	Set a label color in `#RRGGBB` form.
+cmd.board.arg.--weight	Set an integer weight. A new label defaults to zero.
+cmd.board.arg.--name	Rename the label on every task where it is used.
 cmd.change.title	a change's readiness view
 cmd.change.what	Reads the change directory and the board and reports what is still missing before the change can be archived: its tasks, their stages, the seats assigned, the delta writers and the open blockers. It exits with success only when every task mapped to the change is finished.
 cmd.change.when	Use it when you want to know whether a change can be archived, and which task is still standing in the way.

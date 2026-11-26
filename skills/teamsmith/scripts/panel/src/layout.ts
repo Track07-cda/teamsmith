@@ -28,7 +28,10 @@ import { BOARD_LANES } from './types.js'
 import type {
   Action,
   ActivityBlock,
+  BoardBlock,
+  BoardLabel,
   BoardRow,
+  BoardView,
   ChangeRow,
   Density,
   DetailBlock,
@@ -85,7 +88,7 @@ function mergeSegments(line: Segment[]): Line {
   const out: Segment[] = []
   for (const s of line) {
     const prev = out[out.length - 1]
-    if (prev && prev.tone === s.tone && !prev.clock && !s.clock) prev.text += s.text
+    if (prev && prev.tone === s.tone && prev.rgb === s.rgb && !prev.clock && !s.clock) prev.text += s.text
     else out.push({ ...s })
   }
   return out
@@ -117,7 +120,7 @@ function truncLine(line: Line, width: number): Line {
       text += ch
       used += w
     }
-    if (text) out.push({ text, tone: s.tone })
+    if (text) out.push({ text, tone: s.tone, ...(s.rgb ? { rgb: s.rgb } : {}) })
   }
   out.push(seg('…', out[out.length - 1]?.tone ?? 'text'))
   return out
@@ -815,6 +818,7 @@ function laneLabel(lane: string, s: Strings): string {
 
 /** A page-4 projection; the board block and machine output retain their original rows. */
 export interface BoardProjection {
+  view: BoardView
   rows: BoardRow[]
   ordinals: Map<BoardRow, number>
   lanes: Map<string, BoardRow[]>
@@ -826,11 +830,23 @@ function boardTime(value?: string): number | null {
   return Number.isFinite(time) && new Date(time).toISOString() === `${value.slice(0, -1)}.000Z` ? time : null
 }
 
-export function projectBoard(rows: BoardRow[], recent = true): BoardProjection {
+export function projectBoard(board?: BoardBlock, recent = true, choice?: BoardView): BoardProjection {
+  const rows = board?.rows ?? []
+  const view = effectiveBoardView(board, recent ? choice : undefined)
   const ordinals = dupOrdinals(rows)
   const lanes = new Map(LANES.map((lane) => [lane, [] as BoardRow[]]))
-  for (const row of rows) lanes.get(row.state)?.push(row)
-  if (recent) {
+  for (const row of rows) {
+    if (matchesBoardView(view, row)) lanes.get(row.state)?.push(row)
+  }
+  if (view.priority) {
+    const rank = (row: BoardRow) => row.labels ? BigInt(row.labels.score) : null
+    for (const cards of lanes.values()) {
+      cards.sort((a, b) => {
+        const x = rank(a), y = rank(b)
+        return x === y ? 0 : x === null || (y !== null && x < y) ? 1 : -1
+      })
+    }
+  } else if (recent) {
     for (const [lane, cards] of lanes) {
       const timed: { row: BoardRow; time: number }[] = []
       const undated: BoardRow[] = []
@@ -844,9 +860,8 @@ export function projectBoard(rows: BoardRow[], recent = true): BoardProjection {
       lanes.set(lane, timed.map(({ row }) => row).concat(historyLane(lane) ? undated.reverse() : undated))
     }
   }
-  return { rows, ordinals, lanes }
+  return { view, rows, ordinals, lanes }
 }
-
 /**
  * The board page's effective fold state for one lane (P123). An explicit fold wins over an explicit
  * show (the explicit hide is the stronger statement); a lane nobody named folds only while it is
@@ -954,19 +969,35 @@ export function focusRow(rows: BoardRow[], focus?: { id: string; nth?: number } 
   return null
 }
 
+export function boardCatalog(board?: BoardBlock): BoardLabel[] {
+  const labels = board?.labels
+  return labels && 'catalog' in labels ? labels.catalog : []
+}
+
+export function effectiveBoardView(board: BoardBlock | undefined, choice?: BoardView): BoardView {
+  const catalog = boardCatalog(board)
+  return {
+    label: choice && catalog.some((d) => d.name === choice.label) ? choice.label : null,
+    priority: catalog.length > 0 && Boolean(choice?.priority),
+  }
+}
+
+function matchesBoardView(view: BoardView, row: BoardRow): boolean {
+  return view.label === null || (row.taskTable === true && row.labels?.names.includes(view.label) === true)
+}
+
 export function focusRefOf(board: BoardProjection, row: BoardRow): FocusRef {
   return refFor(row, board.ordinals)
 }
 
 /** Resolve identity in file order, but choose a lane's fallback in the drawn order. */
-export function resolveFocus(board: BoardProjection, focus?: FocusRef | null): FocusRef | null {
-  const { rows, ordinals, lanes } = board
+export function resolveFocus(board: BoardProjection, focus?: FocusRef | null, followId = true): FocusRef | null {
+  const { view, rows, ordinals, lanes } = board
   if (focus) {
     const named = focusRow(rows, focus)
-    if (named) return refFor(named, ordinals)
-    // The named duplicate left the board: the id's first row keeps the focus (a reordered board
-    // must not lose the entry).
-    const first = rows.find((r) => r.id === focus.id)
+    if (named && matchesBoardView(view, named)) return refFor(named, ordinals)
+    // On refresh, a surviving duplicate can take over only if it also belongs to the current view.
+    const first = followId ? rows.find((r) => r.id === focus.id && matchesBoardView(view, r)) : undefined
     if (first) return refFor(first, ordinals)
     const sameLane = lanes.get(focus.lane)?.[0]
     if (sameLane) return refFor(sameLane, ordinals)
@@ -1065,6 +1096,7 @@ function laneColumn(
   folded: boolean,
 ): PlacedLine[] {
   const { s } = ctx
+
   if (folded) {
     // P123: the fold branch returns before the window loop, so not one card line (nor an edge
     // counter, nor the empty marker) is built — the bounded-frame promise can only get cheaper.
@@ -1188,6 +1220,32 @@ function kanbanGrouped(
   }
 }
 
+const swatch = (rgb: string): Segment => ({ text: '●', tone: 'text', rgb })
+
+function boardControls(ctx: Ctx, board: BoardProjection): PlacedLine[] {
+  const { s, width } = ctx
+  if (ctx.blocks.board?.labels?.unavailable) return [{ line: truncLine(ln(seg(` ${s.boardLabelsUnavailable}`, 'warn')), width) }]
+  const catalog = boardCatalog(ctx.blocks.board)
+  if (!catalog.length) return []
+  const chosen = catalog.find((d) => d.name === board.view.label)
+  const order = `[o ${s.boardSort}: ${board.view.priority ? s.boardPriority : s.boardRecentOrder} ▾]`
+  const prefix = `[t ${s.boardLabels}: `, suffix = ' ▾]'
+  const room = Math.max(0, width - dispWidth(prefix + suffix + order) - 3 - (chosen ? 2 : 0))
+  const front = ln(' ', seg(prefix, 'accent'), chosen ? swatch(chosen.color) : null, chosen ? ' ' : null,
+    seg(truncateW(chosen?.name ?? s.boardAllTasks, room)), seg(suffix, 'accent'))
+  const end = widthOf(front)
+  const line = ln(...front, '  ', seg(order, 'accent'))
+  const hits: Hit[] = [
+    { start: 1, end, action: { kind: 'board-choice', choice: 'label' } },
+    { start: end + 2, end: widthOf(line), action: { kind: 'board-choice', choice: 'order' } },
+  ]
+  const lines = [placedWithHits(line, ctx.view.tui ? hits : undefined, width)]
+  if (board.view.label !== null && [...board.lanes.values()].every((lane) => !lane.length)) {
+    lines.push({ line: truncLine(ln(seg(` ${s.boardNoMatches}`, 'dim')), width) })
+  }
+  return lines
+}
+
 /** The board page: six lanes side by side (>= 100 columns) or one grouped column under it. */
 function kanbanBlock(ctx: Ctx): Block | null {
   const { s, blocks, deg } = ctx
@@ -1203,13 +1261,16 @@ function kanbanBlock(ctx: Ctx): Block | null {
   })
   if (deg.has('board')) return one([{ line: truncLine(ln(seg(` ${s.dash}`, 'dim')), ctx.width) }])
   const projected = ctx.kanban
-  if (!projected?.rows.length) return one([{ line: truncLine(ln(seg(` ${s.boardEmpty}`, 'dim')), ctx.width) }])
+  if (!projected) return null
+  const controls = ctx.view.tui ? boardControls(ctx, projected) : []
+  if (!projected.rows.length && !controls.length) return one([{ line: truncLine(ln(seg(` ${s.boardEmpty}`, 'dim')), ctx.width) }])
+  ctx = { ...ctx, laneRows: Math.max(1, (ctx.laneRows ?? LANE_KEEP_DEFAULT) - controls.length) }
   // P249: a preview row's ref puts no cursor on the kanban. The remainder use row identity.
   const focus = ctx.view.focus && !boardFocusRef(ctx.view.focus) ? null : resolveFocus(projected, ctx.view.focus)
   const target = focusRow(projected.rows, focus)
   if (!ctx.twoColumn) {
     const grouped = kanbanGrouped(ctx, projected, target)
-    return { ...one(grouped.lines), lanes: grouped.lanes }
+    return { ...one([...controls, ...grouped.lines]), lanes: grouped.lanes }
   }
   const slots = Math.max(2, Math.floor(ctx.laneRows ?? LANE_KEEP_DEFAULT) + LANE_MARKER_SLOTS)
   const windows: LaneWindow[] = []
@@ -1237,7 +1298,7 @@ function kanbanBlock(ctx: Ctx): Block | null {
     for (const lane of shownLanes) widths.set(lane, eachShown)
   }
   const cols = LANES.map((lane) => laneColumn(ctx, lane, widths.get(lane) ?? 8, slots, projected.lanes.get(lane) ?? [], target, projected.ordinals, windows, foldedLanes.includes(lane)))
-  return { ...one(mergeLaneColumns(cols, LANES.map((lane) => widths.get(lane) ?? 8))), lanes: windows }
+  return { ...one([...controls, ...mergeLaneColumns(cols, LANES.map((lane) => widths.get(lane) ?? 8))]), lanes: windows }
 }
 
 // ------------------------------------------------------------------ the detail view (markdown, P18/B3)
@@ -1251,6 +1312,44 @@ const DETAIL_KEEP_DEFAULT = 16
  */
 function blockInnerW(ctx: Ctx): number {
   return Math.max(1, isFramed(ctx) ? ctx.width - 4 : ctx.width)
+}
+
+/** Task metadata is document content, not a file tab; every full name can be scrolled into view. */
+function detailLabels(ctx: Ctx, width: number): PlacedLine[] {
+  const opening = ctx.view.detailRow
+  const catalog = boardCatalog(ctx.blocks.board)
+  if (!opening?.taskTable || !catalog.length) return []
+  const row = focusRow(ctx.blocks.board?.rows ?? [], opening.ref)
+  if (!row?.taskTable || !row.labels) return []
+  const { s } = ctx
+  const swatches = new Map(catalog.map((d) => [d.name, d.color]))
+  const lines: PlacedLine[] = []
+  const wrap = (parts: Segment[]) => {
+    let line: Line = [], used = 0
+    for (const part of parts) {
+      for (const ch of part.text) {
+        const w = dispWidth(ch)
+        if (used > 0 && used + w > width) {
+          lines.push({ line: mergeSegments(line) }); line = []; used = 0
+        }
+        line.push({ ...part, text: ch })
+        used += w
+      }
+    }
+    if (line.length) lines.push({ line: mergeSegments(line) })
+  }
+  wrap([seg(` ${s.boardPriority} `, 'heading'), seg(row.labels.score)])
+  const labels = row.labels.names
+  const parts = [seg(` ${s.boardLabels} `, 'heading')]
+  for (const [i, name] of labels.entries()) {
+    const color = swatches.get(name)
+    if (i > 0) parts.push(seg('  '))
+    if (color) parts.push(swatch(color), seg(' '))
+    parts.push(seg(name))
+  }
+  if (!labels.length) parts.push(seg(s.boardNoLabels, 'dim'))
+  wrap(parts)
+  return lines
 }
 
 /** The file tab row of the detail view: the active tab in the accent tone, every tab clickable. */
@@ -1302,11 +1401,23 @@ function detailBlock(ctx: Ctx): Block | null {
     return one([{ line: truncLine(ln(seg(` ${s.detailLoading}`, 'dim')), width) }], { index: 0, total: 0, visible: 0, offset: 0 })
   }
   const files = data.files ?? []
+  const metadata = detailLabels(ctx, width)
+  const windowed = (rows: PlacedLine[], doc: PlacedLine[], index: number): Block => {
+    const budget = Math.max(1, ctx.detailRows ?? DETAIL_KEEP_DEFAULT)
+    const available = Math.max(1, budget - rows.length)
+    const maxStart = Math.max(0, doc.length - available)
+    const offset = Math.max(0, Math.min(maxStart, Math.floor(ctx.view.detailScroll ?? 0) || 0))
+    rows.push(...doc.slice(offset, offset + available))
+    // A short document keeps the blank space inside the card.
+    while (rows.length < budget) rows.push({ line: [] })
+    return one(rows, { index, total: doc.length, visible: Math.min(available, Math.max(0, doc.length - offset)), offset })
+  }
   if (!files.length) {
     // A missing target is not an error: the reader's reason names it, so the view says the source is
     // unavailable instead of rendering an empty document as a successful read (P249).
     const line = data.reason ? fill(s.detailUnavailable, { reason: data.reason }) : s.detailNoFiles
-    return one([{ line: truncLine(ln(seg(` ${line}`, 'dim')), width) }])
+    const notice = { line: truncLine(ln(seg(` ${line}`, 'dim')), width) }
+    return metadata.length ? windowed([], [...metadata, notice], 0) : one([notice])
   }
   const detail = data as DetailBlock
   const index = Math.max(0, Math.min(files.length - 1, Math.floor(ctx.view.detailIndex ?? 0) || 0))
@@ -1318,19 +1429,12 @@ function detailBlock(ctx: Ctx): Block | null {
   if (active.truncated) rows.push({ line: truncLine(ln(seg(` ${s.detailTruncated}`, 'warn')), width) })
   if (detail.file !== active.path) {
     // The tab was switched and its text has not arrived yet: the tabs stay live, the body says why.
-    rows.push({ line: truncLine(ln(seg(` ${s.detailLoading}`, 'dim')), width) })
+    const loading = { line: truncLine(ln(seg(` ${s.detailLoading}`, 'dim')), width) }
+    if (metadata.length) return windowed(rows, [...metadata, loading], index)
+    rows.push(loading)
     return one(rows, { index, total: 0, visible: 0, offset: 0 })
   }
-  const doc = markdownMemo(active.path, detail.text, width)
-  const budget = Math.max(1, ctx.detailRows ?? DETAIL_KEEP_DEFAULT)
-  const available = Math.max(1, budget - rows.length)
-  const maxStart = Math.max(0, doc.length - available)
-  const offset = Math.max(0, Math.min(maxStart, Math.floor(ctx.view.detailScroll ?? 0) || 0))
-  for (let i = offset; i < Math.min(doc.length, offset + available); i++) rows.push(doc[i])
-  // The bounded-frame rule's last resort: a document shorter than the pane keeps the blank space
-  // *inside* the card, so the card fills the height and the key band stays the last row.
-  while (rows.length < budget) rows.push({ line: [] })
-  return one(rows, { index, total: doc.length, visible: Math.min(available, Math.max(0, doc.length - offset)), offset })
+  return windowed(rows, [...metadata, ...markdownMemo(active.path, detail.text, width)], index)
 }
 
 
@@ -1915,15 +2019,8 @@ function settingsBlock(ctx: Ctx): Block | null {
   const choice = ctx.view.choicePicker
   if (choice) {
     const entries = choice.entries
-    const sel = Math.max(0, Math.min(Math.max(0, entries.length - 1), choice.index))
-    // title + interval + the two hidden-count lines + blank + hint: the entries get the rest.
-    const entryBudget = Math.max(1, room - SETTINGS_TAIL_ROWS - 6)
-    const entryVisible = Math.max(1, Math.min(entries.length, entryBudget))
-    const entryOffset = Math.max(0, Math.min(Math.max(0, entries.length - entryVisible), sel - Math.floor(entryVisible / 2)))
     const lines: PlacedLine[] = []
-    const put = (line: Line): void => {
-      lines.push({ line: truncLine(line, width) })
-    }
+    const put = (line: Line): void => { lines.push({ line: truncLine(line, width) }) }
     const entryLabel = (e: SettingsChoiceEntry): string => {
       const base =
         e.kind === 'keep-unset'
@@ -1955,26 +2052,15 @@ function settingsBlock(ctx: Ctx): Block | null {
         ),
       )
     }
-    if (entryOffset > 0) put(ln(seg(`  ${fill(s.laneHiddenAbove, { n: String(entryOffset) })}`, 'dim')))
-    entries.forEach((e, i) => {
-      if (i < entryOffset || i >= entryOffset + entryVisible) return
-      const label = entryLabel(e)
-      const line = ln(
-        seg(`${i === sel ? s.settingsCursor : ' '} `, 'accent'),
-        seg(label, i === sel ? 'selected' : e.kind === 'value' || e.kind === 'current' || e.kind === 'default' ? 'text' : 'dim'),
-      )
-      const action: Action = { kind: 'choice-pick', index: i }
-      const rowW = Math.max(2, Math.min(width, 1 + dispWidth(textOf(line))))
-      lines.push(placedWithHits(line, ctx.view.tui ? [{ start: 1, end: rowW, action }] : undefined, width))
-    })
-    const entryHiddenBelow = Math.max(0, entries.length - (entryOffset + entryVisible))
-    if (entryHiddenBelow > 0) put(ln(seg(`  ${fill(s.laneHiddenBelow, { n: String(entryHiddenBelow) })}`, 'dim')))
+    const list = choiceList(ctx, entries, choice.index, width, Math.max(1, room - SETTINGS_TAIL_ROWS - 6),
+      (e, selected) => ln(seg(entryLabel(e), selected ? 'selected' : e.kind === 'value' || e.kind === 'current' || e.kind === 'default' ? 'text' : 'dim')))
+    lines.push(...list.lines)
     put(ln(seg('')))
     put(ln(seg(` ${choice.category ? s.settingsCategoryPickerHint : s.settingsChoiceHint}`, 'dim')))
     // P32: a picker covers the row list, so what its own entries do not use stays inside the card
     // (the fill rule below); a short picker must not leave the pane half blank either.
     while (lines.length < room) put(ln(seg('')))
-    return { ...one(lines, { focus: sel, offset: entryOffset, visible: entryVisible, count: entries.length, width }), title: choice.ruleField ? s.settingsRuleModel : choice.category ? choice.key : keyLabel(s, choice.key) }
+    return { ...one(lines, { focus: list.index, offset: list.offset, visible: list.visible, count: entries.length, width }), title: choice.ruleField ? s.settingsRuleModel : choice.category ? choice.key : keyLabel(s, choice.key) }
   }
 
   const lines: PlacedLine[] = []
@@ -2409,6 +2495,11 @@ function keyBandBlock(ctx: Ctx, rowsAvailable = true): Block {
           { text: settingsViewRows(ctx.blocks.settings, ctx.view.settingsFilter ?? '', s, ctx.view.settingsPage, ctx.view.limitsDraft, ctx.view.settingsDetails).filter(settingsRowFocusable)[ctx.view.settingsFocus ?? 0]?.kind === 'nav' ? s.keyOpen : s.keyCategoryPick, action: { kind: 'settings-open', index: -1 } },
           { text: s.keyFilter, action: { kind: 'settings-filter' } },
         ]
+    : ctx.view.boardPicker ? [
+        { text: s.keySettingsBack, action: { kind: 'choice-close' } },
+        { text: s.keyRows, action: { kind: 'choice-move', delta: 1 } },
+        { text: s.keyOpen, action: { kind: 'choice-pick', index: -1 } },
+      ]
     : ctx.view.detail
     ? [
         { text: s.keyDetailClose, action: { kind: 'detail-close' } },
@@ -2631,6 +2722,37 @@ function overlayBlock(ctx: Ctx): Block {
 
 // ------------------------------------------------------------------ assembly
 
+/** A choice list keeps its cursor in view and emits the same click actions regardless of owner. */
+function choiceList<T>(ctx: Ctx, entries: T[], index: number, width: number, budget: number, label: (e: T, selected: boolean) => Line) {
+  const sel = Math.max(0, Math.min(Math.max(0, entries.length - 1), index))
+  const visible = Math.max(1, Math.min(entries.length, budget))
+  const offset = Math.max(0, Math.min(Math.max(0, entries.length - visible), sel - Math.floor(visible / 2)))
+  const lines: PlacedLine[] = []
+  const counter = (key: string, n: number) => ({ line: truncLine(ln(seg(`  ${fill(key, { n: String(n) })}`, 'dim')), width) })
+  if (offset > 0) lines.push(counter(ctx.s.laneHiddenAbove, offset))
+  for (let i = offset; i < Math.min(entries.length, offset + visible); i++) {
+    const selected = i === sel
+    const line = ln(seg(`${selected ? ctx.s.settingsCursor : ' '} `, 'accent'), ...label(entries[i], selected))
+    const action: Action = { kind: 'choice-pick', index: i }
+    const rowW = Math.max(2, Math.min(width, 1 + dispWidth(textOf(line))))
+    lines.push(placedWithHits(line, ctx.view.tui ? [{ start: 1, end: rowW, action }] : undefined, width))
+  }
+  const below = entries.length - (offset + visible)
+  if (below > 0) lines.push(counter(ctx.s.laneHiddenBelow, below))
+  return { lines, index: sel, offset, visible }
+}
+
+function boardPickerBlock(ctx: Ctx, rows = DETAIL_KEEP_DEFAULT): Block {
+  const { s } = ctx
+  const picker = ctx.view.boardPicker!
+  const width = blockInnerW(ctx)
+  const title = picker.kind === 'label' ? s.boardLabels : s.boardSort
+  const { lines } = choiceList(ctx, picker.entries, picker.index, width, Math.max(1, rows - 3),
+    (e, selected) => ln(e.color ? swatch(e.color) : null, e.color ? ' ' : null, seg(e.text, selected ? 'selected' : 'text')))
+  lines.push({ line: truncLine(ln(seg(` ${s.boardChoiceHint}`, 'dim')), width) })
+  return { id: 'board-picker', full: true, priority: 1, title, lines, summary: { line: ln(seg(title, 'heading')) } }
+}
+
 function pageDefinitions(ctx: Ctx): Block[] {
   const left = (): Ctx => (ctx.twoColumn ? { ...ctx, width: ctx.leftWidth } : ctx)
   const right = (): Ctx => (ctx.twoColumn ? { ...ctx, width: ctx.rightWidth } : ctx)
@@ -2667,7 +2789,7 @@ function pageDefinitions(ctx: Ctx): Block[] {
       break
     case 4:
       // The detail view replaces the kanban's blocks (the title band, tabs and key band stay).
-      blocks.push(ctx.view.detail ? detailBlock(ctx) : kanbanBlock(ctx))
+      blocks.push(ctx.view.boardPicker ? boardPickerBlock(ctx) : ctx.view.detail ? detailBlock(ctx) : kanbanBlock(ctx))
       break
     case 5:
       // The reply viewer replaces the list exactly the way the detail view replaces the kanban.
@@ -2714,7 +2836,7 @@ export function layout(input: LayoutInput): Frame {
     blocks: input.blocks ?? {},
     view: input.view,
     activity: input.activityBlocks ?? [],
-    kanban: input.view.page === 4 ? (input.kanban ?? projectBoard(input.blocks?.board?.rows ?? [], input.view.tui)) : undefined,
+    kanban: input.view.page === 4 ? (input.kanban ?? projectBoard(input.blocks?.board, input.view.tui, input.view.boardView)) : undefined,
   }
 
   const blocks = pageDefinitions(ctx)
@@ -2767,6 +2889,8 @@ export function layout(input: LayoutInput): Frame {
         : // The detail view spends the same budget on document rows: more pane = more of the file.
           height > 0 && b.id === 'detail'
           ? (detailBlock({ ...ctx, detailRows: Math.max(2, budget - fullRows.length - (framed ? 2 : 0)) }) ?? b)
+          : height > 0 && b.id === 'board-picker'
+          ? boardPickerBlock(ctx, Math.max(3, budget - fullRows.length - (framed ? 2 : 0)))
           : height > 0 && b.id === 'settings'
           ? (settingsBlock({ ...ctx, settingsRows: Math.max(3, budget - fullRows.length - (framed ? 2 : 0)) }) ?? b)
           : height > 0 && b.id === 'reply_list'
@@ -2949,7 +3073,7 @@ function add2(into: PlacedLine[], a: PlacedLine[], b: PlacedLine[]): void {
 /** The row's content key: identical keys mean the row would render identically. */
 export function rowKey(line: Line): string {
   let key = ''
-  for (const s of line) key += `${s.tone}\u0000${s.text}\u0001`
+  for (const s of line) key += `${s.rgb ?? s.tone}\u0000${s.text}\u0001`
   return key
 }
 
@@ -2966,7 +3090,7 @@ export function renderAnsi(frame: Frame, palette: Palette, opts: { color?: boole
     line
       .map((s) => {
         if (!s.text) return s.text
-        return `\u001b[${toneSgr(s.tone, palette, truecolor)}m${s.text}\u001b[0m`
+        return `\u001b[${toneSgr(s.tone, palette, truecolor, s.rgb)}m${s.text}\u001b[0m`
       })
       .join(''),
   )

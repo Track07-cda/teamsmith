@@ -40,13 +40,24 @@ Below 100 columns they stack as one state-grouped column, where a folded lane st
 agent). `←`/`→` moves the focus between lanes and `↑`/`↓` between cards; a lane taller than the pane scrolls (the
 wheel scrolls the lane under the cursor, other lanes keep their position) and its edge shows how many cards are
 hidden above/below, the `done`/`dropped` windows anchored on the newest cards. The focused card carries `›` and
-is tracked by entry **id**, so a reordering board never moves the focus; the entry disappearing lands it on that
-lane's first card. While the focused card lives in a folded lane the frame carries the cursor and the band names
-the lane (its label and card count).
+is tracked by entry ID and its occurrence in board order. While the focused card lives in a folded lane the
+frame carries the cursor and the band names the lane and its card count.
+
+**Labels and priority.** Define project labels with `team board label define 'Needs review' --color '#0969da' --weight 3`
+and attach them with `team board label add P14 'Needs review'`. `team help board` lists the other label commands.
+With labels defined, press `t` to filter by a label or `o` to choose a sort order. Either choice can also be opened
+by clicking its control. Use the arrows or wheel and Enter, or click a choice. Esc cancels. The default is Recent
+updates: newest timestamps first, then undated cards in board order in active lanes and from the end of the
+board in the two history lanes. Priority orders cards within each state by the sum of their label weights; ties
+keep board order, regardless of update time. Either order can be filtered. The choices last until the console
+closes and do not change the board. `team board ls --label 'Needs review' --sort priority` lists matching tasks
+across states; plain `team board ls` still prints Markdown.
 
 **The detail view** is the focused card's read-only markdown: `Enter` (or a click on the already focused card)
 opens the files discovered for that entry id — its task brief, delivery reports and review records — one per tab,
-with `←`/`→` switching tabs and `↑`/`↓`/the wheel scrolling the document. The renderer is a self-contained
+with `←`/`→` switching tabs and `↑`/`↓`/the wheel scrolling the document. On the board and work pages, task
+details also list labels and priority when the project uses labels, even for a task without associated files.
+The renderer is a self-contained
 markdown subset (ATX headings, verbatim fences, display-width-aligned pipe tables, lists, blockquotes,
 bold/code/link spans, `---` rules; anything else stays source text), the reader caps every file at 128 KiB and
 marks the cut, and opening it writes nothing. `Esc` or `q` returns to the board page **without collapsing the
@@ -182,8 +193,8 @@ The committed artifact at the time of writing:
 
 ```
 file:   skills/teamsmith/scripts/panel/panel.js
-size:   975249 bytes
-sha256: 215a8f9106745664a44e21251c6b0c1c266fe3637e9c8142a8a0de9a2ed9d8be
+size:   981443 bytes
+sha256: 0dbbc61704aa1f9c960c8c9fad00964cf4ca1c57ea13af307098b0412a09108e
 pins:   ink 7.1.1 · react 19.3.0 · runtime floor: node >= 20 | bun >= 1.3
 ```
 

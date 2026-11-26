@@ -18,7 +18,9 @@ prev=""
 detail_id=""
 detail_file=""
 detail_source=""
+with_labels=0
 for a in "$@"; do
+  [ "$a" = "--with-labels" ] && with_labels=1
   [ "$prev" = "--block" ] && block="$a"
   [ "$prev" = "--id" ] && detail_id="$a"
   [ "$prev" = "--file" ] && detail_file="$a"
@@ -35,6 +37,11 @@ fi
 # frame really spawned (the detail reader must be absent while the view is closed).
 if [ -n "${B3_STUB_SPAWN_LOG:-}" ]; then
   printf '%s\n' "$block" >> "$B3_STUB_SPAWN_LOG" 2>/dev/null || true
+fi
+
+if [ -n "${B3_STUB_ARGV_LOG:-}" ]; then
+  printf -v argv '%q ' "$@"
+  printf '%s\n' "$argv" >> "$B3_STUB_ARGV_LOG"
 fi
 
 json_str() { printf '"%s"' "$(printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"; }
@@ -93,6 +100,19 @@ board_json() {
   if [ -n "${B3_STUB_BOARD_FILE:-}" ] && [ -r "${B3_STUB_BOARD_FILE}" ]; then
     cat "${B3_STUB_BOARD_FILE}"
     return 0
+  fi
+  # The optional payload is layered over the same board, so the layout comparison changes no card.
+  if [ "${B3_STUB_LABELS:-0}" = 1 ] && [ "$with_labels" = 1 ]; then
+    B3_STUB_LABELS=0 board_json | python3 -c '
+import json, sys
+b = json.load(sys.stdin)
+b["labels"] = {"catalog": [{"name": "Bug", "color": "#0969da"}]}
+for r in b["rows"]:
+    r["taskTable"] = True
+    r["labels"] = {"names": ["Bug"] if r["id"] == "V14" else [], "score": "3" if r["id"] == "V14" else "0"}
+json.dump(b, sys.stdout, ensure_ascii=False)
+'
+    return $?
   fi
   if [ -z "${B3_STUB_DONE:-}" ]; then
     cat <<'JSON'

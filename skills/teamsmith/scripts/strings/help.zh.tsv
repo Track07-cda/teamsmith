@@ -205,13 +205,18 @@ cmd.task.arg.--agent	这份任务书给哪个席位；不写就用名册里的�
 cmd.task.arg.--deps	这个任务依赖的 id，空格分隔。
 cmd.task.arg.--issue	这个任务对应的 forge issue 号（如果有）。
 cmd.board.title	读和写看板的行
-cmd.board.what	管理看板：加一行、指派给某个席位、改状态、打印一行，或列出整个看板。看板是 PM 对"每个任务在哪一步"的汇总。
+cmd.board.what	管理看板任务与项目标签。默认列出 Markdown 看板，也可按标签筛选或按优先级排序。标签名以连字符开头时，用 `--` 将它与选项分开。
 cmd.board.when	任务在阶段之间移动时用它，想一眼看完整块看板时用它，某一行要更正时也用它。
 cmd.board.example	team board set P1 wip
 cmd.board.read	看板
-cmd.board.write	看板
+cmd.board.write	按命令更新看板或同目录的标签文件
 cmd.board.see	`team task`、`team close`
 cmd.board.arg.--allow-dup	允许加一行 id 已存在的行，只在确实想留两行时用。
+cmd.board.arg.--label	按完整标签名筛选。
+cmd.board.arg.--sort	指定 `priority` 时按任务的标签权重之和从高到低排序。
+cmd.board.arg.--color	设置 `#RRGGBB` 格式的标签颜色。
+cmd.board.arg.--weight	设置整数权重。新标签默认为 0。
+cmd.board.arg.--name	改名时同步更新任务上的标签名。
 cmd.change.title	看一个 change 离就绪还差什么
 cmd.change.what	读 change 目录与看板，报告归档前还缺什么：它的任务、各任务所处阶段、指派的席位、delta 的写者与仍开着的阻塞项。只有映射到这个 change 的任务全部结束时才以成功退出。
 cmd.change.when	想知道一个 change 能不能归档、以及哪个任务还挡在路上时用它。

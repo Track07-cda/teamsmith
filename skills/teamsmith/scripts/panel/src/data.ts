@@ -110,6 +110,7 @@ export const MACHINE_BLOCKS = [
 ] as const satisfies readonly BlockName[]
 
 export interface DataOptions {
+  boardLabels?: boolean
   root: string
   /** Explicit path to the teamsmith CLI; resolved from panel.js's own location when omitted. */
   teamCli?: string
@@ -191,7 +192,7 @@ const BLOCK_SPECS: Record<BlockName, BlockSpec> = {
   // Console-only readers: the board parses every row of BOARD.md (73 rows on the reference
   // checkout), the patrol log grows every 15 minutes, and the OpenSpec-CLI blocks plus `doctor` are
   // the heaviest of all — they are far apart on purpose.
-  board: { ttlMs: 15000, timeoutMs: 10000 },
+  board: { ttlMs: 15000, timeoutMs: 10000, extraArgs: (opts) => opts.boardLabels ? ['--with-labels'] : [] },
   changes: { ttlMs: 180000, timeoutMs: 20000 },
   specs: { ttlMs: 180000, timeoutMs: 20000 },
   decisions: { ttlMs: 60000, timeoutMs: 10000 },
@@ -312,7 +313,8 @@ function runBlock(
       }
       done({ ok: false, error: `timed out after ${timeoutMs}ms` })
     }, timeoutMs)
-    child.stdout?.on('data', (d: Buffer) => {
+    if (name === 'board' && opts.boardLabels) child.stdout?.setEncoding('utf8')
+    child.stdout?.on('data', (d: Buffer | string) => {
       out += String(d)
       if (out.length > 32 * 1024 * 1024) {
         try {

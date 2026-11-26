@@ -93,7 +93,12 @@ assert_match() { grep -qE -- "$2" "$1" 2>/dev/null && ok "$3" || bad "$3（$1 �
 # 实测带（P52 F2）：收紧前的 5s/6s 固定窗口在负载主机上 6 次红 4 次；安静机上首帧 <1s、
 # pulse up 的日志在窗口起来后 <1s 内写完、capacity.log 的周期配置成 2s —— 下面的上界都是这个带的 4-7 倍。
 b3_cap_pane="panel"   # 稳定帧等待捕哪个窗口；collapse 场景在自己的作用域里把它指到 pulse
-pty_cap() { tmux -L "$sock" capture-pane -p -t "$sess:${b3_cap_pane:-panel}" -S -400 2>/dev/null; }
+pty_cap() {
+  local args=(-p -t "$sess:${b3_cap_pane:-panel}")
+  [ "${b3_visible:-0}" = 1 ] || args+=(-S -400)
+  if [ "${b3_style:-0}" = 1 ]; then args+=(-e); fi
+  tmux -L "$sock" capture-pane "${args[@]}" 2>/dev/null
+}
 pty_keys() { keys "$@"; }
 pty_pane_state() { tmux -L "$sock" list-panes -t "$sess:${b3_cap_pane:-panel}" -F '#{pane_dead}:#{pane_dead_status}' 2>/dev/null | head -1; }
 
@@ -1047,7 +1052,23 @@ scn_board() {
 cd -P -- "$root"
 if [ "${3:-}" = __panel-data ]; then
   [ "$1" = --root ] && [ "$2" = "$root" ] && [ "${4:-}" = --block ] || exit 3
-  case "${5:-}" in board|detail) ;; *) exec "$stub" "$@" ;; esac
+  case "${5:-}" in
+    board|detail)
+      # The same CLI read feeds the pane and, in the labeled phase, its saved receipt.
+      if [ -n "${B3_REAL_READS:-}" ]; then
+        reply="$B3_REAL_READS/$5.$BASHPID"
+        if bash "$real" "$@" | tee -- "$reply"; then
+          mv -- "$reply" "$B3_REAL_READS/$5.json"
+        else
+          rc=$?
+          rm -f -- "$reply"
+          exit "$rc"
+        fi
+        exit 0
+      fi
+      ;;
+    *) exec "$stub" "$@" ;;
+  esac
 fi
 exec bash "$real" "$@"
 BCLI
@@ -1098,8 +1119,13 @@ BCLOCK
     [ -z "$order_re" ] || needles+=("B3 order: [$wanted]")
     [ -z "$cursor_re" ] || needles+=("B3 focus: matched")
     if ( pty_cap() {
-      tmux -L "$sock" capture-pane -p -t "$sess:panel" | awk -v order="$order_re" -v cursor="$cursor_re" '
+      tmux -L "$sock" capture-pane -p -t "$sess:panel" | awk -v order="$order_re" -v cursor="$cursor_re" -v narrow="${b3_narrow_cards:-0}" '
         { print; if (/›/) { count++; line=$0 }
+          if (narrow && /^ ( |›) · M[0-9]+ +[^ ]/) {
+            # Only the card readout loses its ID padding. The frame used for clicks stays raw.
+            card=$0; sub(/^ ( |›) · /, "", card); sub(/ +/, " ", card); sub(/ *$/, "", card)
+            cards[++n]=card
+          }
           if (order!="") {
             raw=$0
             while (match(raw, order)) {
@@ -1109,9 +1135,13 @@ BCLOCK
             }
           }
         }
-        END { print "B3 order: [" ids "]"; if (cursor!="" && count==1 && line ~ cursor) print "B3 focus: matched" }'
+        END {
+          print "B3 order: [" ids "]"
+          if (cursor!="" && count==1 && line ~ cursor) print "B3 focus: matched"
+          for (i=1; i<=n; i++) print "B3 card: [" cards[i] "]"
+        }'
     }; wait_frame "$file.observed" "board/$file" "${needles[@]}" ); then
-      awk '!/^B3 (order|focus):/' "$file.observed" > "$file"
+      awk '!/^B3 (order|focus|card):/' "$file.observed" > "$file"
     else
       bad "没有等到 $file（原读数：$file.observed）"
       return 1
@@ -1287,6 +1317,329 @@ BTIMES
   keys Down
   bframe dup-work-3 '' '' '›.*M48.*第三条' || return
   ok '工作页仍沿真实文件顺序：同 ID 第一条、第二条、M48'
+
+  # Keep the duplicate walk and detail refresh on the same private server_up board project.
+  local real="$tmp/$current/live-labels" ledger="$ROOT/docs/team" live_env b3_visible=1
+  local tty_idle='全部任务' title1='First' title2='Second' next='Neighbor' outside='Outside'
+  local long_a='Shared label text beyond the control width A'
+  local long_b='Shared label text beyond the control width B'
+  [ "$(git -C "$ROOT" rev-parse --show-toplevel)" = "$ROOT" ] &&
+    [ "$ROOT" = "$tmp/board/root" ] && [ "$(realpath "$ledger")" = "$ROOT/docs/team" ] &&
+    [ ! -e "$ledger/task-labels.tsv" ] && [ ! -L "$ledger/task-labels.tsv" ] ||
+    { bad "P497: board writes require the isolated initialized ledger"; return; }
+  # M39's brief was created above for the nonempty detail assertion. Keep it as evidence
+  # outside the ledger so the same ID now exercises the real no-file reply.
+  mkdir -p "$real" && mv -- "$ledger/tasks/M39-board.md" "$real/pre-label-M39-board.md" ||
+    { bad "P497: cannot retire the earlier M39 brief before the empty-detail check"; return; }
+  live_env="B3_REAL_READS='$real' FORCE_COLOR=3"
+  lcli() { "$board_cli" --root "$ROOT" board "$@"; }
+  lframe() {
+    local tag="$1"; shift
+    wait_frame "$(bfile "$tag")" "$tag" "$@" || { bad "P497: scene $tag did not reach its expected frame"; return 1; }
+  }
+  lfocus() {
+    local tag="$1" label="$2"; shift 2
+    lframe "$tag" "$@" || return 1
+    focused_row "$(bfile "$tag")" > "$real/$tag.focus"
+    assert_has "$real/$tag.focus" "$label" "P497: one cursor on $label"
+  }
+  lpress() { keys "$@"; }
+  lmouse() { # <SGR button> <capture tag> <visible target>
+    local x y
+    read -r x y < <(card_point "$(bfile "$2")" "$3") ||
+      { bad "P497: no mouse coordinate for $3 in $2"; return 1; }
+    keys -l "$(printf '\033[<%s;%s;%sM' "$1" "$x" "$y")"
+  }
+  lchoose() { # keyboard choice while preserving the modal frame
+    local tag="$1" key="$2" label="$3"; shift 3
+    keys "$key"
+    lframe "$tag-picker" "$label" "Esc 取消" || return 1
+    keys "$@"
+  }
+  cat >"$ledger/BOARD.md" <<'BOARD'
+# Board
+
+| ID | Title | Agent | Branch | Deps | Status | Teamsmith Updated UTC |
+|---|---|---|---|---|---|---|
+| M39 | First | dev | - | - | todo | 2026-02-01T00:00:01Z |
+| M39 | Second | verify | - | - | todo | 2026-02-01T00:00:02Z |
+| M48 | Neighbor | dev | - | - | todo |
+| M51 | Other | dev | - | - | todo |
+| M52 | Cross lane | dev | - | - | wip |
+BOARD
+  local i
+  for i in $(seq -w 1 40); do
+    stamp=''
+    case "$i" in 02|04) stamp="2026-02-01T00:00:${i}Z" ;; esac
+    printf '| D%s | Done %s | dev | - | - | done | %s |\n' "$i" "$i" "$stamp"
+    printf '| X%s | Dropped %s | dev | - | - | dropped | %s |\n' "$i" "$i" "$stamp"
+  done >>"$ledger/BOARD.md"
+  cat >>"$ledger/BOARD.md" <<'BOARD'
+
+## Another table
+
+| Ref | Risk | Owner | Branch | Deps | State |
+|---|---|---|---|---|---|
+| M39 | Outside | dev | - | - | todo |
+BOARD
+  lcli label define Bug --color '#0969da' --weight 3 &&
+  lcli label define Urgent --color '#aa00aa' --weight 5 &&
+  lcli label define Peer --color '#123456' --weight 10 &&
+  lcli label define "$long_a" --color '#cccccc' &&
+  lcli label define "$long_b" --color '#cccccc' &&
+  lcli label define Cross --color '#aaaa00' &&
+  lcli label define Empty --color '#010101' &&
+  lcli label add M39 Bug Urgent && lcli label add M48 Peer "$long_a" &&
+  lcli label add M51 "$long_b" && lcli label add M52 Cross &&
+  lcli label add D01 Peer && lcli label add X01 Peer ||
+    { bad "P497: cannot populate isolated label catalog"; return; }
+  printf '4\n' > "$(page_file)"
+  start_panel "$live_env"
+  tmux -L "$sock" resize-window -t "$sess:panel" -x 160 -y 32
+  bframe label-history-default 'M39 +(First|Second)' 'M39 Second,M39 First' '› · M39 Second' \
+    'M39 Outside' 'D04' 'D02' 'D40' 'X04' 'X02' 'X40' '!D01' '!X01' || return
+  lfocus label-dup-start "M39 $title2" '› · M39 Second' || return
+  lpress Enter
+  lframe dup-first-detail "详情 M39" "优先级 8" "● Bug" "● Urgent" "没有关联文件" || return
+  cp "$real/detail.json" "$real/first-detail-reply.json"
+  assert_has "$real/first-detail-reply.json" '"files": []' "P497: real file reply is empty"
+  local b3_style=1
+  lframe swatch-before '38;2;9;105;218' || return
+  lcli label edit Bug --color '#33bb77' || { bad "P497: color-only write failed"; return; }
+  lpress r
+  lframe swatch-after '38;2;51;187;119' '!38;2;9;105;218' || return
+  b3_style=0
+  lframe swatch-plain '优先级 8' '● Bug' '● Urgent' '没有关联文件' || return
+  ok "P497: color-only refresh repaints the open swatch; the name and 8 remain"
+  lpress Escape
+  lframe dup-first-return '› · M39 Second' || return
+  lpress Down
+  lfocus label-dup-next "M39 $title1" '› · M39 First' || return
+  lpress Enter
+  lframe dup-second-detail "详情 M39" "优先级 8" "● Bug" "● Urgent" "没有关联文件" || return
+  lpress Escape
+  lframe dup-second-return '› · M39 First' || return
+  lpress Down
+  lfocus label-dup-neighbor "M48 $next" '› · M48 Neighbor' || return
+  lpress Up
+  lframe batch-origin '› · M39 First' || return
+  printf '# M51\n\nLabel board M51 proof\n' > "$ledger/tasks/M51-board.md"
+  lpress Down Down Enter
+  lframe batch-detail '详情 M51' 'Label board M51 proof' || return
+  lpress Escape
+  lframe dup-other '› · M51 Other' || return
+  lpress Down
+  lfocus dup-outside "M39 $outside" '› · M39 Outside' || return
+  lpress Enter
+  lframe dup-outside-detail "详情 M39" "没有关联文件" "!优先级" "!● Bug" || return
+  lpress Escape
+  lframe dup-outside-back '› · M39 Outside' || return
+  lpress Up Up Up
+  lframe dup-batched-up '› · M39 First' || return
+  lpress Up
+  lframe dup-priority-from '› · M39 Second' || return
+
+  lchoose priority-start o 排序 Down Enter || return
+  lfocus priority-start "M39 $title2" '› · M39 Second' 'D01' 'X01' '!D40' '!X40' || return
+  lcli label edit Bug --weight 6 || { bad "P497: weight edit failed"; return; }
+  lpress r
+  if ! wait_file_has "$real/board.json" '"score":"11"' 'board refresh got changed score'; then bad "P497: refreshed score not received"; return; fi
+  cp "$real/board.json" "$real/priority-board-reply.json"
+  # Wait for the refreshed score in the detail before comparing the new rendered order.
+  lpress Enter
+  lframe dup-priority-detail '详情 M39' '优先级 11' '● Bug' || return
+  lpress Escape
+  lfocus dup-back "M39 $title2" '› · M39 Second' 'M48 Neighbor' || return
+  if python3 - "$(bfile priority-start)" "$(bfile dup-back)" <<'PYORDER'
+from pathlib import Path
+import sys
+def order(path):
+    s = Path(path).read_text()
+    return [s.index(x) for x in ("M39 First", "M39 Second", "M48 Neighbor", "M39 Outside")]
+a, b = map(order, sys.argv[1:])
+assert a[2] < a[0] < a[1] < a[3] and b[0] < b[1] < b[2] < b[3], (a,b)
+PYORDER
+  then ok "P497: weight-only refresh changes lane order (outside row stays unranked)"; else bad "P497: refresh did not reorder cards"; fi
+
+  lchoose filter-bug t Bug Down Enter || return
+  lfocus filter-bug "M39 $title2" '› · M39 Second' 'M39 First' '待办 2' '!M39 Outside' '!M48 Neighbor' || return
+  lpress Down
+  lframe filter-no-next '› · M39 Second' '!M39 Outside' || return
+  lpress c
+  lframe filter-folded '!M39 First' '!M39 Second' || return
+  lpress Enter
+  lframe filter-folded-detail '详情 M39' '优先级 11' || return
+  lpress Escape
+  lframe filter-folded-back '!详情 M39' '!M39 Second' || return
+  lpress c
+  lframe filter-unfolded '› · M39 Second' || return
+  lchoose tie-recent o 最近更新 Up Enter || return
+  bframe tie-recent 'M39 +(First|Second)' 'M39 Second,M39 First' '› · M39 Second' '● Bug' '待办 2' '!M39 Outside' || return
+  lchoose tie-priority o 优先级 Down Enter || return
+  bframe tie-priority 'M39 +(First|Second)' 'M39 First,M39 Second' '› · M39 Second' '● Bug' '待办 2' '!M39 Outside' || return
+  # The chooser owns the pane. Down/Cursor, wheel, or clicking a page tab must not move the board.
+  lpress t
+  lframe filter-cancel 'Esc 取消' 'Empty' '全部任务' || return
+  lmouse 65 filter-cancel 'Empty' || return
+  lframe filter-wheel 'Esc 取消' '› ● Urgent' || return
+  lpress 2 o Down
+  lframe filter-modal 'Esc 取消' '› ● Peer' '!排序: 优先级' || return
+  lpress Escape
+  lfocus filter-cancelled "M39 $title2" '› · M39 Second' '!Esc 取消' || return
+  lchoose filter-same t "$long_a" Down Down Down Enter || return
+  lfocus filter-same "M48 $next" '› · M48 Neighbor' '!M39 First' '!M51 Other' || return
+  lchoose filter-cross t Cross Down Down Enter || return
+  lfocus filter-cross 'M52 Cross lane' '› ▸ M52 Cross lane' '!M48 Neighbor' || return
+  lchoose filter-empty t Empty Down Enter || return
+  lframe filter-empty '无匹配任务' '待办 0' '!›' || return
+  lpress Enter
+  lframe filter-no-open '无匹配任务' '!详情' || return
+  lcli label edit Empty --name Renamed || { bad "P497: selected label rename failed"; return; }
+  lpress r
+  lframe filter-renamed "$tty_idle" '排序: 优先级' 'M39 First' 'M39 Outside' || return
+  lpress o
+  lframe default-picker '最近更新' 'Esc 取消' || return
+  lpress Up Enter
+  lframe history-restored '排序: 最近更新' 'D04' 'D02' 'D40' 'X04' 'X02' 'X40' '!D01' '!X01' || return
+
+  # Work-page navigation uses original occurrence and opens the same files. Inserting a real
+  # same-ID task before an outside detail must not transfer its label eligibility.
+  lpress 2
+  lframe dup-work 'M39' 'Outside' 'First' 'Second' '[工作]' || return
+  lmouse 0 dup-work 'First' || return
+  lfocus dup-work-1 First 'First' '[工作]' || return
+  lpress Down
+  lfocus dup-work-2 Second 'Second' '[工作]' || return
+  lpress Down
+  lfocus dup-work-3 Neighbor 'Neighbor' '[工作]' || return
+  lmouse 0 dup-work-3 'Outside' || return
+  lfocus dup-work-outside Outside 'Outside' '[工作]' || return
+  mkdir -p "$ledger/reports"
+  local outside_report="$ledger/reports/M39-dev.md"
+  printf '# Fixture report\n\nOutside report before refresh\n' > "$outside_report"
+  lpress Enter
+  lframe dup-work-outside-detail '详情 M39' 'Outside report before refresh' '!优先级' '!● Bug' || return
+  lcli add M39 Inserted dev - --allow-dup >"$real/insert.log" 2>&1 ||
+    { bad "P497: actual task insertion before the outside row failed"; return; }
+  # Advance the same file shown in the open reader, so an old frame cannot pass the absence check.
+  printf '# Fixture report\n\nOutside report after refresh\n' > "$outside_report"
+  lpress r
+  if ! wait_file_has "$real/board.json" '"title":"Inserted"' "actual board reply has the new row"; then bad "P497: refresh did not read new task"; return; fi
+  cp "$real/board.json" "$real/insert-board-reply.json"
+  if python3 - "$real/insert-board-reply.json" <<'PYMEMBERSHIP'
+import json, sys
+rows = json.load(open(sys.argv[1]))["rows"]
+assert [(r["title"], r["taskTable"]) for r in rows if r["id"] == "M39"] == [
+    ("First", True), ("Second", True), ("Inserted", True), ("Outside", False)]
+PYMEMBERSHIP
+  then ok "P497: the actual refresh moved the real task into the former outside occurrence"
+  else bad "P497: refresh receipt has wrong row identity"; fi
+  lframe dup-work-outside-refreshed '详情 M39' 'Outside report after refresh' '!优先级' '!● Bug' || return
+  lpress Escape
+  lframe work-outside-back '[工作]' '!详情 M39' 'Outside' || return
+  rm "$outside_report"
+  lpress t o
+  lframe work-scope '[工作]' '!Esc 取消' '!Sort:' || return
+
+  # Corrupt and restore the real source once, with the same running console and real detail.
+  lpress 4
+  lframe valid-catalog '排序: 最近更新' 'M39 First' 'M39 Outside' || return
+  lmouse 0 valid-catalog 'First' || return
+  lframe valid-focus '› · M39 First' || return
+  lpress Enter
+  lframe valid-detail '详情 M39' '优先级 11' '● Bug' || return
+  cp "$ledger/task-labels.tsv" "$real/valid.tsv"
+  printf 'broken\tlabel\n' > "$real/bad.tsv"
+  mv "$real/bad.tsv" "$ledger/task-labels.tsv"
+  lpress r
+  if ! wait_file_has "$real/board.json" '"unavailable": true' 'board reply marks labels unavailable'; then bad "P497: invalid input did not get a board result"; return; fi
+  cp "$real/board.json" "$real/invalid-board-reply.json"
+  lframe invalid-detail '详情 M39' '没有关联文件' '!优先级' '!● Bug' || return
+  lpress Escape
+  lframe invalid-board '标签不可用' 'M39 First' 'M39 Second' 'M39 Inserted' 'M39 Outside' 'M48 Neighbor' '!全部任务' || return
+  cp "$real/valid.tsv" "$ledger/task-labels.tsv.new"
+  mv "$ledger/task-labels.tsv.new" "$ledger/task-labels.tsv"
+  lpress r
+  lframe recovered-board "$tty_idle" '!标签不可用' 'M39 Inserted' 'M39 Outside' || return
+  lpress Enter
+  lframe recovered-detail '详情 M39' '优先级 11' '● Bug' || return
+  lpress Escape
+  lframe recovered-back "$tty_idle" '!详情 M39' || return
+  lchoose remember o 排序 Down Enter || return
+  lframe remember-priority '排序: 优先级' || return
+  lchoose remember-label t Bug Down Enter || return
+  lframe remember-label '● Bug' '排序: 优先级' '!M39 Outside' || return
+  lpress 3
+  lframe remember-other '![看板]' '!排序: 优先级' || return
+  lpress 4
+  lframe remember-return '● Bug' '排序: 优先级' '!M39 Outside' || return
+
+  # Second console, same isolated project, English and 59 columns. Select both controls by mouse
+  # using the current screen coordinates; use names that are identical at chip width.
+  conf_set "lang=en" "page=4" "activity=1" "mouse=1" "density=comfortable" "theme=dark"
+  cp "$(conf)" "$real/before-choices.conf"
+  cat >"$real/editor.sh" <<'EDITOR'
+#!/bin/sh
+printf '%s\n' "$1" > .pi/team/state/editor.receipt
+EDITOR
+  chmod +x "$real/editor.sh"
+  start_panel "$live_env TEAM_PANEL_EDITOR='$real/editor.sh'"
+  tmux -L "$sock" resize-window -t "$sess:panel" -x 59 -y 32
+  local b3_narrow_cards=1
+  bframe en-default '' '' '' 't Labels: All tasks' 'o Sort: Recent updates' 'B3 card: [M39 Outside]' || return
+  lmouse 0 en-default 't Labels' || return
+  lframe en-labels 'Enter Apply' "$long_a" "$long_b" || return
+  lmouse 0 en-labels "$long_b" || return
+  bframe en-filter-b '' '' '' 'B3 card: [M51 Other]' 'o Sort: Recent updates' '!B3 card: [M48 Neighbor]' '!Enter Apply' || return
+  lmouse 0 en-filter-b 't Labels' || return
+  lframe en-labels-again 'Enter Apply' "$long_a" "$long_b" || return
+  lmouse 0 en-labels-again "$long_a" || return
+  bframe en-filter-a '' '' '' 'B3 card: [M48 Neighbor]' '!B3 card: [M51 Other]' '!Enter Apply' || return
+  lmouse 0 en-filter-a 'o Sort' || return
+  lframe en-order 'Recent updates' 'Priority' 'Enter Apply' || return
+  lmouse 0 en-order Priority || return
+  bframe en-priority '' '' '' 'o Sort: Priority' 'B3 card: [M48 Neighbor]' '!Enter Apply' || return
+  lpress C-o
+  lframe en-plain-only 'o Sort: Priority' '!Enter Apply' || return
+  lpress m
+  lframe en-compose 'Enter send' || return
+  lpress t o
+  lpress C-o
+  if wait_file_has "$state/editor.receipt" "$state/draft.md" "Ctrl+o opened the compose editor"; then
+    ok "P497: Ctrl+o in compose still opens the editor"
+  else bad "P497: Ctrl+o did not relay the compose draft to the editor"; fi
+  if cmp "$real/before-choices.conf" "$(conf)" && cmp "$real/valid.tsv" "$ledger/task-labels.tsv"; then
+    ok "P497: board choices leave catalog and panel preferences alone"
+  else bad "P497: selecting a view persisted a choice"; fi
+
+  # The selected occurrence is replaced by the same ID outside the table. Keep another match
+  # under the existing exact-name filter and check the next Enter against its real file.
+  lpress Escape
+  bframe fallback-ready '' '' '' 'o Sort: Priority' 'B3 card: [M48 Neighbor]' '!Enter send' || return
+  lcli label add M39 "$long_a" && lcli label add M51 "$long_a" ||
+    { bad "P497: cannot prepare the filtered refresh"; return; }
+  lpress r
+  bframe fallback-matches '' '' '' 'B3 card: [M39 First]' 'B3 card: [M39 Second]' 'B3 card: [M39 Inserted]' \
+    'B3 card: [M48 Neighbor]' 'B3 card: [M51 Other]' '!B3 card: [M39 Outside]' || return
+  lmouse 0 fallback-matches First || return
+  bframe fallback-before '' '' '^ › · M39 +First *$' '!B3 card: [M39 Outside]' || return
+  awk '/^\| M39 \| Outside \|/ || !/^\| M39 \|/' "$board" > "$board.tmp" &&
+    mv "$board.tmp" "$board" || { bad "P497: could not remove the last matching M39 occurrence"; return; }
+  lpress r
+  bframe fallback-other '' '' '' 'B3 card: [M48 Neighbor]' 'B3 card: [M51 Other]' \
+    '!B3 card: [M39 First]' '!B3 card: [M39 Second]' '!B3 card: [M39 Inserted]' '!B3 card: [M39 Outside]' || return
+  cp "$real/board.json" "$real/fallback-board-reply.json"
+  if python3 - "$real/fallback-board-reply.json" <<'PYFILTER'
+import json, sys
+rows = json.load(open(sys.argv[1]))["rows"]
+assert [(r["title"], r["taskTable"]) for r in rows if r["id"] == "M39"] == [("Outside", False)]
+PYFILTER
+  then ok "P497: real refresh retained only the outside M39 row"
+  else bad "P497: filtered refresh did not retain the outside same-ID row"; return; fi
+  bframe fallback-focus '' '' '^ › · M48 +Neighbor *$' '!B3 card: [M39 Outside]' || return
+  printf '# M48\n\nLabel board M48 proof\n' > "$ledger/tasks/M48-board.md"
+  lpress Enter
+  lframe fallback-detail 'M48' 'Label board M48 proof' '!M39' || return
 }
 
 scn_detail() {

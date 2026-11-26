@@ -53,6 +53,26 @@ team_cmd_board() {
   local sub="${1:-ls}"; shift || true
   case "$sub" in
     ls)
+      if [ "$#" -gt 0 ]; then
+        local rows dup has_label=0 label="" priority=0
+        while [ "$#" -gt 0 ]; do
+          case "$1" in
+            --label)
+              [ "$has_label" = 0 ] && [ "$#" -ge 2 ] || team_usage_die "board ls: --label needs one name and may be used once"
+              has_label=1; label="$2"; shift 2 ;;
+            --sort)
+              [ "$priority" = 0 ] && [ "$#" -ge 2 ] || team_usage_die "board ls: --sort needs one value and may be used once"
+              [ "$2" = priority ] || team_usage_die "unknown board sort: $2"
+              priority=1; shift 2 ;;
+            *) team_usage_die "board ls: unexpected argument: $1" ;;
+          esac
+        done
+        rows="$(team_board_label_rows)" || return 1
+        team_board_labels_run list "$has_label" "$label" "$priority" <<< "$rows" || return $?
+        dup="$(team_board_duplicate_line)"
+        if [ -n "$dup" ]; then team_warn "  $dup" >&2; fi
+        return 0
+      fi
       grep -E '^\|' "$TEAM_DOCS_ABS/BOARD.md" 2>/dev/null || team_warn "BOARD.md 还没有行"
       local warn; warn="$(team_board_layout_warning || true)"
       [ -n "$warn" ] && team_dim "  $warn"
@@ -88,7 +108,15 @@ team_cmd_board() {
       team_ok "board $id → $st" ;;
     row)
       team_board_row "${1:?usage: board row <ID>}" ;;
-    *) team_usage_die "board: 未知子命令 $sub（ls|add|assign|set|row）" ;;
+    label)
+      case "${1:-}" in
+        add|remove)
+          local rows
+          rows="$(team_board_label_rows)" || return 1
+          team_board_labels_run label "$@" <<< "$rows" ;;
+        *) team_board_labels_run label "$@" ;;
+      esac ;;
+    *) team_usage_die "board: 未知子命令 $sub（ls|add|assign|set|row|label）" ;;
   esac
 }
 

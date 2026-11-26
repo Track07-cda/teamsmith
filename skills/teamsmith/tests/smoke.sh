@@ -3923,11 +3923,268 @@ assert_eq "额外列：列映射按表头名定位" \
   "$(TEAM_ROOT=$REPO bash -c '. "'$SKILL_DIR'/scripts/lib/common.sh"; team_load_config; team_board_cols')" "2 4 5 6 7 8"
 assert_eq "额外列：任务标题仍解析正确" \
   "$(TEAM_ROOT=$REPO bash -c '. "'$SKILL_DIR'/scripts/lib/common.sh"; team_load_config; team_board_field "$(team_board_row T1.1)" task')" "Smoke task"
-$TEAM board set T1.1 wip >/dev/null 2>&1 || true
-assert_has "$REPO/docs/team/BOARD.md" "| wip |" "额外列布局下状态写进状态列"
-$TEAM board ls >"$TMP/board-ls.log" 2>&1 || true
-$TEAM task T2.6 --title "third task" --category routine --agent dev >/dev/null 2>&1 || true
-assert_has "$REPO/docs/team/BOARD.md" "| T2.6 |" "新行按现有列数对齐写入"
+# Preserve the legacy layout and lifecycle state for the rest of the smoke suite.
+TL_BOARD="$REPO/docs/team/BOARD.md"
+TL_FILE="$REPO/docs/team/task-labels.tsv"
+TL_OUT="$TMP/task-labels"
+mkdir -p "$TL_OUT/old"
+[ "$(git -C "$REPO" rev-parse --show-toplevel)" = "$REPO" ] &&
+  [ "$(realpath "$REPO/docs/team")" = "$REPO/docs/team" ] && [ ! -e "$TL_FILE" ] && [ ! -L "$TL_FILE" ] ||
+  { bad "P497: expected an unused label file in the isolated smoke ledger"; exit 1; }
+cp "$TL_BOARD" "$TL_OUT/old-layout.md"
+# Use the fixed pre-label recent-first baseline and the identical board bytes, preserving stderr and status.
+TL_BASE=d8968556689623e90231896340543d6ef45aa888
+git -C "$CHECKOUT_REPO_ROOT" archive "$TL_BASE" skills/teamsmith/scripts |
+  tar -x -C "$TL_OUT/old" || { bad "P497: cannot extract pre-label board baseline $TL_BASE"; exit 1; }
+TL_OLD="$TL_OUT/old/skills/teamsmith/scripts/team"
+python3 - "$TL_BOARD" <<'PYTL'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1])
+lines = p.read_text().splitlines()
+start = next(i for i, line in enumerate(lines) if line.startswith("| ID | Issue |"))
+lines[start] += " Teamsmith Updated UTC |"
+lines[start+1] += "---|"
+for i in range(start+2, len(lines)):
+    if not lines[i].startswith("|"): break
+    if lines[i].count("|") == 8: lines[i] += "  |"
+lines[start+2:start+2] = ["| TL70 | - | First history | dev | - | - | todo |  |",
+                         "| TL70 | - | Second history | dev | - | - | done |  |",
+                         "| — | - | Placeholder | - | - | - | — |  |"]
+lines.extend(["", "## Risks", "", "| Risk | Issue | Summary | Owner | Branch | Deps | State |",
+              "|---|---|---|---|---|---|---|", "| TL71 | - | Outside risk | dev | - | - | todo |"])
+p.write_text("\n".join(lines) + "\n")
+PYTL
+tl_capture() {
+  local dest="$1"; shift
+  local rc=0
+  "$@" >"$dest.out" 2>"$dest.err" || rc=$? # Some legacy ls paths exit 1 with no ignored report.
+  printf '%s\n' "$rc" >"$dest.rc"
+}
+tl_legacy() {
+  local phase="$1" sub="$2"; shift 2
+  local ext
+  tl_capture "$TL_OUT/$phase-$sub" $TEAM --root "$REPO" board "$sub" "$@"
+  for ext in out err rc; do
+    cmp "$TL_OUT/pre-$sub.$ext" "$TL_OUT/$phase-$sub.$ext" ||
+      { bad "P497: $phase plain board $sub changed $ext"; return; }
+  done
+  ok "P497: $phase plain board $sub matches the current pre-label baseline (stdout, stderr and exit)"
+}
+tl_capture "$TL_OUT/pre-ls" bash "$TL_OLD" --root "$REPO" board ls
+tl_capture "$TL_OUT/pre-row" bash "$TL_OLD" --root "$REPO" board row TL70
+assert_has "$TL_OUT/pre-ls.err" "TL70 ×2" "P497: baseline really reads the duplicate board"
+assert_has "$TL_OUT/pre-row.out" "First history" "P497: baseline reads the first duplicate row"
+tl_legacy absent ls
+tl_legacy absent row TL70
+printf 'not a label record\n' >"$TL_FILE"
+cp "$TL_FILE" "$TL_OUT/invalid.tsv"
+tl_legacy invalid ls
+tl_legacy invalid row TL70
+mkdir -p "$TL_OUT/clock"
+printf '#!/bin/bash\nif [ "$#" = 2 ] && [ "$1" = -u ] && [ "$2" = +%%Y-%%m-%%dT%%H:%%M:%%SZ ]; then\n  printf "%%s\\n" "$TL_NOW"\nelse\n  exec %q "$@"\nfi\n' \
+  "$(command -v date)" > "$TL_OUT/clock/date"
+chmod +x "$TL_OUT/clock/date"
+tl_write() {
+  local second="$1"; shift
+  PATH="$TL_OUT/clock:$PATH" TL_NOW="2030-01-01T00:00:0${second}Z" $TEAM "$@"
+}
+cp "$TL_BOARD" "$TL_OUT/before-task.md"
+tl_write 1 task T2.6 --title "third task" --category routine --agent dev >"$TL_OUT/task.log" 2>&1 ||
+  bad "P497: task with extra Issue column failed"
+cp "$TL_BOARD" "$TL_OUT/after-task.md"
+tl_write 2 board set T1.1 wip >"$TL_OUT/set.log" 2>&1 || bad "P497: status write failed"
+cp "$TL_BOARD" "$TL_OUT/after-set.md"
+tl_write 3 board assign T1.1 reviewer >"$TL_OUT/assign.log" 2>&1 || bad "P497: agent write failed"
+if python3 - "$TL_OUT" "$TL_BOARD" <<'PYTL'
+from pathlib import Path
+import sys
+d, board = map(Path, sys.argv[1:])
+read = lambda n: (d/n).read_text().splitlines()
+cells = lambda line: [c.strip() for c in line.split("|")[1:-1]]
+match = lambda line, key: line.startswith("|") and cells(line)[0] == key
+before, added, status, assigned = map(read, ["before-task.md", "after-task.md", "after-set.md", board])
+new = [x for x in added if match(x, "T2.6")]
+assert [cells(x) for x in new] == [["T2.6", "", "third task", "dev", "-", "-", "todo", "2030-01-01T00:00:01Z"]], new
+assert [x for x in added if not match(x, "T2.6")] == before
+def changed(old, new, idx, expected, second):
+    assert len(old) == len(new)
+    for a, b in zip(old,new):
+        if not match(a, "T1.1"): assert a == b, (a,b); continue
+        want = a.split("|")
+        want[idx] = f" {expected} "
+        want[8] = f" 2030-01-01T00:00:0{second}Z "
+        assert "|".join(want) == b, (a,b)
+changed(added,status,7,"wip",2)
+changed(status,assigned,4,"reviewer",3)
+PYTL
+then ok "P497: actual 7 business cells (blank Issue) plus rightmost UTC; task/set/assign leave unrelated rows and columns intact"
+else bad "P497: legacy write changed extra or untargeted fields"; fi
+cmp "$TL_OUT/invalid.tsv" "$TL_FILE" && ok "P497: legacy writes ignore invalid label bytes" ||
+  bad "P497: legacy writes changed invalid label file"
+# Restore the old successful legacy writes for following sections, without these extra fixture rows.
+cp "$TL_OUT/after-set.md" "$TL_OUT/later.md"
+python3 - "$TL_OUT/later.md" <<'PYTL'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1])
+lines = p.read_text().rsplit("\n## Risks\n", 1)[0].splitlines()
+p.write_text("\n".join(x for x in lines if not x.startswith(("| TL70 |", "| — | - | Placeholder |"))) + "\n")
+PYTL
+rm "$TL_FILE"
+
+# Real label reads in this project's ledger, with the recognized English headings in another order.
+cp "$TL_BOARD" "$TL_OUT/compatibility.md"
+cat >"$TL_BOARD" <<'TLBOARD'
+# Board
+
+| Title | Status | ID | Issue | Agent | Branch | Deps |
+|---|---|---|---|---|---|---|
+| Notifications | todo | T9 | | dev | - | - |
+| Security | wip | T8 | | dev | - | - |
+| Docs | todo | T5 | | dev | - | - |
+| Offline drafts | todo | T2 | | dev | - | - |
+| Unlabeled | done | T1 | | dev | - | - |
+| Urgent work | blocked | T6 | | dev | - | - |
+| Placeholder | todo | — | | - | - | - |
+
+## Risks
+
+| Risk | State | Ref | Issue | Owner | Branch | Deps |
+|---|---|---|---|---|---|---|
+| Risk row | todo | R1 | | dev | - | - |
+TLBOARD
+cp "$TL_BOARD" "$TL_OUT/board-six.md"
+cp "$REPO/.pi/team/config.sh" "$TL_OUT/config.before"
+tl() { $TEAM --root "$REPO" board "$@"; }
+tl_refuse() {
+  local expected="$1"; shift
+  cp "$TL_FILE" "$TL_OUT/before-refusal.tsv"
+  if tl "$@" >"$TL_OUT/refused.log" 2>&1; then bad "P497: accepted $*"; fi
+  assert_has "$TL_OUT/refused.log" "$expected" "P497: explains refusal ($expected)"
+  cmp "$TL_OUT/before-refusal.tsv" "$TL_FILE" || bad "P497: refused command changed catalog bytes: $*"
+}
+tl label ls >"$TL_OUT/absent-labels.tsv" && tl ls --sort priority >"$TL_OUT/absent-priority.tsv" ||
+  bad "P497: cannot read absent catalog"
+[ ! -s "$TL_OUT/absent-labels.tsv" ] && [ ! -e "$TL_FILE" ] &&
+  [ "$(awk -F'\t' '$3==0{n++} END{print n+0}' "$TL_OUT/absent-priority.tsv")" = 6 ] &&
+  ok "P497: absent file is empty catalog with six unlabelled scores and no write" ||
+  bad "P497: absent catalog did not yield empty read with no file"
+: >"$TL_FILE"
+tl label ls >"$TL_OUT/valid-empty.tsv" && cmp "$TL_OUT/absent-labels.tsv" "$TL_OUT/valid-empty.tsv" ||
+  bad "P497: readable empty catalog differs from missing catalog"
+rm "$TL_FILE"
+find "$REPO/docs/team" -mindepth 1 -printf '%P\n' | sort >"$TL_OUT/tree-before"
+tl label define '用户反馈' --color '#0969DA' || bad "P497: first definition failed"
+find "$REPO/docs/team" -mindepth 1 -printf '%P\n' | sort >"$TL_OUT/tree-after"
+assert_eq "P497: first define adds only task-labels.tsv" "$(comm -13 "$TL_OUT/tree-before" "$TL_OUT/tree-after")" "task-labels.tsv"
+cmp "$TL_OUT/config.before" "$REPO/.pi/team/config.sh" && cmp "$TL_OUT/board-six.md" "$TL_BOARD" ||
+  bad "P497: first definition wrote board or config"
+chmod 775 "$REPO/docs/team"; chmod 664 "$TL_FILE"
+tl label edit '用户反馈' --color '#1A7F37' || bad "P497: 664/775 color update refused"
+assert_eq "P497: edited label preserves mode" "$(stat -c '%a' "$TL_FILE")" 664
+tl label define Bug --color '#d1242f' --weight +03 &&
+tl label define bug --color '#aaaaaa' --weight -12 &&
+tl label define Urgent --color '#aa00aa' --weight 5 &&
+tl label define Security --color '#0000aa' --weight 8 &&
+tl label define Docs --color '#123456' &&
+tl label define 'Needs review' --color '#cccccc' &&
+tl label define --color '#0969da' -- '-Follow-up' || bad "P497: literal definitions failed"
+tl label ls >"$TL_OUT/catalog.tsv" || bad "P497: label ls failed"
+for line in $'用户反馈\t#1a7f37\t0' $'Bug\t#d1242f\t3' $'bug\t#aaaaaa\t-12' $'Needs review\t#cccccc\t0' $'-Follow-up\t#0969da\t0'; do
+  grep -Fxq -- "$line" "$TL_OUT/catalog.tsv" || bad "P497: missing exact definition [$line]"
+done
+tl_refuse 'already defined' label define Bug --color '#eeeeee'
+tl_refuse 'already defined' label edit Bug --name bug
+tl_refuse 'invalid label color' label edit Bug --color red
+tl_refuse 'invalid label weight' label edit Bug --weight 1.2
+for n in '' ' Bug' $'B\tug' $'B\nug' $'B\u200Bug'; do
+  tl_refuse 'invalid label name' label define "$n" --color '#eeeeee'
+done
+tl label define Parallel1 --color '#111111' >"$TL_OUT/write-one.log" 2>&1 & TL_ONE=$!
+tl label define Parallel2 --color '#222222' >"$TL_OUT/write-two.log" 2>&1 & TL_TWO=$!
+if wait "$TL_ONE" && wait "$TL_TWO"; then
+  tl label ls >"$TL_OUT/parallel.tsv"
+  assert_eq "P497: two overlapping independent writes are preserved" \
+    "$(grep -c '^Parallel[12][[:space:]]' "$TL_OUT/parallel.tsv")" 2
+else
+  bad "P497: label writers failed; see write-one.log / write-two.log"
+  wait "$TL_TWO" 2>&1 # Still collect the second writer when the first failed.
+fi
+cp "$TL_FILE" "$TL_OUT/before-io.tsv"
+if TL_IO="$( (trap '' XFSZ; ulimit -f 0; tl label define Unpublished --color '#eeeeee') 2>&1 )"; then
+  bad "P497: file size limit did not prevent publication"
+fi
+printf '%s\n' "$TL_IO" >"$TL_OUT/io.log"
+assert_has "$TL_OUT/io.log" "EFBIG" "P497: real file write fails before publication"
+cmp "$TL_OUT/before-io.tsv" "$TL_FILE" && ! compgen -G "$REPO/docs/team/.task-labels-*" >/dev/null &&
+  ok "P497: pre-publication failure leaves source bytes and no temporary file" ||
+  bad "P497: I/O failure changed catalog or left a temporary file"
+
+tl label add T2 Bug Urgent Bug && tl label add T9 Bug && tl label add T8 Security &&
+tl label add T5 Docs && tl label add T6 Urgent || bad "P497: attach by real ID and exact name failed"
+cp "$TL_FILE" "$TL_OUT/before-noop.tsv"
+tl label add T2 Bug && tl label remove T2 Docs && cmp "$TL_FILE" "$TL_OUT/before-noop.tsv" ||
+  bad "P497: repeated add or absent remove rewrote the catalog"
+tl_refuse 'unknown label' label add T2 Docs Undefined
+tl_refuse 'invalid label name' label add T2 Docs $'B\u200Bug'
+tl_refuse 'unknown board task' label add R1 Bug
+tl_refuse 'unknown board task' label add — Bug
+tl_refuse 'unknown board task' label add Missing Bug
+tl_refuse 'unknown board task' label remove Missing Bug
+tl_refuse 'unknown label' ls --label BUG
+tl_refuse 'unknown board sort' ls --sort title
+tl ls --label bug >"$TL_OUT/no-matches.tsv" && [ ! -s "$TL_OUT/no-matches.tsv" ] ||
+  bad "P497: exact known unused label should return no rows"
+# Keep this pre-edit six-row input and exact stdout for the independent sum->max control.
+cp "$TL_FILE" "$TL_OUT/catalog-six.tsv"
+tl ls --sort priority >"$TL_OUT/priority-original.tsv" || bad "P497: priority listing failed"
+tl ls --label Bug >"$TL_OUT/filter.tsv" || bad "P497: label filtering failed"
+tl ls --label Bug --sort priority >"$TL_OUT/filter-priority.tsv" || bad "P497: combined view failed"
+tl_ids() { cut -f1 "$TL_OUT/$1.tsv" | paste -sd' ' -; }
+tl_score() { awk -F'\t' -v id="$2" '$1==id {print $3}' "$TL_OUT/$1.tsv"; }
+assert_eq "P497: default priority vector" "$(tl_ids priority-original)" "T8 T2 T6 T9 T5 T1"
+assert_eq "P497: actual sum for T2 (sum != max)" "$(tl_score priority-original T2)" "8"
+assert_eq "P497: label filter preserves source order" "$(tl_ids filter)" "T9 T2"
+assert_eq "P497: label and priority combine" "$(tl_ids filter-priority)" "T2 T9"
+$TEAM --root "$REPO" __panel-data --block board --with-labels >"$TL_OUT/cache-on.json" &&
+TEAM_SCAN_CACHE=0 $TEAM --root "$REPO" __panel-data --block board --with-labels >"$TL_OUT/cache-off.json" &&
+cmp "$TL_OUT/cache-on.json" "$TL_OUT/cache-off.json" &&
+grep -Fq '"names":["Bug","Urgent"],"score":"8"' "$TL_OUT/cache-on.json" &&
+  ok "P497: opted-in board cache on/off bytes and actual names/score agree" ||
+  bad "P497: opted-in board cache result differs or lacks the labels"
+tl label edit Bug --weight 6 && tl ls --sort priority >"$TL_OUT/priority-edited.tsv" ||
+  bad "P497: changed weight did not produce a priority list"
+assert_eq "P497: edited priority vector" "$(tl_ids priority-edited)" "T2 T8 T9 T6 T5 T1"
+assert_eq "P497: updated T2 score" "$(tl_score priority-edited T2)" "11"
+cmp "$TL_OUT/board-six.md" "$TL_BOARD" || bad "P497: labels modified board bytes"
+
+# A duplicate inside the task table and an outside row with the same ID/valid state.
+sed -i '/Offline drafts/a | Second drafts | todo | T2 | | dev | - | - |' "$TL_BOARD"
+printf '| Unrelated same ID | todo | T2 | | dev | - | - |\n' >>"$TL_BOARD"
+tl_capture "$TL_OUT/plain-duplicate" $TEAM --root "$REPO" board ls
+assert_has "$TL_OUT/plain-duplicate.out" 'Unrelated same ID' "P497: plain board still sees the later table"
+tl ls --label Bug >"$TL_OUT/real-duplicates.tsv" 2>"$TL_OUT/duplicates.err" || bad "P497: filter refused duplicate"
+assert_eq "P497: filter shows two real duplicate rows, not the same-ID outside row" \
+  "$(awk -F'\t' '$1=="T2"{print $5}' "$TL_OUT/real-duplicates.tsv" | paste -sd, -)" "Offline drafts,Second drafts"
+assert_has "$TL_OUT/duplicates.err" 'T2 ×2' "P497: explicit view keeps duplicate warning"
+# Make T9 historical without touching its saved labels; rename updates both current and orphan IDs.
+sed -i '/| Notifications |/d' "$TL_BOARD"
+tl label edit Bug --name 'Bug fixed' &&
+tl ls --label 'Bug fixed' >"$TL_OUT/renamed.tsv" || bad "P497: rename must carry associations"
+assert_eq "P497: rename keeps both real rows' scores; no historical phantom" \
+  "$(tl_ids renamed):$(tl_score renamed T2 | paste -sd, -)" "T2 T2:11,11"
+tl_refuse 'detach "Bug fixed" from:' label delete 'Bug fixed'
+assert_has "$TL_OUT/refused.log" '"T2", "T9"' "P497: deletion names current and orphan IDs once"
+tl label remove T2 'Bug fixed' && tl label remove T9 'Bug fixed' && tl label delete 'Bug fixed' ||
+  bad "P497: explicit detach, including absent ID, must allow deletion"
+tl_refuse 'unknown board task' label remove T9 Urgent
+cp "$TL_FILE" "$TL_OUT/repaired.tsv"
+printf 'bad\tdata\n' >"$TL_FILE"
+tl_refuse 'invalid label record' label ls
+tl_refuse 'invalid label record' ls --sort priority
+rm "$TL_FILE"
+cp "$TL_OUT/later.md" "$TL_BOARD"
 
 # ③ 里程碑/结项报告不算待复验
 mkdir -p "$REPO/docs/team/reports"
@@ -13429,17 +13686,18 @@ for c in bun "$HOME/.bun/bin/bun"; do command -v "$c" >/dev/null 2>&1 && { P10_B
 if [ -n "$P10_BUN" ]; then
   P10_BLD="$TMP/p10-panel-build"; rm -rf "$P10_BLD"; mkdir -p "$P10_BLD"
   cp -r "$SKILL_DIR/scripts/panel" "$P10_BLD/panel"
-  rm -rf "$P10_BLD/panel/node_modules"
-  { echo "\$ $P10_BUN install --frozen-lockfile"; ( cd "$P10_BLD/panel" && "$P10_BUN" install --frozen-lockfile 2>&1 | tail -3 ); \
-    echo "\$ bash build.sh"; ( cd "$P10_BLD/panel" && BUN="$P10_BUN" bash build.sh 2>&1 ); } >"$TMP/p10-build.log" 2>&1
-  if grep -q 'panel.js written' "$TMP/p10-build.log"; then
+  cp "$SKILL_DIR/scripts/text-sanitize.mjs" "$P10_BLD/"
+  rm -rf "$P10_BLD/panel/node_modules" "$P10_BLD/panel/panel.js"
+  if ! { echo "\$ $P10_BUN install --frozen-lockfile"; ( cd "$P10_BLD/panel" && "$P10_BUN" install --frozen-lockfile ); } >"$TMP/p10-build.log" 2>&1; then
+    cond_skip "26-a bundle 重建" "本机 bun 装不上钉住的依赖（无网络/锁文件不符）：$(tail -2 "$TMP/p10-build.log" | tr '\n' ' ' | head -c 100)"
+  elif { echo "\$ bash build.sh"; ( cd "$P10_BLD/panel" && BUN="$P10_BUN" bash build.sh ); } >>"$TMP/p10-build.log" 2>&1; then
     if cmp -s "$P10_BLD/panel/panel.js" "$SKILL_DIR/scripts/panel/panel.js"; then
       ok "26-a bundle：沙盒里重建逐字节一致（$(wc -c < "$SKILL_DIR/scripts/panel/panel.js" | tr -d ' ') 字节）"
     else
       bad "26-a bundle：重建后与提交的 bundle 不一致（源与产物漂了）"; tail -3 "$TMP/p10-build.log"
     fi
   else
-    cond_skip "26-a bundle 重建" "本机 bun 装不上钉住的依赖（无网络/锁文件不符）：$(tail -2 "$TMP/p10-build.log" | tr '\n' ' ' | head -c 100)"
+    bad "26-a bundle：依赖已安装，构建失败（rc=$?）"; tail -3 "$TMP/p10-build.log"
   fi
 else
   cond_skip "26-a bundle 重建" "本机没有 bun（重建是 release-time 检查，报告 rebuild.log 里有网络重建日志）"
@@ -14652,11 +14910,39 @@ p28h_frame 99 40 >"$TMP/p28h-99.txt"
 p28h_frame 59 40 >"$TMP/p28h-59.txt"
 P28H_59_AGENT="$(grep -c ' verify\| dev ' "$TMP/p28h-59.txt" || true)"
 assert_eq "28-h 59 列：卡片缩成一行，没有 agent 字段" "$P28H_59_AGENT" "0"
-assert_has "$TMP/p28h-59.txt" "独立复验" "28-h 59 列的卡片仍带标题"
+B3_STUB_LABELS=1 p28h_frame 59 40 >"$TMP/p28h-59-labels.txt"
+for mode in 59 59-labels; do
+  sed -n -e 's/\x1b\[[0-9;]*m//g' -e '/^ › · V14  *独立复验/p' "$TMP/p28h-$mode.txt" >"$TMP/p28h-$mode.card"
+done
+if [ "$(wc -l < "$TMP/p28h-59.card")" -eq 1 ] && [ "$(wc -l < "$TMP/p28h-59-labels.card")" -eq 1 ] &&
+   cmp "$TMP/p28h-59.card" "$TMP/p28h-59-labels.card"; then
+  ok "28-h 59 列：有无标签时焦点卡片的符号、ID 和标题完全一致"
+else bad "28-h 59 列：标签改变了卡片行或卡片没有渲染"; fi
+assert_has "$TMP/p28h-59-labels.txt" '全部任务' "28-h 59 列：标签控件在场"
+assert_has "$TMP/p28h-59-labels.txt" '最近更新' "28-h 59 列：排序控件在场"
+
+# The machine paths do not request the optional board payload, even if it is available.
+for mode in json print; do
+  for labels in 0 1; do
+    B3_STUB_LABELS="$labels" B3_STUB_ARGV_LOG="$TMP/p28h-$mode-$labels.argv" "$JS_RUNNER" "$P28_PANEL" "--$mode" \
+      --root "$P28H_FX" --state-dir "$P28H_FX/state" --team-cli "$P28_TESTS/panel-b3-stub.sh" --page 4 \
+      --width 59 --height 40 --lang zh >"$TMP/p28h-$mode-$labels.out" ||
+      bad "28-h --$mode returned failure"
+    sort -o "$TMP/p28h-$mode-$labels.argv" "$TMP/p28h-$mode-$labels.argv"
+  done
+  if cmp "$TMP/p28h-$mode-0.argv" "$TMP/p28h-$mode-1.argv" &&
+     cmp "$TMP/p28h-$mode-0.out" "$TMP/p28h-$mode-1.out" &&
+     ! grep -q -- '--with-labels' "$TMP/p28h-$mode-1.argv"; then
+    ok "28-h --$mode 保持原调用参数和输出，不读取标签"
+  else bad "28-h --$mode 的参数或输出受到标签影响"; fi
+done
 
 # 目标表：卡片可点（focus），焦点卡上是 open；键位 chip 也在表里；`r` 永远不在（V16 F-V16-5）
-p28_targets 4 >"$TMP/p28h-targets-p4.json" 2>/dev/null
+B3_STUB_LABELS=1 p28h_frame 160 32 --targets >"$TMP/p28h-targets-p4.json"
 P28H_KINDS="$(p28_kinds "$TMP/p28h-targets-p4.json")"
+for choice in label order; do
+  assert_has "$TMP/p28h-targets-p4.json" "\"kind\":\"board-choice\",\"choice\":\"$choice\"" "28-h $choice 控件有点击目标"
+done
 case ",$P28H_KINDS," in
   *",focus,"*) ok "28-h 目标表：卡片有 focus 目标" ;;
   *) bad "28-h 目标表：没有 focus 目标（$P28H_KINDS）" ;;

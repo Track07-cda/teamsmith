@@ -37,7 +37,10 @@ while [ $# -gt 0 ]; do
     --config=*) TEAM_CONFIG_FILE="${1#*=}"; shift ;;
     --yes|-y) TEAM_ASSUME_YES=1; TEAM_YES_ARGV=1; shift ;;
     -h|--help) _TEAM_HELP_REQ=1; shift ;;   # cli-help：`team <cmd> --help` 打印那个命令自己的页
-    --) shift; ARGS+=("$@"); break ;;
+    --)
+      # board label also needs the delimiter to distinguish a dash-prefixed name from an option.
+      if [[ ${ARGS[0]:-} == board && ${ARGS[1]:-} == label ]]; then ARGS+=("$1"); fi
+      shift; ARGS+=("$@"); break ;;
     *) ARGS+=("$1"); shift ;;
   esac
 done

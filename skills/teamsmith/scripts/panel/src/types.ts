@@ -176,6 +176,8 @@ export interface BoardRow {
   phase?: string
   /** Optional source cell; only the interactive board uses a valid UTC timestamp. */
   updated_at?: string
+  taskTable?: boolean
+  labels?: { names: string[]; score: string }
 }
 
 /** A recent delivery (a report file, newest first) for the overview's delivery block. */
@@ -192,7 +194,18 @@ export interface BoardBlock {
   total: number
   /** Newest report files, already trimmed by the reader. */
   deliveries: Delivery[]
+  labels?: { catalog: BoardLabel[]; unavailable?: false } | { unavailable: true }
 }
+
+export interface BoardLabel { name: string; color: string }
+export interface BoardView { label: string | null; priority: boolean }
+export type BoardChoice = 'label' | 'order'
+export interface BoardPicker {
+  kind: BoardChoice
+  index: number
+  entries: { text: string; value: string | null; color?: string }[]
+}
+export interface BoardDetailRef { ref: FocusRef; taskTable: boolean }
 
 /** One task token of a change (P45/B2): the mapping's `<ID> <board-status>` plus its verdict. */
 export interface ChangeTaskToken {
@@ -616,6 +629,7 @@ export type Tone =
 export interface Segment {
   text: string
   tone: Tone
+  rgb?: string
   /**
    * True for the title band's clock: the App's own 1s ticker owns that text in the TUI (the `now`
    * state re-feeds `panel.timestamp` every second), while `--print`/`--json`/snapshots render
@@ -654,6 +668,7 @@ export type Action =
   | { kind: 'open-focused'; lane: string; row?: FocusRef }
   /** Board page: move the focus one lane left/right (the key band's `←`/`→` chip). */
   | { kind: 'lane-move'; delta: number }
+  | { kind: 'board-choice'; choice: BoardChoice }
   /** Board page: move the focus one card up/down inside its lane (the `↑`/`↓` chip). */
   | { kind: 'card-move'; delta: number }
   /** Board page: the wheel's lane hit — scroll this lane's window (never the focus). */
@@ -810,6 +825,9 @@ export interface ViewState {
   focus?: FocusRef | null
   /** Per-lane window offsets (the board page's wheel); absent lanes anchor on their newest cards. */
   laneOffset?: Record<string, number>
+  boardView?: BoardView
+  boardPicker?: BoardPicker | null
+  detailRow?: BoardDetailRef | null
   /** The board's explicitly folded lanes (P123, legend order); empty/absent = none. */
   boardFold?: string[]
   /** The board's explicitly shown lanes (P123, legend order): they stay unfolded even when empty. */

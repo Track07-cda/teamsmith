@@ -1,10 +1,10 @@
 # V196 · 任务标签与看板独立验证
 
-agent: verify   status: BLOCKED / NEEDS CHANGES   time: 2026-11-26T02:50:05Z
+agent: verify   status: CANDIDATE PASS / MERGED SHA PENDING   time: 2026-11-26T03:00:54Z
 
 branch: `task/V196-task-labels-behaviour-verify`   PR/MR: -
 
-**候选 `2309f8c564306affaf374f67e87fb4619a1f39b4` 仍不能合并。** 真实终端 43 项通过、1 项失败。空详情与真实回执已修正；连续按键、改色、改权重、两种排序、表外详情刷新、标签表损坏和恢复均实测。最后在英文 59 列画面等 `M39 Outside`，卡片实际已显示，检查没认出编号后的四个排版空格，后续鼠标选择和隐藏同号刷新未验证。详见第四轮；四轮正式 FAIL 保留。
+**冻结候选 `f9bb3f3512e1efc96f2f21a5b5d36ce7bc77f9d8` 的 V196 独立验收通过，待 PM 接受后核对合并版本。** 真实终端 46 项通过、0 项失败；此前未到达的英文 59 列鼠标选择、草稿编辑、选择不写入项目与偏好，以及筛选刷新后焦点与 Enter 读到正确任务，均有本次原画面和回执。前四轮正式 FAIL 保留；未把候选结果当成合并版本或全量发布检查通过。
 
 ## 首轮 `6ce75ccf` 历史结果
 
@@ -174,7 +174,7 @@ python3 /var/tmp/v196-r3.cFA6ko/check-cache-artifacts.py /var/tmp/v196-r3.cFA6ko
 
 **第三轮 BLOCKED 处置：** PM 让作者修同一 `panel-b3.sh board` 的 F5 与 F6；第四轮只复验实际终端，复用已取得的命令、缓存和窄屏证据。第三轮原件 `/var/tmp/v196-r3.cFA6ko/` 保存 runner、时间与各退出值、旧/新命令原件、缓存 JSON、对比器原红与离线读数、新 ANSI 帧及机器参数；真实终端原件 `/var/tmp/teamsmith-panel-b3-pm_skills-deb708fe.VC9PHK/board/`。未延长等待、重启或重跑该终端场景。第三轮报告暂存后在本任务分支执行上述 `ledger-ban.sh` 命令，回执 `scope=published files=3065 hits=0 names=ok user=resolved`，退出 0。
 
-## 第四轮 · `2309f8c564306affaf374f67e87fb4619a1f39b4`（仅实时终端）
+## 第四轮 · `2309f8c564306affaf374f67e87fb4619a1f39b4`（历史结果，仅实时终端）
 
 **F5、F6 已闭合；新失败 F7 阻断最后一段。** 相对 `4a8bf012` 只改 `tests/panel-b3{,-stub}.sh` 和作者报告，`git diff --exit-code 4a8bf012..HEAD -- skills/teamsmith/scripts openspec/changes/task-labels` 为 0，bundle 仍是 `0dbbc61704aa1f9c960c8c9fad00964cf4ca1c57ea13af307098b0412a09108e`。前三轮中央记录保存在 `.pi/team/state/evidence/P497/round{1,2,3}/`，当前中央记录绑定新候选、不替换旧结论。
 
@@ -201,4 +201,28 @@ TEAM_B3_KEEP=1 bash skills/teamsmith/tests/panel-b3.sh board </dev/null
 
 **当前 OpenSpec 状态：** 沿用第三轮 CLI、缓存及新候选产物同一性；第四轮实测通过上述实时操作，不等于整个 `3.1` 通过。英文 59 列已看见重启后回到全部任务和最近更新，但随后点击精确的长标签、鼠标切换排序、`Ctrl+o` 打开草稿编辑器、配置不写入，以及筛选中刷新移除最后一条同号后的实际焦点和 Enter 未到达。无新增产品缺陷证据；该终端检查仍阻塞合并。不重跑前面通过项、§38、全套、模型或构建安装。
 
-**BLOCKED:** 请 PM 交作者修同一个终端案例的 F7，并明确下一次只补尚未达到的终端操作，不再验已保留的普通 CLI/缓存/59 列静态帧和机器输出。原始终端画面、原读取 JSON 和现场都保留，完整 `pty.log`、`pty.rc`、`pty-socket-path`、`run.sh` 在 `/var/tmp/v196-r4.hMakmE/`；未重启、重跑或延长等待。
+**第四轮 BLOCKED 处置：** PM 交作者修同一个终端案例的 F7，第五轮只补尚未达到的终端操作，不再验已保留的普通 CLI/缓存/59 列静态帧和机器输出。原始终端画面、原读取 JSON 和现场都保留，完整 `pty.log`、`pty.rc`、`pty-socket-path`、`run.sh` 在 `/var/tmp/v196-r4.hMakmE/`；未重启、重跑或延长等待。
+
+## 第五轮 · `f9bb3f3512e1efc96f2f21a5b5d36ce7bc77f9d8`（英文 59 列收尾）
+
+**PASS，闭合 F7。** 相对 `2309f8c5` 仅 `tests/panel-b3.sh` 和作者报告变动；`git diff --exit-code 2309f8c5..HEAD -- skills/teamsmith/scripts openspec/changes/task-labels` 退出 0，执行的 bundle SHA-256 仍是 `0dbbc61704aa1f9c960c8c9fad00964cf4ca1c57ea13af307098b0412a09108e`。现有 `board` 选段在同一函数内初始化私有项目、准备中英文阅读入口、写入待筛标签以及表外同号，因此只调用原选段一次取得前置现场，不抽取源码另做入口、不把前段重复通过计为新增覆盖。首四轮原生 FAIL 和原件不改；第四轮在 `.pi/team/state/evidence/P497/round4/`。
+
+```sh
+bash -n /var/tmp/v196-r5.i7bCWF/run.sh
+TEAM_GATES='bash /var/tmp/v196-r5.i7bCWF/run.sh' bash skills/teamsmith/scripts/team review P497 \
+  --dir /var/tmp/p497-review-f9bb3f35.O6jsX5 --branch f9bb3f3512e1efc96f2f21a5b5d36ce7bc77f9d8
+# runner: TMPDIR=/var/tmp, private TMUX_TMPDIR=/var/tmp/tl-pty.DQLGEp
+TEAM_B3_KEEP=1 bash skills/teamsmith/tests/panel-b3.sh board </dev/null
+# board_pty_rc=0 seconds=72；46 项通过、0 失败；原生 review PASS（72s），外层 rc=0
+```
+
+证据相对 `/var/tmp/teamsmith-panel-b3-pm_skills-deb708fe.oDvx5T/board/`，除明示的离线比较外均为同次运行保存的实际画面或读取：
+
+| 本次补齐项 | 结果及原件 |
+|---|---|
+| 完整卡片、保留原点击坐标 | `en-default.txt` 的原行仍是 `   · M39    Outside`，同帧还有同号 `First`、`Second`、`Inserted`；`.txt.observed` 另列 `B3 card: [M39 Outside]`，按整条 ID 和标题匹配。候选只去掉 ID 和标题之间的排版空格，不改作点击定位的原帧，也不把同号卡合在一起。 |
+| 两个长标签及鼠标排序 | `en-labels.txt` 同画面列出 `Shared label text beyond the control width A` 与 `… B`。鼠标选择 B 后 `en-filter-b.txt` 唯一任务是 `M51 Other`，选择 A 后 `en-filter-a.txt` 唯一任务是 `M48 Neighbor`；两次都不显示另一个任务。`en-priority.txt` 显示鼠标选择后的 `Sort: Priority`，仍仅有 `M48 Neighbor`。 |
+| 普通／草稿 `Ctrl+o`，选择不写入 | 普通看板按键前后 `en-priority.txt` 和 `en-plain-only.txt` 离线 `cmp` 退出 0；画面未打开选择器或跳页。草稿 `en-compose.txt` 显示 `Enter send`，`root/.pi/team/state/editor.receipt` 保存同一项目的 `root/.pi/team/state/draft.md`，未发送。实际场景在后续故意改标签前，已用两次 `cmp` 确认选项使用前后的 `task-labels.tsv` 和 `panel.conf` 逐字相同；配置原件另比对 SHA-256 `4f7b691342621627f84f7a22de464e74a4a26883d12e0e2ec1899d96d95d7f3f` 相同。 |
+| 删除最后一条匹配同号后，焦点和 Enter | `fallback-before.txt` 唯一焦点 `M39 First`，同时能看到 `M39 Second` / `Inserted`，看不到 `Outside`。删除三个表内 M39 并刷新后，同一次请求回执 `live-labels/fallback-board-reply.json` 只剩 `M39 Outside`（`taskTable:false`、无 `labels`）；匹配的 `M48 Neighbor` 和 `M51 Other` 都还在。`fallback-focus.txt` 唯一焦点为 `M48 Neighbor`，不显示任何 M39；Enter 的 `fallback-detail.txt` 标题 `detail M48`、正文 `Label board M48 proof`，真实 `live-labels/detail.json` 的 `id=M48`、`files[0].path=docs/team/tasks/M48-board.md`。 |
+
+**验收边界：** 候选 `3.1` 的独立行为证据至此齐备，由 PM 接受并决定合并；合并版本尚未验证，`3.1` 未由 verifier 改勾。旧 CLI、缓存、机器和静态画面仍引用实际保存的记录；未新跑 §38、全套、模型、依赖安装、隔离重建或发布。候选检出前后均干净，不写真实项目。`/var/tmp/v196-r5.i7bCWF/` 保留 runner、完整 `pty.log`、退出值和 socket 路径，原终端夹具、帧与 JSON 保留。报告暂存后的 `ledger-ban.sh` 退出 0：`scope=published files=3065 hits=0 names=ok user=resolved`。

@@ -1203,6 +1203,7 @@ team_panel_board_json() { # 看板行 + 四态计数（含 done/dropped）+ 最�
   local f="$TEAM_DOCS_ABS/BOARD.md"
   [ -e "$f" ] || return 0
   [ -r "$f" ] || return 1
+  local with_labels="${1:-0}" label_entry
   local cols ic tc ac bc dc sc rows counts todo wip review blocked done dropped total
   cols="$(team_panel_board_awk)"
   { read -r ic; read -r tc; read -r ac; read -r bc; read -r dc; read -r sc; } <<< "$cols"
@@ -1210,9 +1211,9 @@ team_panel_board_json() { # 看板行 + 四态计数（含 done/dropped）+ 最�
   # ——不是每行 fork 一个进程（参考板 73 行）；没有任务书/没有该头 → `-`。
   local tfiles=() tf
   for tf in "$TEAM_DOCS_ABS/tasks"/*.md; do [ -f "$tf" ] && tfiles+=("$tf"); done
-  rows="$(awk -F'|' -v ic="$ic" -v tc="$tc" -v ac="$ac" -v bc="$bc" -v dc="$dc" -v sc="$sc" -v bf="$f" "$_TEAM_BOARD_TIME_AWK"'
+  rows="$(awk -F'|' -v ic="$ic" -v tc="$tc" -v ac="$ac" -v bc="$bc" -v dc="$dc" -v sc="$sc" -v bf="$f" -v labels="$with_labels" "$_TEAM_BOARD_TIME_AWK$_team_board_label_awk"'
     function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
-    function esc(s) { gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); gsub(/\t/, " ", s); gsub(/\r/, "", s); return s }
+    function esc(s) { if (labels) return label_json(s); gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); gsub(/\t/, " ", s); gsub(/\r/, "", s); return s }
     function keep(id, st) {
       if (id == "" || st == "") return 0
       if (st == "state" || st == "状态" || st == "status") return 0
@@ -1224,12 +1225,13 @@ team_panel_board_json() { # 看板行 + 四态计数（含 done/dropped）+ 最�
       else if (want && $0 ~ /^phase:/) { ph[tid] = trim(substr($0, 7)); want = 0 }
       next
     }
-    { bt_scan() }
+    { bt_scan(); eligible = labels && label_task(ic,tc,sc) }
     /^\|/ {
       id = trim($(ic)); st = trim($(sc))
       if (!keep(id, st)) next
       phase = (id in ph && ph[id] != "") ? ph[id] : "-"
       row[++n] = sprintf("{\"id\": \"%s\", \"title\": \"%s\", \"agent\": \"%s\", \"branch\": \"%s\", \"deps\": \"%s\", \"state\": \"%s\", \"phase\": \"%s\"", esc(id), esc(trim($(tc))), esc(trim($(ac))), esc(trim($(bc))), esc(trim($(dc))), esc(st), esc(phase))
+      if (labels) row[n] = row[n] ", \"taskTable\": " (eligible ? "true" : "false")
       if (bt_row(id) && NF==bt_width && bt_last_cell() && ic==bt_col["id"] && tc==bt_col["task"] && sc==bt_col["status"]) {
         stamp = bt_trim($(bt_col["time"]))
         if (stamp ~ /^[0-9TZ:-]+$/) time[n] = stamp
@@ -1241,7 +1243,7 @@ team_panel_board_json() { # 看板行 + 四态计数（含 done/dropped）+ 最�
         if (bt_tables==1 && i in time) printf ", \"updated_at\": \"%s\"", time[i]
         printf "}"
       }
-    }' "${tfiles[@]}" "$f")"
+    }' "${tfiles[@]}" "$f")" || return 1
   counts="$(awk -F'|' -v ic="$ic" -v sc="$sc" '
     function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
     function keep(id, st) {
@@ -1261,10 +1263,21 @@ team_panel_board_json() { # 看板行 + 四态计数（含 done/dropped）+ 最�
       else if (st == "done") done++
       else if (st == "dropped") dropped++
     }
-    END { printf "%d %d %d %d %d %d %d", todo+0, wip+0, review+0, blocked+0, done+0, dropped+0, total+0 }' "$f")"
+    END { printf "%d %d %d %d %d %d %d", todo+0, wip+0, review+0, blocked+0, done+0, dropped+0, total+0 }' "$f")" || return 1
   read -r todo wip review blocked done dropped total <<< "$counts"
-  printf '{"rows": [%s], "counts": {"todo": %s, "wip": %s, "review": %s, "blocked": %s, "done": %s, "dropped": %s}, "total": %s, "deliveries": %s}' \
+  local board enriched catalog="$TEAM_DOCS_ABS/task-labels.tsv"
+  printf -v board '{"rows": [%s], "counts": {"todo": %s, "wip": %s, "review": %s, "blocked": %s, "done": %s, "dropped": %s}, "total": %s, "deliveries": %s}' \
     "$rows" "$todo" "$wip" "$review" "$blocked" "$done" "$dropped" "$total" "$(team_panel_deliveries_json)"
+  if [ "$with_labels" = 0 ]; then printf '%s' "$board"; return 0; fi
+  # Confirm absence by directory entry, not a failed target stat (a broken link is present).
+  if [ ! -e "$catalog" ] && [ ! -L "$catalog" ] &&
+     label_entry="$(find -H "$TEAM_DOCS_ABS" -maxdepth 1 -name task-labels.tsv -printf 1 -quit)" && [ -z "$label_entry" ]; then
+    printf '%s' "$board"
+  elif enriched="$(team_board_labels_run panel <<< "$board")" && [ -n "$enriched" ]; then
+    printf '%s' "$enriched"
+  else
+    printf '%s, "labels": {"unavailable": true}}' "${board%\}}"
+  fi
 }
 
 team_panel_change_phase() { # <change 目录> → explore|propose|apply|verify
@@ -2009,7 +2022,7 @@ team_panel_block() { # <块名> <activity 1|0> <events> [id] [file] [before] [no
     capacity) team_panel_capacity_json ;;
     agents)   team_panel_agents_json ;;
     recent)   team_panel_recent_json ;;
-    board)    team_panel_board_json ;;
+    board)    team_panel_board_json "${9:-0}" ;;
     changes)  team_panel_changes_json ;;
     specs)    team_panel_specs_json ;;
     decisions) team_panel_decisions_json ;;
@@ -2030,13 +2043,14 @@ team_panel_block() { # <块名> <activity 1|0> <events> [id] [file] [before] [no
 # 内部命令：给 panel.js 一个 JSON（{panel, activity}）或一个块（--block <名>）。
 # 名字带 __ 前缀 = 不是给人用的命令面。
 team_cmd_panel_data() {
-  local activity=1 events="${TEAM_MONITOR_EVENTS:-4}" block="" did="" dfile="" rbefore="" rno="" dsource=""
+  local activity=1 events="${TEAM_MONITOR_EVENTS:-4}" block="" did="" dfile="" rbefore="" rno="" dsource="" with_labels=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --no-activity) activity=0; shift ;;
       --activity) activity=1; shift ;;
       --events) events="${2:?__panel-data: --events 需要数字}"; shift 2 ;;
       --block) block="${2:?__panel-data: --block 需要块名}"; shift 2 ;;
+      --with-labels) with_labels=1; shift ;;
       --id) did="${2:?__panel-data: --id 需要入口 id}"; shift 2 ;;
       --file) dfile="${2:?__panel-data: --file 需要路径}"; shift 2 ;;
       --source) dsource="${2:?__panel-data: --source 需要取值}"; shift 2 ;;
@@ -2047,6 +2061,7 @@ team_cmd_panel_data() {
     esac
   done
   team_require_docs
+  if [ "$with_labels" = 1 ] && [ "$block" != board ]; then team_usage_die "__panel-data: --with-labels requires --block board"; fi
   # M50：activity 块（monitor.mjs，node 冷启 ~0.4s）与「预热 + panel 组装」并行——
   # 进程替换起一个后台产者，末尾再收；输出键序与字节与串行完全一致。
   local _act_fd _act_out='[]'
@@ -2057,7 +2072,7 @@ team_cmd_panel_data() {
       pending) team_scan_warm --reports ;;
       *) team_scan_warm ;;
     esac
-    team_panel_block "$block" "$activity" "$events" "$did" "$dfile" "$rbefore" "$rno" "$dsource"
+    team_panel_block "$block" "$activity" "$events" "$did" "$dfile" "$rbefore" "$rno" "$dsource" "$with_labels"
     return $?
   fi
   if [ "$activity" = "1" ]; then

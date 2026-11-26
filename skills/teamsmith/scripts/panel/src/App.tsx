@@ -13,8 +13,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { writeSync } from 'node:fs'
 import { Box, Text, useApp, useCursor, useInput } from 'ink'
 import { effectiveSetting, settingLabel, isSecondsSetting, settingTiming, limitsTokens, limitFields, limitsValue, withLimitsTokens } from './project-settings.js'
-import type { SettingsPage, LimitsDraft } from './types.js'
-import { settingsRecordDetails, layout, projectBoard, resolveFocus, focusRefOf, focusRow, rowKey, settingsRowFocusable, settingsViewRows, boardFocusRef, rowSourceOf } from './layout.js'
+import type { BoardBlock, BoardChoice, BoardDetailRef, BoardPicker, BoardView, SettingsPage, LimitsDraft } from './types.js'
+import { settingsRecordDetails, layout, boardCatalog, effectiveBoardView, projectBoard, resolveFocus, focusRefOf, focusRow, rowKey, settingsRowFocusable, settingsViewRows, boardFocusRef, rowSourceOf } from './layout.js'
 import type { BoardProjection, LayoutInput, SettingsRow } from './layout.js'
 import { clockOf } from './format.js'
 import { fill, stringsFor, type Strings } from './strings/index.js'
@@ -22,7 +22,6 @@ import { composeKey, cpLength, cursorView, insertAt, intake, killSpan, moveCurso
 import type { Settings } from './settings.js'
 import type {
   Action,
-  BoardRow,
   LaneWindow,
   DetailWindow,
   DetailSource,
@@ -49,7 +48,6 @@ const TRAY_TL = '╭'
 const TRAY_TR = '╮'
 const TRAY_H = '─'
 const TRAY_V = '│'
-const EMPTY_BOARD: BoardRow[] = []
 
 function sameBoardRef(a: FocusRef | null | undefined, b: FocusRef): boolean {
   return a?.lane === b.lane && a.id === b.id && (a.nth ?? 0) === (b.nth ?? 0)
@@ -239,7 +237,7 @@ const Row = React.memo(function Row({ row, palette }: { row: Segment[]; palette:
     <Text wrap="truncate">
       {row.length
         ? row.map((segment, j) => (
-            <Text key={j} color={palette.tones[segment.tone]}>
+            <Text key={j} color={segment.rgb ?? palette.tones[segment.tone]}>
               {segment.text}
             </Text>
           ))
@@ -305,6 +303,13 @@ export function App({
   const [viewEntry, setViewEntry] = useState<number | null>(null)
   const [focus, setFocus] = useState<FocusRef | null>(null)
   const [laneOffset, setLaneOffset] = useState<Record<string, number>>({})
+  const [boardView, setBoardView] = useState<BoardView>({ label: null, priority: false })
+  const [boardPicker, setBoardPicker] = useState<BoardPicker | null>(null)
+  const [detailRow, setDetailRow] = useState<BoardDetailRef | null>(null)
+  const boardViewRef = useRef(boardView)
+  const boardPickerRef = useRef(boardPicker)
+  boardViewRef.current = boardView
+  boardPickerRef.current = boardPicker
   // The open detail view's entry id (the board page's Enter / a click on the focused card), its
   // tab and its document scroll. The view is read-only: no key of its own beyond navigation.
   const [detailId, setDetailId] = useState<string | null>(null)
@@ -884,12 +889,45 @@ export function App({
     [activityPinned, api, goPage, saveSettings],
   )
 
-  const kanbanFor = useCallback((rows = EMPTY_BOARD) => {
+  // Key moves and the frame share this projection; focus resolves separately after each key.
+  const kanbanFor = useCallback((block?: BoardBlock, choice = boardViewRef.current) => {
     const cached = boardProjectionRef.current
-    if (cached?.rows === rows) return cached
-    const projected = projectBoard(rows)
+    const view = effectiveBoardView(block, choice)
+    if (cached && cached.rows === block?.rows &&
+        cached.view.label === view.label && cached.view.priority === view.priority) return cached
+    const projected = projectBoard(block, true, view)
     boardProjectionRef.current = projected
     return projected
+  }, [])
+
+  const selectBoardView = useCallback((choice: BoardView) => {
+    const block = dataRef.current.blocks?.board
+    const drawn = renderedBoardRef.current
+    const old = (drawn && resolveFocus(drawn, focusRef.current)) ?? focusRef.current
+    const next = kanbanFor(block, choice)
+    const focused = resolveFocus(next, old, false)
+    setBoardView(next.view)
+    boardViewRef.current = next.view
+    setLaneOffset({})
+    if (focused) {
+      focusRef.current = focused
+      setFocus(focused)
+    }
+  }, [kanbanFor])
+
+  const openBoardPicker = useCallback((kind: BoardChoice) => {
+    const block = dataRef.current.blocks?.board
+    const catalog = boardCatalog(block)
+    if (pageRef.current !== 4 || detailIdRef.current || !catalog.length) return
+    const s = stringsRef.current
+    const view = effectiveBoardView(block, boardViewRef.current)
+    const entries = kind === 'label'
+      ? [{ text: s.boardAllTasks, value: null }, ...catalog.map((d) => ({ text: d.name, value: d.name, color: d.color }))]
+      : [{ text: s.boardRecentOrder, value: null }, { text: s.boardPriority, value: 'priority' }]
+    const value = kind === 'label' ? view.label : view.priority ? 'priority' : null
+    const picker = { kind, entries, index: Math.max(0, entries.findIndex((e) => e.value === value)) }
+    boardPickerRef.current = picker
+    setBoardPicker(picker)
   }, [])
 
   /**
@@ -1004,11 +1042,13 @@ export function App({
 
   /** Open an entry's detail view: the first tab, from the top (the board page's Enter / a click).
    * The source is fixed by the surface that opened it (P249) and rides every reader request. */
-  const openDetail = useCallback((id: string, source: DetailSource = 'entry') => {
+  const openDetail = useCallback((ref: FocusRef, source: DetailSource = 'entry', rows = dataRef.current.blocks?.board?.rows) => {
+    const opening = source === 'entry' ? focusRow(rows ?? [], ref) : null
+    setDetailRow(opening ? { ref, taskTable: opening.taskTable === true } : null)
     setDetailIndex(0)
     setDetailScroll(0)
     setDetailSource(source)
-    setDetailId(id)
+    setDetailId(ref.id)
   }, [])
 
   const openBoardFocused = useCallback(() => {
@@ -1016,8 +1056,11 @@ export function App({
     const focus = focusRef.current
     if (!board || (focus && !boardFocusRef(focus))) return
     const row = resolveFocus(board, focus)
-    if (row) openDetail(row.id)
-  }, [openDetail])
+    if (row) {
+      selectBoardRow(row)
+      openDetail(row, 'entry', board.rows)
+    }
+  }, [openDetail, selectBoardRow])
 
   /** Enter on the work page: open the focused row (or the first drawn one, when it left the board).
    * The page-wide order carries each row's block scope, and the scope picks the reader's source. */
@@ -1030,7 +1073,7 @@ export function App({
         order.find((r) => r.lane === cur.lane && r.id === cur.id)
       : undefined
     const row = hit ?? order[0]
-    openDetail(row.id, rowSourceOf(row.lane))
+    openDetail(row, rowSourceOf(row.lane))
   }, [openDetail])
 
   // ---- project settings (P22/B2): the view's focus walk, its origin and its row opening.
@@ -1338,6 +1381,17 @@ export function App({
    */
   const chooseChoiceOption = useCallback(
     (index: number) => {
+      const board = boardPickerRef.current
+      if (board) {
+        const entry = board.entries[index < 0 ? board.index : index]
+        if (!entry) return
+        selectBoardView(board.kind === 'label'
+          ? { ...boardViewRef.current, label: entry.value }
+          : { ...boardViewRef.current, priority: entry.value === 'priority' })
+        boardPickerRef.current = null
+        setBoardPicker(null)
+        return
+      }
       const picker = choicePickerRef.current
       if (!picker) return
       if (index >= 0 && index !== picker.index) {
@@ -1389,10 +1443,17 @@ export function App({
       }
       void writeChoiceValue(target, entry.value)
     },
-    [choiceTarget, openCompose, writeChoiceValue],
+    [choiceTarget, openCompose, selectBoardView, writeChoiceValue],
   )
 
   const moveChoicePicker = useCallback((delta: number) => {
+    const board = boardPickerRef.current
+    if (board) {
+      const next = { ...board, index: Math.max(0, Math.min(board.entries.length - 1, board.index + delta)) }
+      boardPickerRef.current = next
+      setBoardPicker(next)
+      return
+    }
     const picker = choicePickerRef.current
     if (!picker) return
     choiceDangerRef.current = null
@@ -1402,6 +1463,11 @@ export function App({
   }, [])
 
   const closeChoicePicker = useCallback(() => {
+    if (boardPickerRef.current) {
+      boardPickerRef.current = null
+      setBoardPicker(null)
+      return
+    }
     choiceDangerRef.current = null
     setChoicePicker(null)
     choicePickerRef.current = null
@@ -1847,8 +1913,11 @@ export function App({
           if (pageRef.current === 2) openWorkFocused()
           else if (action.row) {
             selectBoardRow(action.row)
-            openDetail(action.row.id)
+            openDetail(action.row, 'entry', renderedBoardRef.current?.rows)
           } else openBoardFocused()
+          return
+        case 'board-choice':
+          if (!composing && !overlay && !settingsViewRef.current && !busy) openBoardPicker(action.choice)
           return
         case 'lane-move':
           moveFocus(action.delta, 0)
@@ -1908,7 +1977,7 @@ export function App({
           return
       }
     },
-    [chooseChoiceOption, closeChoicePicker, closeSettingsView, collapse, cyclePref, goPage, moveBoardFocus, moveChoicePicker, moveDetailTab, moveFocus, moveSettingsFocus, openBoardFocused, openCompose, openDetail, openSettingsRow, openSettingsView, openWorkFocused, runAction, scrollDetail, scrollLane, scrollSettings, selectBoardRow, toggleLaneFold, updateScroll],
+    [busy, chooseChoiceOption, closeChoicePicker, closeSettingsView, collapse, composing, cyclePref, goPage, moveBoardFocus, moveChoicePicker, moveDetailTab, moveFocus, moveSettingsFocus, openBoardFocused, openBoardPicker, openCompose, openDetail, openSettingsRow, openSettingsView, openWorkFocused, overlay, runAction, scrollDetail, scrollLane, scrollSettings, selectBoardRow, toggleLaneFold, updateScroll],
   )
 
   const effectiveActivity = activityPinned ? data.activity : settings.activity
@@ -1976,6 +2045,9 @@ export function App({
       scroll,
       focus,
       laneOffset,
+      boardView,
+      boardPicker,
+      detailRow,
       boardFold: settings.boardFold,
       boardShow: settings.boardShow,
       boardEmptyFold: settings.boardEmptyFold,
@@ -2003,7 +2075,7 @@ export function App({
     // at process start. The live clock is NOT fed through here: it patches row 0 after the memo
     // (below), so the per-second tick never re-runs the full layout (measured: routing `now`
     // through layout() pushed an idle console to ~1.1% of one core — over the red line).
-    const kanban = page === 4 ? kanbanFor(data.blocks?.board?.rows) : undefined
+    const kanban = page === 4 ? kanbanFor(data.blocks?.board, boardView) : undefined
     const themed = layout({
       ...data,
       kanban,
@@ -2036,6 +2108,9 @@ export function App({
     scroll,
     focus,
     laneOffset,
+    boardView,
+    boardPicker,
+    detailRow,
     kanbanFor,
     settings.boardFold,
     settings.boardShow,
@@ -2085,20 +2160,21 @@ export function App({
   setCursorPosition(cursorPos)
   api.setComposeCursor(cursorPos ?? null)
 
-  const retainBoardFocus = useCallback((rows?: BoardRow[]) => {
+  const retainBoardFocus = useCallback((block?: BoardBlock) => {
     const previous = renderedBoardRef.current
     const before = focusRef.current
-    if (!previous || previous.rows === rows || (before && !boardFocusRef(before))) return
+    if (!previous || (before && !boardFocusRef(before))) return
+    const board = kanbanFor(block)
+    if (previous === board) return
     const selected = resolveFocus(previous, before)
     if (!selected) return
-    const board = kanbanFor(rows)
     const retained = resolveFocus(board, selected)
     if (!retained) return
     // Remember the original occurrence, including the implicit cursor on the board's first card.
-    if (!sameBoardRef(before ?? resolveFocus(board), retained)) setFocus(retained)
+    if (!sameBoardRef(before ?? resolveFocus(board), retained)) selectBoardRow(retained)
 
     const oldRow = focusRow(previous.rows, selected)
-    const row = focusRow(board.rows, selected)
+    const row = focusRow(board.rows, retained)
     const lane = board.lanes.get(retained.lane)
     const win = lanesRef.current.find((w) => w.lane === retained.lane)
     if (!oldRow || !row || !lane || !win?.span || laneFoldedNow(retained.lane, !lane.length)) return
@@ -2113,7 +2189,7 @@ export function App({
       const start = boardWindowStart(index, natural, span, lane.length)
       return start === natural ? prev : { ...prev, [retained.lane]: start }
     })
-  }, [kanbanFor, laneFoldedNow])
+  }, [kanbanFor, laneFoldedNow, selectBoardRow])
 
   const adoptFrame = useCallback((fresh: FrameInput, fromProps = false) => {
     const last = dataRef.current
@@ -2121,7 +2197,18 @@ export function App({
     // The reader also delivers asynchronously through `frame` props (already checked by main).
     // Preserve the last drawn selection before either path replaces its data.
     if (!fromProps && (last === fresh || frameSignature(last) === frameSignature(fresh))) return
-    if (pageRef.current === 4) retainBoardFocus(fresh.blocks?.board?.rows)
+    const block = fresh.blocks?.board
+    if (pageRef.current === 4) retainBoardFocus(block)
+    const old = boardViewRef.current
+    const view = effectiveBoardView(block, old)
+    if (view.label !== old.label || view.priority !== old.priority) {
+      boardViewRef.current = view
+      setBoardView(view)
+    }
+    if (boardPickerRef.current && !boardCatalog(block).length) {
+      boardPickerRef.current = null
+      setBoardPicker(null)
+    }
     setData(fresh)
   }, [retainBoardFocus])
 
@@ -2188,7 +2275,7 @@ export function App({
           const delta = button === 65 ? 1 : -1
           // With the detail view open the wheel scrolls the document (the one scrollable region),
           // on the page the view was opened from (the work page's rows open it too, P20/B5).
-          if (choicePickerRef.current) {
+          if (boardPickerRef.current || choicePickerRef.current) {
             // The choice picker's entries may outrun the budget: the wheel walks the list like
             // ↑/↓ (the window follows the selection).
             moveChoicePicker(delta)
@@ -2248,7 +2335,7 @@ export function App({
         const row = y - 1
         const col = x - 1
         const hit = targetsRef.current.find((t) => t.row === row && col >= t.hit.start && col < t.hit.end)
-        if (hit) dispatch(hit.hit.action)
+        if (hit && (!boardPickerRef.current || hit.hit.action.kind === 'choice-pick' || hit.hit.action.kind === 'choice-close' || hit.hit.action.kind === 'choice-move')) dispatch(hit.hit.action)
         return
       }
 
@@ -2392,24 +2479,13 @@ export function App({
 
       // The project-settings view owns its keys first (it sits above the overlay it was opened
       // from); anything it does not claim (notably `q`) falls through to the global handling.
+      if (boardPickerRef.current || (settingsViewRef.current && !composing && choicePickerRef.current)) {
+        if (key.escape) closeChoicePicker()
+        else if (key.upArrow || key.downArrow) moveChoicePicker(key.upArrow ? -1 : 1)
+        else if (key.return) chooseChoiceOption(-1)
+        return
+      }
       if (settingsViewRef.current && !composing) {
-        if (choicePickerRef.current) {
-          // The choice picker owns the same keys the seat picker does: esc closes it back to the
-          // row list with the row focus untouched, and it writes nothing on the way out.
-          if (key.escape) {
-            closeChoicePicker()
-            return
-          }
-          if (key.upArrow || key.downArrow) {
-            moveChoicePicker(key.upArrow ? -1 : 1)
-            return
-          }
-          if (key.return) {
-            chooseChoiceOption(-1)
-            return
-          }
-          return
-        }
         if (key.escape) {
           closeSettingsView()
           return
@@ -2539,6 +2615,10 @@ export function App({
         openReply()
         return
       }
+      if (page === 4 && !detailId && !key.ctrl && !key.meta && !key.shift && (input === 't' || input === 'o')) {
+        openBoardPicker(input === 't' ? 'label' : 'order')
+        return
+      }
       if (page === 4 && input === 'c' && !detailId) {
         // P123: `c` folds/unfolds the lane the focus names. The detail view and the settings
         // surfaces own the page region and never reach here (their branches returned above).
@@ -2560,7 +2640,7 @@ export function App({
         return
       }
       if (page === 4 && key.return) {
-        openBoardFocused()
+        if (!detailIdRef.current) openBoardFocused()
         return
       }
       if (page === 2 && key.return) {
