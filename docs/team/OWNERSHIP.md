@@ -22,7 +22,8 @@
 | `docs/team/reports/P501-dev2.md` | PM（P501 探索已接受） | 核实逐行时间来源的报告 |
 | `docs/team/reports/{P502-dev2,V199-dev3,P503-dev-bob,V200-dev3}.md`、`docs/team/reviews/{P503.md,P503-verify.log}` | PM（实施及合并短核已接受） | 方案、产品与验证临时写权撤回，不混入暂停的标签候选 |
 | `openspec/changes/archive/2026-11-25-pulse-board-recent-first/**`、`openspec/specs/{panel,board-and-status}/spec.md`、`docs/team/reports/A18-dev2.md` | PM（A18 已接受） | 三条要求与实际五份工件已核对，收回归档临时写权 |
-| `docs/team/reports/P504-dev-bob.md` | agent:dev-bob（P504） | 只读 PM 待命指令、建议统一措辞 |
+| `docs/team/reports/P504-dev-bob.md` | PM（P504 已接受） | PM 待命指令冲突与采用边界 |
+| `openspec/changes/clarify-pm-standby-guidance/**`、`docs/team/reports/P508-dev-bob.md` | agent:dev-bob（P508 临时） | 只写最小默认待命说明的正式方案，不改产品或项目 |
 | `docs/team/reports/P505-dev3.md` | agent:dev3（P505） | 只查任务标签键盘阻塞，独立临时目录，不碰 P497/V196 原件 |
 | `docs/team/reports/P506-dev2.md` | PM（P506 已接受） | 项目设置的标签操作与唯一写入入口探索 |
 | `openspec/changes/project-label-management/**`、`docs/team/reports/P507-dev2.md` | agent:dev2（P507 临时） | 正式方案及必要变更条款；不写产品或被暂停的标签候选 |
