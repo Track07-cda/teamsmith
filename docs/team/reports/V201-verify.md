@@ -1,10 +1,14 @@
 # V201 · 独立审阅 PM 待命指令
 
-agent: verify   status: NEEDS-CHANGES（仅方案）   time: 2026-11-26T01:43:57Z
+agent: verify   status: ACCEPTED（仅方案）   time: 2026-11-26T01:49:21Z
 
 branch: `task/V201-pm-standby-guidance-proposal-review`   PR/MR: - (local)
 
-**暂不通过：方案修正了开场说明，却漏掉了 Pulse 发给正在运行的 PM 的消息。** 这条消息仍允许 PM 一遇到需要人工介入的事就进入待命，即使独立验证还在跑，也没有让 PM 先遵守项目的人工决定规则。只需把这条消息改成查看待办并遵循项目 `AGENTS.md` 的指引，不改发送方式或任何待命行为。
+**当前结论：方案通过。** 修订版 `defb5f1b8472` 已补上 Pulse 消息，只计划删除 `digest 看详情` 后面的待命指示与唤醒承诺。见末节；未实施、未运行行为测试。
+
+## 首轮审阅 · 2026-11-26T01:43:57Z
+
+**首轮结论：暂不通过。方案修正了开场说明，却漏掉了 Pulse 发给正在运行的 PM 的消息。** 这条消息仍允许 PM 一遇到需要人工介入的事就进入待命，即使独立验证还在跑，也没有让 PM 先遵守项目的人工决定规则。只需把这条消息改成查看待办并遵循项目 `AGENTS.md` 的指引，不改发送方式或任何待命行为。
 
 ## Deliverables
 
@@ -76,3 +80,25 @@ ledger-ban rc=0
 ## Decisions and deviations
 
 只提交本报告。未修改候选、项目指令或运行状态；未动 V196 分支、会话、证据或标签；未推送、合并。
+
+## R1 定点复看 · 2026-11-26T01:49:21Z
+
+**ACCEPTED：R1 关闭，只接受方案。** 冻结 `defb5f1b847202051e9302253aec770f56f15c92` 的 `design.md` 给出 `common.sh` → `team_nudge` 的完整目标消息，和现有 `common.sh:4813` 逐字比对，直到 `digest 看详情` 没有变化；仅从分号起删除原待命尾句，不补新文字。`tasks.md` 1.4/2.2 明订这一个实施位置和原文字审阅检查，`init-skill` 原待命场景纳入同一消息，`proposal.md` 也只增加这一条消息。前缀、摘要、语言、计数、发送、排队、去重、恢复及所有待命/定时提醒行为均不改；`cmd-watch.sh` 调用处不在写集内。首轮其余结论保留，不重审。
+
+```text
+$ PATH="$HOME/.bun/bin:$PATH" TMPDIR=/var/tmp CI=1 OPENSPEC_TELEMETRY=0 openspec validate clarify-pm-standby-guidance --type change --strict --no-interactive
+Change 'clarify-pm-standby-guidance' is valid
+validate rc=0
+$ git diff --check 6c7675d2..HEAD
+diff-check rc=0
+$ git diff --exit-code 6c7675d2..HEAD -- skills README.md openspec/specs
+source+baseline unchanged rc=0
+$ git diff --name-status 6c7675d2..HEAD
+M  docs/team/reports/P508-dev-bob.md
+M  openspec/changes/clarify-pm-standby-guidance/design.md
+M  openspec/changes/clarify-pm-standby-guidance/proposal.md
+M  openspec/changes/clarify-pm-standby-guidance/specs/init-skill/spec.md
+M  openspec/changes/clarify-pm-standby-guidance/tasks.md
+```
+
+固定检出无未提交改动；本轮只跑同一 change strict 及差异检查。无行为执行、脚本修改、项目采用或状态更新。
