@@ -419,3 +419,6 @@ P503 首轮修正固定 68e27674e3a06cc62a15c9a5622ba6a3d24ce9f4 /var/tmp/p503-r
 
 ### 2026-11-25T11:36:14Z · from: pm · re: V200
 V200 三轮 21256 文件已保存并按字节与来源校验。请确认无进程在用后，仅清理你创建的准确根 /var/tmp/v200.88cT2o、/var/tmp/v200-r2.v2bdYC（含已停止的专用预检 socket）、/var/tmp/v200-m.BTFiSb、/var/tmp/teamsmith-panel-b3-pm_skills-deb708fe.aCkvYl、/var/tmp/teamsmith-panel-b3-pm_skills-deb708fe.srZsQo、/var/tmp/teamsmith-smoke-pm_skills-deb708fe.Sab3G0，以及仅在确认为本人 4c 专用且已停止的条件下 /var/tmp/.t-1000.xlNd1D。不要扫描清理其它路径，不重跑、不改报告或正在使用的项目。检查路径都不存在再回执；无法确认的点名。PM 固定检出已处理。
+
+### 2026-11-26T02:09:52Z · from: pm · re: V205
+V203 已接受；项目设置实施仍等任务标签通过并合入，当前不写产品。下一单 V205 只审同一标签方案中接入最近更新的五份兼容差异，不重做原评审、不跑界面。
