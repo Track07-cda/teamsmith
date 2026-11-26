@@ -64,3 +64,9 @@ TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh --select 4c,6d,28 </dev/n
 本节取代以上开跑范围。固定 `2309f8c564306affaf374f67e87fb4619a1f39b4`，独立干净检出 `/var/tmp/p497-review-2309f8c5.tGOIki`。相对第三轮 `4a8bf012` 仅 `tests/panel-b3{,-stub}.sh` 和作者报告变动，产品及 bundle 一字未改。历史三次原生 FAIL 保留，第三轮 74 秒、实时 26/1，原件在 `.pi/team/state/evidence/P497/round3/` 。普通 CLI 读写、2042 字节缓存开/关、59 列及机器输出继续用实际保留记录，不新跑；已有算分和构建证据的适用限制不变。
 
 仅在自己的私有 runner/TMUX_TMPDIR 启动一次 `TEAM_B3_KEEP=1 bash skills/teamsmith/tests/panel-b3.sh board </dev/null`，用 `TEAM_GATES='bash /var/tmp/<你的私有根>/<runner>' bash skills/teamsmith/scripts/team review P497 --dir /var/tmp/p497-review-2309f8c5.tGOIki --branch 2309f8c564306affaf374f67e87fb4619a1f39b4` 绑定候选。F5 对比先显示原任务书、后有同任务的空详情与两标签/8 分；F6 对照同一次真实请求的 board/detail JSON 和面板实际变化（不是事后单独查一次）。仅通过这一个现有选段继续原来被挡住的标签操作：连续按键与立即 Enter、改色/权重、同分逆时序、双排序和键鼠筛选、空结果、表外同号详情刷新、损坏目录恢复及刷新保焦。沿用其中必要的现有搭建和前导动作，不另外开测试或重跑已通过的 CLI/缓存/窄屏/机器等检查。若再有首个失败，保留全部现场与已完成动作，记录下一步未到达的范围，不改产品或再重跑。执行完同分支追加报告，给原始帧、JSON 与退出结果。
+
+## 第四轮返修后，只补英文窄屏剩余操作
+
+本节取代以上开跑范围。`f9bb3f3512e1efc96f2f21a5b5d36ce7bc77f9d8`，干净独立检出 `/var/tmp/p497-review-f9bb3f35.O6jsX5`。对 `2309f8c5` 仅一个测试及作者报告变化；四轮原生 FAIL 保留。第四轮 43/1 录到真实连键、改色权重、两种排序、筛选、表外和坏数据等，原件 `.pi/team/state/evidence/P497/round4/`；旧 CLI/缓存/机器及静态画面不要再跑。读作者报告和 `4597518c`，用第四轮原帧或候选同一次实际画面核读完整卡：窄屏 ID 空格可变，完整标题、唯一焦点、表外另行和实际点击目标不被混用。
+
+只补原 `panel-b3.sh board` 英文 59 列从 `en-default` 至 `fallback-detail`：实际复现鼠标选择两个长名的不同任务，鼠标改排序，普通 Ctrl+o 无动作而草稿内 Ctrl+o 走编辑器，项目标签与用户界面偏好未被浏览选择写入；刷新过程中删掉最后一条匹配同号、保留表外行的真实 JSON，焦点落到符合筛选的另一任务，Enter 显示正确正文。复用现有段落和前置输入；如能直接用原独立私有场景的输入重建英文段，不再执行前段动作；如果必须经过同一选段的前半段建立现场，只走该选段一次，不把前段计为新增覆盖，也不另造入口或改变测试要求。原生 `TEAM_GATES='bash /var/tmp/<你的私有根>/<runner>' bash skills/teamsmith/scripts/team review P497 --dir /var/tmp/p497-review-f9bb3f35.O6jsX5 --branch f9bb3f3512e1efc96f2f21a5b5d36ce7bc77f9d8`。只在私有终端后台运行，保留原帧、回执、首个失败和未到达项，旧原件只读；原分支追加实际做法和结果。不跑整套、不改产品或真实项目。

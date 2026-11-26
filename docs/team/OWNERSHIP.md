@@ -14,7 +14,7 @@
 | `docs/team/reports/P495-dev2.md`、`docs/team/reviews/P495.md` | PM（P495 已接受） | 保留探索记录，无后续写权 |
 | `openspec/changes/task-labels/**`（除实施任务勾选）、`docs/team/reports/{P496-dev2,V195-dev3,V205-dev3}.md` | PM（原范围和兼容修订均已接受） | 保留原方案、修订 `f36d1e51` 和独立回执，规划只读 |
 | `docs/team/tasks/P497-task-labels-apply.md` 明授的标签 CLI、Pulse 看板、相关测试及实施勾选范围，`docs/team/reports/P497-dev.md` | agent:dev（P497 恢复） | 只把原标签接入已有最近更新、连续方向键和时间布局；不得改设置、巡检或其它项目 |
-| `docs/team/reports/V196-verify.md`、`docs/team/reviews/P497.md` 与 `P497-verify.log` | agent:verify（V196 临时） | 冻结候选 `2309f8c5` 仅补实时看板；中央两份证据只由原生 `team review` 生成，产品只读 |
+| `docs/team/reports/V196-verify.md`、`docs/team/reviews/P497.md` 与 `P497-verify.log` | agent:verify（V196 临时） | 冻结候选 `f9bb3f35` 仅补英文窄屏剩余流程；中央两份证据只由原生 `team review` 生成，产品只读 |
 | `docs/team/reports/P498-dev2.md`、`docs/team/reviews/P498.md` | PM（探索接受） | 仅保留探索及接入裁定 |
 | `docs/team/reports/{P499-dev2,V197-dev3}.md` | PM（方案接受） | 已接受的初始化方案审阅记录，收回原写权 |
 | `docs/team/reports/P500-dev-bob.md`、`docs/team/reports/V198-dev3.md`、`docs/team/reviews/P500.md` 与 `P500-verify.log` | PM（候选与合并证据接受） | P500/V198 已完成，收回产品与中央记录暂时写权 |
