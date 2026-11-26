@@ -30,7 +30,8 @@
 | `docs/team/reports/{P509-dev3,V202-verify}.md`、`docs/team/reviews/{P509.md,P509-verify.log}` | PM（P509/V202 已接受） | 候选与合并的实际帧结论已核，产品/测试和中央验证临时写权撤回 |
 | `docs/team/reports/P506-dev2.md` | PM（P506 已接受） | 项目设置的标签操作与唯一写入入口探索 |
 | `docs/team/reports/{P507-dev2,V203-dev3}.md`、`openspec/changes/project-label-management/` 方案及需求正文 | PM（受审方案） | 项目设置原方案已独立接受，不改受审范围 |
-| `docs/team/tasks/P511-project-label-management-apply.md` 明授的标签定义命令、面板、一个现有设置测试、清单和报告 | agent:dev-bob（P511 临时） | 只实现项目设置入口与同一写入结果，不写正式规格、标签看板行为、巡检、当前项目或发布 |
+| `docs/team/tasks/P511-project-label-management-apply.md` 明授的标签定义命令、面板、一个现有设置测试、清单和报告 | agent:dev-bob（P511 临时） | 原候选冻结等待验证；只按 PM 指定返修，不并行改代码 |
+| `docs/team/reports/V206-dev3.md`、`docs/team/reviews/P511.md` 与 `P511-verify.log` | agent:dev3（V206 临时） | 候选 `eb95c48e` 一次 settings 行为；中央两份仅用原生工具写入，产品只读 |
 | `docs/team/reviews/P461.md`、`docs/team/reviews/P461-verify.log` | PM（V167已接受关闭） | verifier实际记录已收存；仅PM接受与结案，不再授权新执行 |
 | `docs/team/reviews/P465.md`、`docs/team/reviews/P465-verify.log` | PM（V170已接受关闭） | 两阶段实际记录由dev3执行，已接受merged证据；临时工具写权收回 |
 | `docs/team/reviews/P466.md`、`docs/team/reviews/P466-verify.log` | PM（V171已接受关闭） | 两阶段实际记录由verify执行，已接受merged证据；临时工具写权收回 |
