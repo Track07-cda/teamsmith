@@ -22,7 +22,7 @@ import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { sanitizeDeep } from './sanitize.js'
-import type { ActivityBlock, DetailSource, PanelBlocks, PanelData } from './types.js'
+import type { ActivityBlock, BoardBlock, DetailSource, PanelBlocks, PanelData } from './types.js'
 
 /**
  * M40 — the panel's identity is its own root (`--root`, else cwd), never an inherited `TEAM_*`.
@@ -156,6 +156,7 @@ export interface DataResult {
   tempRoot?: string
   /** Why each degraded block is degraded (diagnostics; never rendered as data). */
   errors?: Partial<Record<BlockName, string>>
+  boardLabelRefresh?: 'pending' | 'failed'
   error?: string
 }
 
@@ -449,6 +450,8 @@ export interface PanelCache {
   snapshot(): DataResult
   /** Rebuild the expired blocks (or all of them with `force`), in parallel. */
   refresh(refreshOpts?: { force?: boolean; only?: readonly BlockName[] }): Promise<DataResult>
+  /** Drop the pre-write board sample, drain its in-flight read, then read the board again. */
+  refreshBoardAfterWrite(): Promise<DataResult>
   /** Kill anything still in flight (process exit, tests). */
   dispose(): void
 }
@@ -490,7 +493,8 @@ export function createPanelCache(opts: DataOptions): PanelCache {
   const blockChildren: Partial<Record<BlockName, ReturnType<typeof spawn>>> = {}
   const state: Record<string, BlockState> = {}
   for (const name of BLOCK_NAMES) state[name] = { at: 0 }
-  let inFlight: Partial<Record<BlockName, Promise<void>>> = {}
+  const inFlight: Partial<Record<BlockName, Promise<void>>> = {}
+  let boardAfterWrite = false
   const children = new Set<ReturnType<typeof spawn>>()
 
   function snapshot(): DataResult {
@@ -526,15 +530,25 @@ export function createPanelCache(opts: DataOptions): PanelCache {
     // capacity payload carried (fresh project: no capacity.log). A capacity block that is merely
     // not built yet leaves it undefined, and the paste writes nothing — never a guessed root.
     const tempRoot = (data.capacity as PanelData['capacity'] | undefined)?.temp_root ?? state.capacity?.tempRoot
-    return { ok: true, data, activity, blocks, degraded, errors, ...(tempRoot ? { tempRoot } : {}) }
+    return { ok: true, data, activity, blocks, degraded, errors, ...(tempRoot ? { tempRoot } : {}),
+      ...(boardAfterWrite ? { boardLabelRefresh: state.board.error ? 'failed' : 'pending' } : {}) }
   }
 
   function build(name: BlockName, key: string): Promise<void> {
+    const s = state[name]
     return runBlock(BLOCK_SPECS[name], name, opts, cli as string, children, (child) => {
       blockChildren[name] = child
     }).then((outcome) => {
-      const s = state[name]
-      if (requestKey(name) !== key) return // a late response for a superseded request is dropped
+      if (requestKey(name) !== key || s !== state[name]) return // a response for a superseded read is dropped
+      if (name === 'board' && boardAfterWrite) {
+        const labels = (outcome.value as BoardBlock | undefined)?.labels
+        if (!outcome.ok || !labels || labels.unavailable) {
+          s.error = outcome.error || 'board label refresh failed'
+          s.at = Date.now() // leave subsequent attempts to the normal board cadence or a manual refresh
+          return
+        }
+        boardAfterWrite = false
+      }
       if (outcome.ok) {
         s.value = outcome.value
         s.at = Date.now()
@@ -594,6 +608,12 @@ export function createPanelCache(opts: DataOptions): PanelCache {
   return {
     snapshot,
     refresh,
+    async refreshBoardAfterWrite(): Promise<DataResult> {
+      boardAfterWrite = true
+      state.board = { at: 0, key: state.board.key }
+      await inFlight.board
+      return refresh({ force: true, only: ['board'] })
+    },
     dispose(): void {
       for (const child of children) {
         try {

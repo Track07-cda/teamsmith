@@ -5,20 +5,28 @@ import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path'
 import { sanitize } from './text-sanitize.mjs'
 
 class Usage extends Error {}
-const refuse = message => { throw new Error(message) }
+class Refusal extends Error {
+  constructor(message, reason, details) {
+    super(message)
+    this.outcome = { result: 'rejected', reason, ...details }
+  }
+}
+const refuse = (message, reason, details) => {
+  throw reason ? new Refusal(message, reason, details) : new Error(message)
+}
 const literal = value => JSON.stringify(value)
 const fileName = 'task-labels.tsv'
 
 function name(s) {
-  if (!s || s.trim() !== s || /[\t\r\n]/.test(s) || sanitize(s) !== s) refuse(`invalid label name: ${literal(s)}`)
+  if (!s || s.trim() !== s || /[\t\r\n]/.test(s) || sanitize(s) !== s) refuse(`invalid label name: ${literal(s)}`, 'invalid_field', { field: 'name' })
   return s
 }
 function color(s) {
-  if (!/^#[0-9a-fA-F]{6}$/.test(s)) refuse(`invalid label color: ${literal(s)}`)
+  if (!/^#[0-9a-fA-F]{6}$/.test(s)) refuse(`invalid label color: ${literal(s)}`, 'invalid_field', { field: 'color' })
   return s.toLowerCase()
 }
 function weight(s) {
-  if (!/^[+-]?\d+$/.test(s)) refuse(`invalid label weight: ${literal(s)}`)
+  if (!/^[+-]?\d+$/.test(s)) refuse(`invalid label weight: ${literal(s)}`, 'invalid_field', { field: 'weight' })
   return BigInt(s)
 }
 function idField(s) {
@@ -70,7 +78,7 @@ function load(dir) {
   return catalog
 }
 
-function publish({ target, mode, labels, tasks }) {
+function publish({ target, mode, labels, tasks }, outcome) {
   const dir = openSync(dirname(target), C.O_RDONLY | C.O_DIRECTORY)
   const at = file => `/proc/self/fd/${dir}/${file}`
   const tmp = at(`.task-labels-${randomUUID()}`)
@@ -87,6 +95,7 @@ function publish({ target, mode, labels, tasks }) {
       fsyncSync(fd)
     } finally { closeSync(fd) }
     renameSync(tmp, at(basename(target)))
+    outcome.replaced = true
     created = false
     try { fsyncSync(dir) } catch (err) {
       refuse(`${target} may already show the change; could not confirm persistence (${err.message}). Re-read before retrying.`)
@@ -96,14 +105,21 @@ function publish({ target, mode, labels, tasks }) {
   }
 }
 
-function write(dir, change) {
+function write(dir, change, outcome) {
   const lock = openSync(dir, C.O_RDONLY | C.O_DIRECTORY)
   try {
     const held = spawnSync('flock', ['-x', '3'], { stdio: ['ignore', 'ignore', 'pipe', lock] })
     if (held.error || held.status !== 0) refuse(`could not lock ledger ${dir}: ${held.error?.message ?? (held.stderr.toString().trim() || `flock exit ${held.status ?? held.signal}`)}`)
-    const catalog = load(dir)
-    if (change(catalog)) publish(catalog)
+    const catalog = readForWrite(() => load(dir), outcome)
+    if (change(catalog)) publish(catalog, outcome)
   } finally { closeSync(lock) }
+}
+
+function readForWrite(read, outcome) {
+  try { return read() } catch (err) {
+    outcome.readFailed = true
+    throw err
+  }
 }
 
 // Each distinct ID is scored once, even when multiple rows share it.
@@ -117,12 +133,17 @@ function scores({ labels, tasks }) {
   return id => byId.get(id) ?? { names: [], score: 0n }
 }
 
-function parse(args, allowed) {
+function parse(args, allowed, structured) {
   const fields = new Map(), values = []
   let options = true
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
     if (options && arg === '--') { options = false; continue }
+    if (options && arg === '--json' && structured) {
+      if (structured.json) throw new Usage(`unexpected or repeated option: ${arg}`)
+      structured.json = true
+      continue
+    }
     if (options && arg.startsWith('-')) {
       if (!allowed.includes(arg) || fields.has(arg)) throw new Usage(`unexpected or repeated option: ${arg}`)
       if (i + 1 === args.length) throw new Usage(`missing value: ${arg}`)
@@ -132,10 +153,11 @@ function parse(args, allowed) {
   return [values, fields]
 }
 
-function changeFor(command, args, rows) {
+function changeFor(command, args, rows, outcome) {
   const fields = { define: ['--color', '--weight'], edit: ['--name', '--color', '--weight'], delete: [], add: [], remove: [] }
   if (!Object.hasOwn(fields, command)) throw new Usage('use board label define|ls|edit|delete|add|remove')
-  const [values, opts] = parse(args, fields[command])
+  const structured = command === 'define' || command === 'edit' || command === 'delete'
+  const [values, opts] = parse(args, fields[command], structured ? outcome : undefined)
   const [key, ...more] = values
   if (command === 'add' || command === 'remove') {
     if (!more.length) throw new Usage(`board label ${command} <ID> <name>...`)
@@ -163,16 +185,16 @@ function changeFor(command, args, rows) {
   return ({ labels, tasks }) => {
     const old = labels.get(key)
     if (command === 'define') {
-      if (old) refuse(`label already defined: ${literal(key)}`)
+      if (old) refuse(`label already defined: ${literal(key)}`, 'duplicate')
       labels.set(key, { name: key, color: newColor, weight: newWeight ?? 0n })
     } else {
-      if (!old) refuse(`unknown label: ${literal(key)}`)
+      if (!old) refuse(`unknown label: ${literal(key)}`, 'not_found')
       if (command === 'delete') {
         const used = [...tasks].filter(([, names]) => names.has(key)).map(([id]) => id)
-        if (used.length) refuse(`detach ${literal(key)} from: ${used.map(literal).join(', ')}`)
+        if (used.length) refuse(`detach ${literal(key)} from: ${used.map(literal).join(', ')}`, 'in_use', { task_ids: used })
         labels.delete(key)
       } else {
-        if (newName !== key && labels.has(newName)) refuse(`label already defined: ${literal(newName)}`)
+        if (newName !== key && labels.has(newName)) refuse(`label already defined: ${literal(newName)}`, 'duplicate')
         const next = { name: newName, color: newColor ?? old.color, weight: newWeight ?? old.weight }
         if (newName === key && next.color === old.color && next.weight === old.weight) return false
         if (newName !== key) {
@@ -186,7 +208,7 @@ function changeFor(command, args, rows) {
   }
 }
 
-function main([ledger, action, ...args]) {
+function main([ledger, action, ...args], outcome) {
   const dir = () => realpathSync(ledger)
   // stdin is the board parser's output, not the label catalog.
   const rows = () => JSON.parse(readFileSync(0, 'utf8'))
@@ -215,13 +237,23 @@ function main([ledger, action, ...args]) {
       if (rest.length) throw new Usage('board label ls takes no arguments')
       for (const d of load(dir()).labels.values()) console.log(`${d.name}\t${d.color}\t${d.weight}`)
     } else {
-      const change = changeFor(command, rest, rows)
-      write(dir(), change)
+      const change = changeFor(command, rest, rows, outcome)
+      write(readForWrite(dir, outcome), change, outcome)
     }
   }
 }
 
-try { main(process.argv.slice(2)) } catch (err) {
+const outcome = { json: false, replaced: false, readFailed: false }
+try {
+  main(process.argv.slice(2), outcome)
+  if (outcome.json) console.log(JSON.stringify({ result: 'ok' }))
+} catch (err) {
+  if (outcome.json) {
+    const result = outcome.replaced ? { result: 'unconfirmed' }
+      : outcome.readFailed ? { result: 'rejected', reason: 'read_failed' }
+      : err instanceof Refusal ? err.outcome : { result: 'rejected', reason: 'not_written' }
+    console.log(JSON.stringify(result))
+  }
   console.error(`team board labels (${join(process.argv[2], fileName)}): ${err.message}`)
   process.exitCode = err instanceof Usage ? 2 : 1
 }

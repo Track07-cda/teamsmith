@@ -43,8 +43,8 @@ hidden above/below, the `done`/`dropped` windows anchored on the newest cards. T
 is tracked by entry ID and its occurrence in board order. While the focused card lives in a folded lane the
 frame carries the cursor and the band names the lane and its card count.
 
-**Labels and priority.** Define project labels with `team board label define 'Needs review' --color '#0969da' --weight 3`
-and attach them with `team board label add P14 'Needs review'`. `team help board` lists the other label commands.
+**Labels and priority.** Manage definitions under **Project settings → Task labels**. Attach a label to a task
+with `team board label add P14 'Needs review'`. `team help board` lists the label commands.
 With labels defined, press `t` to filter by a label or `o` to choose a sort order. Either choice can also be opened
 by clicking its control. Use the arrows or wheel and Enter, or click a choice. Esc cancels. The default is Recent
 updates: newest timestamps first, then undated cards in board order in active lanes and from the end of the
@@ -93,6 +93,7 @@ The settings overlay (',') opens **Project settings**. The default list puts eve
 first, followed by PM model, concurrent tasks by model, check interval, PM recoveries per hour and startup
 update check. **Project commands** contains install command, acceptance command and acceptance time limit;
 **Model records** contains committed assignments and the last PM startup, not live-process claims.
+**Task labels** lets you add or edit a name, color and weight, or delete an unused label after confirming.
 Esc returns to the originating entry, then the original overlay focus. No navigation is persisted.
 
 The settings read remains `team __panel-data --block settings` / `team config list --json`. The UI selects
@@ -193,8 +194,8 @@ The committed artifact at the time of writing:
 
 ```
 file:   skills/teamsmith/scripts/panel/panel.js
-size:   981443 bytes
-sha256: 0dbbc61704aa1f9c960c8c9fad00964cf4ca1c57ea13af307098b0412a09108e
+size:   993434 bytes
+sha256: 9d23020a7c65c3ab3aeda43d3386638d9af83c0eadea94a61b57e083bf64840b
 pins:   ink 7.1.1 · react 19.3.0 · runtime floor: node >= 20 | bun >= 1.3
 ```
 

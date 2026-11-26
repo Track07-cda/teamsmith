@@ -58,6 +58,7 @@ import { PANEL_CONF_FILE, PANEL_PAGE_FILE, readPage, readSettings, writePage, wr
 import type { Settings } from './settings.js'
 import { contrastPairs, PALETTES, resolveTheme } from './theme.js'
 import type { FrameInput, PageId, ViewState, DetailSource } from './types.js'
+import { labelOutcome, labelWriteArgs, readLabelRows, type LabelCatalog, type LabelOutcome, type LabelWrite } from './task-label-settings.js'
 
 /** The Kitty keyboard protocol's pop/push pair, written around the editor handoff (design §6). */
 const KITTY_POP = '\u001b[<u'
@@ -374,6 +375,7 @@ function frameOf(res: DataResult, activity: boolean, scroll?: number): FrameInpu
     blocks: res.blocks ?? {},
     degraded: res.degraded ?? [],
     replyBodyFailed: Boolean(res.errors?.reply_body),
+    boardLabelRefresh: res.boardLabelRefresh,
     width: widthArg || stdoutColumns || 100,
     height: heightArg || stdoutRows || 0,
     activity,
@@ -609,16 +611,17 @@ async function main(): Promise<void> {
   function run(
     argv: string[],
     env: NodeJS.ProcessEnv = process.env,
-  ): Promise<{ rc: number; out: string; err: string }> {
+    strictStdout = false,
+  ): Promise<{ rc: number; out: string; err: string; completed: boolean }> {
     return new Promise((resolve) => {
       let child: ReturnType<typeof spawn>
       try {
         child = spawn('bash', argv, { cwd: root, env: cleanIdentityEnv(env), stdio: ['ignore', 'pipe', 'pipe'] })
       } catch (e) {
-        resolve({ rc: 127, out: '', err: (e as Error).message })
+        resolve({ rc: 127, out: '', err: (e as Error).message, completed: false })
         return
       }
-      let stdout = ''
+      const stdout: Buffer[] = []
       let stderr = ''
       let settled = false
       const timer = setTimeout(() => {
@@ -629,21 +632,26 @@ async function main(): Promise<void> {
         }
         finish(124, 'timed out')
       }, 120000)
-      const finish = (rc: number, tail: string): void => {
+      const finish = (rc: number, tail: string, completed = false): void => {
         if (settled) return
         settled = true
         clearTimeout(timer)
         if (tail) stderr = `${stderr}\n${tail}`
-        resolve({ rc, out: stdout, err: stderr })
+        const bytes = Buffer.concat(stdout)
+        let out: string
+        try { out = new TextDecoder('utf-8', { fatal: strictStdout, ignoreBOM: true }).decode(bytes) } catch {
+          // An invalid UTF-8 catalog/result is not a partial receipt or an empty catalog.
+          resolve({ rc, out: '', err: stderr, completed: false })
+          return
+        }
+        resolve({ rc, out, err: stderr, completed })
       }
-      child.stdout?.on('data', (d: Buffer) => {
-        stdout += String(d)
-      })
+      child.stdout?.on('data', (d: Buffer) => { stdout.push(d) })
       child.stderr?.on('data', (d: Buffer) => {
         stderr += String(d)
       })
       child.on('error', (e) => finish(127, e.message))
-      child.on('close', (code) => finish(code ?? 1, ''))
+      child.on('close', (code) => finish(code ?? 1, '', code !== null))
     })
   }
 
@@ -723,6 +731,24 @@ async function main(): Promise<void> {
     const line = firstLine(res.err) || firstLine(res.out)
     if (!o.dryRun) refreshSettingsSoon()
     return { code: res.rc, line }
+  }
+
+  async function readLabels(): Promise<LabelCatalog> {
+    if (!teamCli) return { state: 'failed' }
+    const res = await run([teamCli, '--root', root, 'board', 'label', 'ls'], process.env, true)
+    return res.completed && res.rc === 0 ? readLabelRows(res.out) : { state: 'failed' }
+  }
+
+  async function writeLabel(write: LabelWrite): Promise<LabelOutcome> {
+    if (!teamCli) return { result: 'rejected', reason: 'not_written' }
+    const res = await run([teamCli, '--root', root, 'board', 'label', ...labelWriteArgs(write)], process.env, true)
+    const outcome = labelOutcome(res.rc, res.out, res.completed)
+    if (outcome.result === 'ok') {
+      const refresh = cache.refreshBoardAfterWrite()
+      adopt(cache.snapshot()) // hide the pre-write sample before the next board interaction
+      void refresh.then(adopt)
+    }
+    return outcome
   }
 
   /**
@@ -975,6 +1001,8 @@ async function main(): Promise<void> {
     collapse,
     setSetting,
     setTaskModel,
+    readLabels,
+    writeLabel,
     /**
      * The path kind's existence mark (M55): resolved against the project root (`~` honoured), the
      * rule from the command's own note. `not-exec` is only reachable for `exec` — a directory is

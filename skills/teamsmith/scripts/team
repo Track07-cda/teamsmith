@@ -29,7 +29,33 @@ SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ARGS=()
 _TEAM_ROOT_ARG=""
 _TEAM_HELP_REQ=0
+_TEAM_LABEL_JSON_ARGV=0
+# The ordinary global-option grammar is unchanged. For opted-in definition writes, keep
+# field values opaque even when a name is spelled like a global option (e.g. --help).
+team_label_wants_json() {
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --) return 1 ;;
+      --json) return 0 ;;
+      --name|--color|--weight|--root|--config)
+        [ "$#" -ge 2 ] || return 1
+        shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  return 1
+}
 while [ $# -gt 0 ]; do
+  if [ "$_TEAM_LABEL_JSON_ARGV" = 1 ] && [ "$#" -ge 2 ]; then
+    case "$1" in
+      --name|--color|--weight) ARGS+=("$1" "$2"); shift 2; continue ;;
+    esac
+  fi
+  if [[ ${ARGS[0]:-} == board && ${ARGS[1]:-} == label && ${#ARGS[@]} == 2 ]]; then
+    case "$1" in
+      define|edit|delete) if team_label_wants_json "${@:2}"; then _TEAM_LABEL_JSON_ARGV=1; fi ;;
+    esac
+  fi
   case "$1" in
     --root) _TEAM_ROOT_ARG="${2:?--root 需要目录}"; shift 2 ;;
     --root=*) _TEAM_ROOT_ARG="${1#*=}"; shift ;;

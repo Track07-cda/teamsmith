@@ -360,7 +360,7 @@ export interface SettingsChoices {
   note: string
 }
 
-export type SettingsPage = 'main' | 'commands' | 'records' | 'limits' | 'rule'
+export type SettingsPage = 'main' | 'commands' | 'records' | 'limits' | 'rule' | 'labels' | 'label-form' | 'label-delete'
 export interface LimitsDraft {
   original: string
   tokens: string[]
@@ -403,6 +403,7 @@ export interface SettingsChoicePicker {
    */
   category?: boolean
   ruleField?: boolean
+  labelColor?: boolean
   /** Opening read, not a later background refresh. */
   target?: { row: number; key: string; value: string; cls: string; fingerprint: string; category?: string; kind?: string; choices?: SettingsKey['choices'] }
 }
@@ -803,6 +804,7 @@ export interface FrameInput {
   /** Whether the activity column is on for this frame. */
   activity: boolean  /** Why the reply-body reader is degraded, when it is a failure and not a pending read. */
   replyBodyFailed?: boolean
+  boardLabelRefresh?: 'pending' | 'failed'
 }
 
 /** The console's UI state (TUI-only; the machine exits use the defaults). */
@@ -862,6 +864,7 @@ export interface ViewState {
   /** The focused row in the filtered project-settings row list. */
   settingsPage?: SettingsPage
   limitsDraft?: LimitsDraft | null
+  labelSettings?: import('./task-label-settings.js').LabelSettings
   settingsDetails?: string[] | null
   settingsFocus?: number
   /** The filter text (`''` = no filter). */

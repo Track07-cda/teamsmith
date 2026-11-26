@@ -136,7 +136,12 @@ server_up() { # <name> [agents] → fresh project + private tmux session + argv-
   mkdir -p "$state" "$ROOT/docs/team"
   cat > "$tmp/$1-wrapper.sh" <<EOF
 #!/usr/bin/env bash
-printf '%s\n' "\$*" >> "$tmp/$1-argv.log"
+# Only the settings label check needs to distinguish one argument from several words.
+if [[ "$1" == settings && \${3:-} == board && \${4:-} == label ]]; then
+  printf '%s\n' "\$(printf '%q ' "\$@")" >> "$tmp/$1-argv.log"
+else
+  printf '%s\n' "\$*" >> "$tmp/$1-argv.log"
+fi
 exec bash "$skill/scripts/team" "\$@"
 EOF
   chmod +x "$tmp/$1-wrapper.sh"
@@ -221,7 +226,8 @@ cap_has() { local f="$tmp/$current/${2:-cap}.txt"; cap >"$f"; assert_has "$f" "$
 cap_not() { local f="$tmp/$current/${2:-cap}.txt"; cap >"$f"; assert_not "$f" "$1" "捕获里没有 [$1]"; }
 cap_match() { local f="$tmp/$current/${2:-cap}.txt"; cap >"$f"; assert_match "$f" "$1" "$3"; }
 keys() { tmux -L "$sock" send-keys -t "$sess:panel" "$@" 2>/dev/null; }
-type_text() { tmux -L "$sock" send-keys -t "$sess:panel" -l "$1" 2>/dev/null; }
+# -- keeps a literal leading dash out of tmux's option parser. Leave stderr visible.
+type_text() { tmux -L "$sock" send-keys -t "$sess:panel" -l -- "$1"; }
 click_at() { tmux -L "$sock" send-keys -t "$sess:panel" -l "$(printf '\033[<0;%s;%sM' "$1" "$2")" 2>/dev/null; }
 argv_log() { printf '%s/%s-argv.log' "$tmp" "$current"; }
 # M65（直写 / 交互路径无读取）：wrapper 的 argv 日志按行切片 —— 一次交互 spawn 了哪些子进程。
@@ -481,6 +487,13 @@ scn_settings() {
   section "settings · 精选操作/入口返回/过滤/错误/短长列表/填高/点击/q"
   server_up settings
   policy_new 'routine=example/one analysis=example/two verify=example/three' 'example/pm' || bad "策略准备失败"
+  local -a project_cli=(bash "$skill/scripts/team" --root "$ROOT")
+  local label='-用户 反馈' task_id=T21 label_file="$ROOT/docs/team/task-labels.tsv"
+  local board_file="$ROOT/docs/team/BOARD.md" proof="$tmp/$current"
+  "${project_cli[@]}" board add "$task_id" 'Label settings task' > "$proof-seed.log" || { bad "真实任务未创建"; return 1; }
+  "${project_cli[@]}" board row "$task_id" > "$proof/task-before.txt" || { bad "无法读取种子任务"; return 1; }
+  assert_match "$proof/task-before.txt" '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+Z' "真实任务已有更新时间"
+  conf_set 'lang=zh' 'page=1' 'activity=1' 'mouse=1' 'density=comfortable'
   start_panel
   local pref_before height stats r u d gap
   pref_before="$(sha "$state/panel.conf")"
@@ -495,7 +508,7 @@ scn_settings() {
   assert_not "$default_frame" "立即生效" "普通行没有逐行生效徽章"
   assert_not "$default_frame" "未设 · 默认" "普通行直接给有效值"
   assert_not "$default_frame" "result=" "设置不显示审计"
-  assert_eq "C3默认可选行=10（包含两个入口）" "$((r+u+d))" "10"
+  assert_eq "C3默认可选行=11（包含三个入口）" "$((r+u+d))" "11"
   assert_eq "打开设置没有写偏好" "$(sha "$state/panel.conf")" "$pref_before"
   filter_to TEAM_PULSE_INTERVAL
   wait_row interval "有效值与必要生效提示" "检查间隔" "900 秒" "team pulse restart" || { bad "检查间隔未显示"; return 1; }
@@ -511,16 +524,106 @@ scn_settings() {
   assert_has "$tmp/$current/value-filter.txt" "routine" "值搜索不区分大小写"
   keys Escape
   wait_row clear "Esc清过滤但不关闭设置" "› routine" "项目命令" || bad "Esc过滤返回错误"
-  # 两个入口都沿原位置返回；鼠标单击只聚焦，第二击才打开。
-  local y before
-  before="$(sha "$(cfg)")"
-  y="$(cap_now | grep -n '项目命令' | head -1 | cut -d: -f1)"
+  # 通用鼠标导航移到任务标签；项目命令仍走原助手查内容和返回。
+  local y before audit_before board_before args_start first custom row_after cancel_start catalog_before association expected
+  before="$(sha "$(cfg)")"; audit_before="$(sha "$(audit_log)")"; board_before="$(sha "$board_file")"; args_start="$(argv_count)"
+  y="$(cap_now | grep -n '任务标签' | head -1 | cut -d: -f1)"
   [ -n "$y" ] && click_at 8 "$y"
-  wait_row nav-focus "单击聚焦项目命令" "› 项目命令" || bad "入口未聚焦"
+  wait_row nav-focus "单击聚焦任务标签" '› 任务标签' '╭─ 项目设置' '!╭─ 任务标签' || { bad "入口未聚焦"; return 1; }
   assert_eq "单击不改配置" "$(sha "$(cfg)")" "$before"
-  y="$(cap_now | grep -n '› 项目命令' | head -1 | cut -d: -f1)"
+  y="$(cap_now | grep -n '› 任务标签' | head -1 | cut -d: -f1)"
   [ -n "$y" ] && click_at 8 "$y"
-  wait_row commands "第二击打开命令" "╭─ 项目命令" "验收命令" || { bad "命令入口未打开"; return 1; }
+  wait_row labels "第二击打开空标签目录" '╭─ 任务标签' '› 新增标签' '暂无标签' || { bad "空标签入口未打开"; return 1; }
+  [ ! -e "$label_file" ] && ok "读取不创建标签目录" || bad "首读创建了标签目录"
+
+  keys Enter
+  wait_row label-add "首个标签表单" '╭─ 新增标签' '› 名称' '权重  0' || { bad "新增表单未打开"; return 1; }
+  keys Enter
+  wait_editor 名称 || { bad "名称编辑未打开"; return 1; }
+  type_text "$label" || { bad "发送标签名称失败（tmux 退出 $?）"; return 1; }
+  pty_key_when "接收完整名称" "$label" Enter || { bad "名称未输入"; return 1; }
+  wait_row label-name "完整名称进入草稿" '╭─ 新增标签' "名称  $label" '!╭─ 名称' || { bad "表单未保留名称"; return 1; }
+  keys Down Enter
+  wait_picker 颜色 '› ● 蓝色' || { bad "具名颜色未显示"; return 1; }
+  keys Enter
+  wait_row label-blue "蓝色进入草稿" '╭─ 新增标签' '颜色  ● 蓝色' || { bad "颜色未进入表单"; return 1; }
+  keys Down Down Enter
+  wait_row label-first "首个标签保存后读回" '╭─ 任务标签' "$label  ● 蓝色  0" '标签已保存' || { bad "首个标签未读回"; return 1; }
+  first="$(printf '%s\t%s\t%s' "$label" '#0969da' 0)"
+  "${project_cli[@]}" board label ls > "$proof/label-first.tsv" || { bad "无法读回首个标签"; return 1; }
+  assert_eq "首行名称、蓝色和权重与真实命令一致" "$(< "$proof/label-first.tsv")" "$first"
+
+  "${project_cli[@]}" board label edit --color '#123456' -- "$label" &&
+    "${project_cli[@]}" board label add "$task_id" -- "$label" || { bad "无法准备自定义色和任务关联"; return 1; }
+  keys Escape
+  wait_row labels-back "标签目录返回鼠标打开时的入口" '› 任务标签' '╭─ 项目设置' || { bad "标签目录未返回原处"; return 1; }
+  keys Enter
+  wait_row label-custom "重新读取自定义色" '╭─ 任务标签' "$label  ● 自定义颜色  0" || { bad "自定义色未读回"; return 1; }
+  keys Down Enter
+  wait_row label-edit "编辑已有标签" '╭─ 编辑标签' "名称  $label" '颜色  ● 自定义颜色' || { bad "编辑表单未打开"; return 1; }
+  keys Down Down Enter
+  wait_editor 权重 || { bad "权重编辑未打开"; return 1; }
+  keys C-u
+  type_text '-9007199254740993' || { bad "发送标签权重失败（tmux 退出 $?）"; return 1; }
+  pty_key_when "接收完整权重" '-9007199254740993' Enter || { bad "权重未输入"; return 1; }
+  wait_row label-weight "完整整数进入草稿" '╭─ 编辑标签' '权重  -9007199254740993' '!╭─ 权重' || { bad "表单未保留完整权重"; return 1; }
+  keys Down Enter
+  wait_row label-precise "只改权重后读回" '╭─ 任务标签' "$label  ● 自定义颜色  -9007199254740993" '标签已保存' || { bad "权重未读回"; return 1; }
+  custom="$(printf '%s\t%s\t%s' "$label" '#123456' '-9007199254740993')"
+  "${project_cli[@]}" board label ls > "$proof/label-weight.tsv" || { bad "无法读回精确权重"; return 1; }
+  assert_eq "真实命令保留自定义 RGB 和完整十进制" "$(< "$proof/label-weight.tsv")" "$custom"
+  expected="$(printf '%q ' --root "$ROOT" board label edit --json --weight '-9007199254740993' -- "$label")"
+  assert_eq "子进程只有权重变更，原名为一个参数" "$(grep -F ' board label edit ' "$(argv_log)")" "$expected"
+
+  catalog_before="$(sha "$label_file")"; cancel_start="$(argv_count)"
+  keys Enter
+  wait_row label-cancel-before "重新打开已保存标签" '╭─ 编辑标签' "名称  $label" || { bad "已保存标签未打开"; return 1; }
+  keys Enter
+  wait_editor 名称 "$label" || { bad "原名未进入编辑器"; return 1; }
+  keys C-u
+  type_text '未保存草稿' || { bad "发送取消前的名称失败（tmux 退出 $?）"; return 1; }
+  pty_key_when "接收取消前的名称" '未保存草稿' Enter || { bad "取消对照未输入"; return 1; }
+  wait_row label-cancel-draft "取消前确认草稿已修改" '名称  未保存草稿' '!╭─ 名称' || { bad "没看到取消前的草稿"; return 1; }
+  focus_row '^│ › 取消' || { bad "取消未聚焦"; return 1; }
+  keys Enter
+  wait_row label-cancelled "取消后重新读取" '╭─ 任务标签' "$label  ● 自定义颜色  -9007199254740993" '!未保存草稿' || { bad "取消后没有原标签"; return 1; }
+  assert_eq "取消不改标签文件" "$(sha "$label_file")" "$catalog_before"
+  argv_since "$cancel_start" "$proof/label-cancel.argv"
+  assert_no_match "$proof/label-cancel.argv" ' board label (define|edit|delete|add|remove) ' "取消不调用写命令"
+  assert_has "$proof/label-cancel.argv" ' board label ls ' "取消调用原读取命令"
+  keys Enter
+  wait_row label-reopen "再次打开没有取消的草稿" '╭─ 编辑标签' "名称  $label" '!未保存草稿' || { bad "重开仍有取消的草稿"; return 1; }
+
+  "${project_cli[@]}" board ls --label "$label" > "$proof/label-association-before.txt" || { bad "无法核对真实关联"; return 1; }
+  association="$(< "$proof/label-association-before.txt")"
+  assert_has "$proof/label-association-before.txt" "$task_id" "删除前真实关联存在"
+  focus_row '^│ › 删除标签' || { bad "删除标签未聚焦"; return 1; }
+  keys Enter
+  wait_row label-confirm "删除必须另行确认确切名称" '╭─ 确认删除标签' "$label" '取消' || { bad "没有独立的删除确认"; return 1; }
+  focus_row '^│ › 删除 +│' || { bad "确认删除未聚焦"; return 1; }
+  keys Enter
+  wait_row label-refused "真实命令拒绝删除在用标签并读回" '标签仍在使用，无法删除。任务： T21' '当前标签' "$label  ·  自定义颜色  ·  -9007199254740993" '!标签已删除' || { bad "未显示真实的拒绝和当前标签"; return 1; }
+  expected="$(printf '%q ' --root "$ROOT" board label delete --json -- "$label")"
+  assert_eq "确认后只调用一次原删除命令" "$(grep -F ' board label delete ' "$(argv_log)")" "$expected"
+  assert_eq "拒绝删除不改标签文件" "$(sha "$label_file")" "$catalog_before"
+  "${project_cli[@]}" board ls --label "$label" > "$proof/label-association-after.txt" || { bad "拒绝后关联不可读"; return 1; }
+  assert_eq "拒绝后关联仍在" "$(< "$proof/label-association-after.txt")" "$association"
+  "${project_cli[@]}" board row "$task_id" > "$proof/task-after.txt" || { bad "无法读回种子任务"; return 1; }
+  row_after="$(< "$proof/task-after.txt")"
+  assert_eq "原任务行和更新时间不变" "$row_after" "$(< "$proof/task-before.txt")"
+  assert_eq "标签操作不改 BOARD" "$(sha "$board_file")" "$board_before"
+  assert_eq "标签操作不改项目配置" "$(sha "$(cfg)")" "$before"
+  assert_eq "标签操作不改配置审计" "$(sha "$(audit_log)")" "$audit_before"
+  assert_eq "标签操作不改面板偏好" "$(sha "$state/panel.conf")" "$pref_before"
+  argv_since "$args_start" "$proof/label-sequence.argv"
+  assert_no_match "$proof/label-sequence.argv" ' config (set|set-task-model) ' '标签操作不调用配置写命令'
+  keys Escape
+  wait_row label-leave-form "从拒绝的编辑页返回标签目录" '╭─ 任务标签' "$label  ● 自定义颜色  -9007199254740993" || { bad "编辑未返回目录"; return 1; }
+  keys Escape
+  wait_row label-leave "退出标签目录返回原入口" '› 任务标签' '╭─ 项目设置' || { bad "未返回标签入口"; return 1; }
+
+  open_secondary commands || return 1
+  wait_row commands "键盘打开原命令内容" '╭─ 项目命令' '安装命令' '验收命令' '验收最长时间' || { bad "命令内容不可达"; return 1; }
   stats="$(wait_settings_frame "$height" commands-count '项目命令' '安装命令')" || { bad "未读到完整的项目命令帧"; return 1; }
   read -r r u d gap <<<"$stats"
   assert_eq "项目命令只有3项" "$((r+u+d))" "3"
@@ -565,12 +668,12 @@ open(p,'w').write(s)
 PYCFG
   start_panel
   open_view
-  want_count=68
+  want_count=69
   for h in 45 33 30 25; do
     resize_panel 120 "$h" || { bad "$h行resize失败"; continue; }
     if stats="$(wait_settings_frame "$h" "height$h" '项目设置' routine)"; then
       read -r r u d gap <<<"$stats"
-      assert_eq "$h行：可见$r + 上方隐藏$u + 下方隐藏$d = 当前68操作" "$((r+u+d))" "$want_count"
+      assert_eq "$h行：可见$r + 上方隐藏$u + 下方隐藏$d = 当前69操作" "$((r+u+d))" "$want_count"
       [ "$gap" -le 1 ] && ok "$h行卡片填高" || bad "$h行卡片未填高"
       [ "$h" = 45 ] && prev_rows="$r"
       if [ "$h" = 30 ] && [ -n "$prev_rows" ]; then
@@ -591,6 +694,10 @@ PYCFG
   wait_row en-records "英文记录入口" "╭─ Model records" "No dispatch record" || bad "英文记录入口失败"
   keys Escape
   wait_row en-records-back "英文记录返回" "Project settings" "Model records" || bad "英文记录返回失败"
+  filter_to 'Task labels'; keys Enter
+  wait_row en-labels "英文窄屏键盘进入标签" '╭─ Task labels' 'Add label' 'Custom color' || { bad "英文标签入口失败"; return 1; }
+  keys Escape
+  wait_row en-labels-back "英文窄屏返回过滤后的标签入口" '╭─ Project settings' '› Task labels' || bad "英文标签未返回原入口"
 }
 
 scn_choices() {

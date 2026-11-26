@@ -219,7 +219,7 @@ cmd.task.arg.--agent	the seat the brief is meant for; without it the first seat 
 cmd.task.arg.--deps	the ids this task depends on, space separated.
 cmd.task.arg.--issue	the forge issue number this task came from, when there is one.
 cmd.board.title	read and write the board rows
-cmd.board.what	Manage board rows and project labels. List the whole board as Markdown, or explicitly filter by label or sort by priority. Separate leading-dash label names from options with `--`.
+cmd.board.what	Manage board rows and project labels. List the whole board as Markdown, or explicitly filter by label or sort by priority. Separate leading-dash label names from options with `--`. Add `--json` to `board label define`, `edit` or `delete` for a structured outcome on stdout.
 cmd.board.when	Use it when a task moves between stages, when you want to see the whole board at once, or when a row needs correcting.
 cmd.board.example	team board set P1 wip
 cmd.board.read	the board

@@ -14,7 +14,8 @@ import { writeSync } from 'node:fs'
 import { Box, Text, useApp, useCursor, useInput } from 'ink'
 import { effectiveSetting, settingLabel, isSecondsSetting, settingTiming, limitsTokens, limitFields, limitsValue, withLimitsTokens } from './project-settings.js'
 import type { BoardBlock, BoardChoice, BoardDetailRef, BoardPicker, BoardView, SettingsPage, LimitsDraft } from './types.js'
-import { settingsRecordDetails, layout, boardCatalog, effectiveBoardView, projectBoard, resolveFocus, focusRefOf, focusRow, rowKey, settingsRowFocusable, settingsViewRows, boardFocusRef, rowSourceOf } from './layout.js'
+import { settingsRecordDetails, layout, boardCatalog, effectiveBoardView, projectBoard, resolveFocus, focusRefOf, focusRow, rowKey, settingsRowFocusable, settingsViewRows, labelSettingsPage, settingsCanFilter, boardFocusRef, rowSourceOf } from './layout.js'
+import { LABEL_COLORS, LABEL_FIELDS, labelFieldName, type LabelCatalog, type LabelDefinition, type LabelOutcome, type LabelSettings, type LabelWrite } from './task-label-settings.js'
 import type { BoardProjection, LayoutInput, SettingsRow } from './layout.js'
 import { clockOf } from './format.js'
 import { fill, stringsFor, type Strings } from './strings/index.js'
@@ -157,6 +158,8 @@ export interface PanelApi {
    * next interaction sees. Never awaited on the interaction path.
    */
   refreshSettingsSoon(): void
+  readLabels(): Promise<LabelCatalog>
+  writeLabel(write: LabelWrite): Promise<LabelOutcome>
   /** One `team config set-task-model <category> <model>` invocation (P232). */
   setTaskModel(
     category: string,
@@ -211,7 +214,7 @@ interface Size {
  */
 export function frameSignature(frame: FrameInput): string {
   const { timestamp: _stamp, ...panel } = frame.panel ?? {}
-  return JSON.stringify([panel, frame.degraded ?? [], frame.activityBlocks ?? [], frame.blocks ?? {}, frame.activity])
+  return JSON.stringify([panel, frame.degraded ?? [], frame.activityBlocks ?? [], frame.blocks ?? {}, frame.activity, frame.boardLabelRefresh])
 }
 
 function liveSize(fallback: FrameInput): Size {
@@ -333,6 +336,13 @@ export function App({
   const [limitsDraft, setLimitsDraft] = useState<LimitsDraft | null>(null)
   const limitsDraftRef = useRef<LimitsDraft | null>(null)
   const ruleFieldRef = useRef<'model' | 'count' | null>(null)
+  const [labelSettings, setLabelSettings] = useState<LabelSettings>({ catalog: { state: 'loading' }, draft: null })
+  const labelSettingsRef = useRef(labelSettings)
+  const labelFieldRef = useRef<'name' | 'weight' | null>(null)
+  const updateLabelSettings = useCallback((next: LabelSettings) => {
+    labelSettingsRef.current = next
+    setLabelSettings(next)
+  }, [])
   const [settingsDetails, setSettingsDetails] = useState<string[] | null>(null)
   const settingsDetailsRef = useRef<string[] | null>(null)
   const settingsBackRef = useRef<{ page: SettingsPage; focus: number; filter: string; offset: number | null }[]>([])
@@ -554,6 +564,7 @@ export function App({
     settingRowRef.current = null
     settingConfirmRef.current = null
     ruleFieldRef.current = null
+    labelFieldRef.current = null
     setSettingConfirm(null)
   }, [])
 
@@ -598,6 +609,13 @@ export function App({
       return
     }
     if (mode === 'setting') {
+      const field = labelFieldRef.current
+      if (field) {
+        const state = labelSettingsRef.current
+        if (state.draft) updateLabelSettings({ ...state, draft: { ...state.draft, value: { ...state.draft.value, [field]: text } } })
+        closeCompose()
+        return
+      }
       if (ruleFieldRef.current) {
         const field = ruleFieldRef.current
         const draft = limitsDraftRef.current
@@ -766,7 +784,7 @@ export function App({
       sendingRef.current = false
       setBusy(false)
     }
-  }, [api, mode, updateDraft, closeCompose, setSettingsFilter, pathMarkNote])
+  }, [api, mode, updateDraft, closeCompose, setSettingsFilter, pathMarkNote, updateLabelSettings])
 
   const runAction = useCallback(
     async (kind: 'flush' | 'standby') => {
@@ -1080,7 +1098,7 @@ export function App({
 
   /** The view's focusable rows as the last assembly saw them (the walk must match the screen). */
   const settingsRowsNow = useCallback((): SettingsFocusRow[] => {
-    const rows = settingsViewRows(dataRef.current.blocks?.settings, settingsFilterRef.current, stringsRef.current, settingsPageRef.current, limitsDraftRef.current, settingsDetailsRef.current, settingsWindowRef.current?.width)
+    const rows = settingsViewRows(dataRef.current.blocks?.settings, settingsFilterRef.current, stringsRef.current, settingsPageRef.current, limitsDraftRef.current, settingsDetailsRef.current, settingsWindowRef.current?.width, labelSettingsRef.current)
     return rows.filter(settingsRowFocusable)
   }, [])
 
@@ -1324,6 +1342,14 @@ export function App({
     setStatus(null)
   }, [])
 
+  const reloadLabels = useCallback(async () => {
+    const pending: LabelCatalog = { state: 'loading' }
+    updateLabelSettings({ ...labelSettingsRef.current, catalog: pending })
+    const catalog = await api.readLabels()
+    // Returning and opening again can start a newer read; its list is the one to keep.
+    if (labelSettingsRef.current.catalog === pending) updateLabelSettings({ ...labelSettingsRef.current, catalog })
+  }, [api, updateLabelSettings])
+
   const saveLimits = useCallback(async () => {
     const draft = limitsDraftRef.current
     if (!draft || sendingRef.current) return
@@ -1403,6 +1429,15 @@ export function App({
       }
       const entry = picker.entries[index < 0 ? picker.index : index]
       if (!entry) return
+      if (picker.labelColor) {
+        const state = labelSettingsRef.current
+        if (state.draft && entry.value !== state.draft.value.color) {
+          updateLabelSettings({ ...state, draft: { ...state.draft, value: { ...state.draft.value, color: entry.value } } })
+        }
+        choicePickerRef.current = null
+        setChoicePicker(null)
+        return
+      }
       // keep-unset cancels: no compose editor, no write, no audit line, no temporary file. The
       // writer has no removal operation, so the view never claims it deleted the line.
       if (entry.kind === 'keep-unset') {
@@ -1443,7 +1478,7 @@ export function App({
       }
       void writeChoiceValue(target, entry.value)
     },
-    [choiceTarget, openCompose, selectBoardView, writeChoiceValue],
+    [choiceTarget, openCompose, selectBoardView, updateLabelSettings, writeChoiceValue],
   )
 
   const moveChoicePicker = useCallback((delta: number) => {
@@ -1498,16 +1533,7 @@ export function App({
     [api],
   )
 
-  const closeSettingsView = useCallback(() => {
-    if (settingsFilterRef.current) {
-      settingsFilterRef.current = ''
-      setSettingsFilter('')
-      settingsFocusRef.current = 0
-      setSettingsFocus(0)
-      settingsOffsetRef.current = null
-      setSettingsOffset(null)
-      return
-    }
+  const returnSettingsPage = useCallback(() => {
     const back = settingsBackRef.current.pop()
     if (back) {
       if (settingsPageRef.current === 'limits') { limitsDraftRef.current = null; setLimitsDraft(null) }
@@ -1522,8 +1548,32 @@ export function App({
       settingsDetailsRef.current = null
       setSettingsDetails(null)
       setStatus(null)
+    }
+    return Boolean(back)
+  }, [])
+
+  const discardLabelForm = useCallback(() => {
+    updateLabelSettings({ ...labelSettingsRef.current, draft: null, notice: undefined })
+    returnSettingsPage()
+    void reloadLabels()
+  }, [reloadLabels, returnSettingsPage, updateLabelSettings])
+
+  const closeSettingsView = useCallback(() => {
+    if (labelSettingsPage(settingsPageRef.current) && sendingRef.current) return
+    if (settingsFilterRef.current) {
+      settingsFilterRef.current = ''
+      setSettingsFilter('')
+      settingsFocusRef.current = 0
+      setSettingsFocus(0)
+      settingsOffsetRef.current = null
+      setSettingsOffset(null)
       return
     }
+    if (settingsPageRef.current === 'label-form' && !settingsDetailsRef.current) {
+      discardLabelForm()
+      return
+    }
+    if (returnSettingsPage()) return
     setSettingsView(false)
     settingsViewRef.current = false
     // D5: the wheel's offset does not survive the view (reopening starts at the top).
@@ -1537,7 +1587,63 @@ export function App({
     setOverlay(true)
     setOverlayIndex(settingsOrigin)
     overlayIndexRef.current = settingsOrigin
-  }, [api, settingsOrigin])
+  }, [api, discardLabelForm, returnSettingsPage, settingsOrigin])
+
+  const saveLabel = useCallback(async (remove: boolean) => {
+    const { draft, catalog } = labelSettingsRef.current
+    if (!draft || catalog.state !== 'ready' || sendingRef.current) return
+    const { original, value } = draft
+    let write: LabelWrite
+    if (remove) {
+      if (!original) return
+      write = { command: 'delete', name: original.name }
+    } else if (!original) write = { command: 'define', value }
+    else {
+      const changes: Partial<LabelDefinition> = {}
+      for (const field of LABEL_FIELDS) if (value[field] !== original[field]) changes[field] = value[field]
+      if (!Object.keys(changes).length) { discardLabelForm(); return }
+      write = { command: 'edit', name: original.name, changes }
+    }
+    sendingRef.current = true
+    setBusy(true)
+    try {
+      const outcome = await api.writeLabel(write)
+      if (remove) returnSettingsPage() // the separate confirmation never stays open after a write
+      if (outcome.result === 'ok') returnSettingsPage()
+      updateLabelSettings({ catalog, draft: outcome.result === 'ok' ? null : draft, notice: { command: write.command, outcome } })
+      await reloadLabels()
+    } finally {
+      sendingRef.current = false
+      setBusy(false)
+    }
+  }, [api, discardLabelForm, reloadLabels, returnSettingsPage, updateLabelSettings])
+
+  const openLabelRow = useCallback((row: Extract<SettingsFocusRow, { kind: 'label' }>, at: number) => {
+    const state = labelSettingsRef.current
+    if (row.action === 'reload') { void reloadLabels(); return }
+    if (row.action === 'cancel') { closeSettingsView(); return }
+    if (row.action === 'add' || row.action === 'edit') {
+      const original = row.definition ?? null
+      updateLabelSettings({ ...state, notice: undefined, draft: { original, value: original ?? { name: '', color: '', weight: '0' } } })
+      enterSettingsPage('label-form')
+      return
+    }
+    if (!state.draft) return
+    if (row.action === 'save' || row.action === 'confirm') { void saveLabel(row.action === 'confirm'); return }
+    if (row.action === 'delete') { enterSettingsPage('label-delete'); return }
+    if (row.action === 'name' || row.action === 'weight') {
+      labelFieldRef.current = row.action
+      openCompose('setting', state.draft.value[row.action])
+      return
+    }
+    const color = state.draft.value.color
+    const entries: SettingsChoiceEntry[] = Object.values(LABEL_COLORS).map((value) => ({ kind: 'value', value }))
+    if (color && !entries.some((entry) => entry.value === color)) entries.unshift({ kind: 'current', value: color })
+    const picker: SettingsChoicePicker = { row: at, key: '', kind: 'color', entries,
+      index: Math.max(0, entries.findIndex((entry) => entry.value === color)), interval: null, labelColor: true }
+    choicePickerRef.current = picker
+    setChoicePicker(picker)
+  }, [closeSettingsView, enterSettingsPage, openCompose, reloadLabels, saveLabel, updateLabelSettings])
 
   /**
    * Builds the entries of a category picker (P232). The vocabulary is exactly the project's own:
@@ -1579,11 +1685,21 @@ export function App({
       const rows = settingsRowsNow()
       // `-1` = the focused row: resolve it once here, so the picker/editor carries a real index
       // (the focus walk passes -1 from the Enter handler).
-      const at = index < 0 ? settingsFocusRef.current : index
+      const labels = labelSettingsPage(settingsPageRef.current)
+      if (labels && sendingRef.current) return
+      const at = index < 0 ? (labels ? Math.min(settingsFocusRef.current, rows.length - 1) : settingsFocusRef.current) : index
       const row = rows[at]
       if (!row) return
       if (limitsDraftRef.current?.confirm) { void saveLimits(); return }
-      if (row.kind === 'nav') { enterSettingsPage(row.page); return }
+      if (row.kind === 'nav') {
+        enterSettingsPage(row.page)
+        if (row.page === 'labels') {
+          updateLabelSettings({ catalog: { state: 'loading' }, draft: null })
+          void reloadLabels()
+        }
+        return
+      }
+      if (row.kind === 'label') { openLabelRow(row, at); return }
       if (row.kind === 'info') {
         if (!settingsDetailsRef.current) enterSettingsPage(settingsPageRef.current, [row.text])
         return
@@ -1699,7 +1815,7 @@ export function App({
       openCompose('setting', key.set || key.value !== '' ? key.value : key.default)
 
     },
-    [buildCategoryEntries, buildChoiceEntries, openCompose, enterSettingsPage, saveLimits, closeSettingsView, settingsRowsNow],
+    [buildCategoryEntries, buildChoiceEntries, openCompose, enterSettingsPage, openLabelRow, reloadLabels, saveLimits, closeSettingsView, settingsRowsNow, updateLabelSettings],
   )
 
   /** The detail view's file tabs: `←`/`→` clamp at the ends (no wrap — the row shows the order). */
@@ -1824,6 +1940,10 @@ export function App({
 
   const dispatch = useCallback(
     (action: Action) => {
+      if (settingsViewRef.current && labelSettingsPage(settingsPageRef.current)) {
+        if (sendingRef.current || labelFieldRef.current) return
+        if (choicePickerRef.current ? !action.kind.startsWith('choice-') : !action.kind.startsWith('settings-')) return
+      }
       switch (action.kind) {
         case 'compose':
           openCompose('message')
@@ -2005,7 +2125,8 @@ export function App({
           ? strings.composeStandbyTitle
           : mode === 'filter'
             ? strings.settingFilterTitle
-            : ruleFieldRef.current ? ruleFieldRef.current === 'model' ? strings.settingsRuleModel : strings.settingsRuleCount
+            : labelFieldRef.current ? labelFieldName(strings, labelFieldRef.current)
+              : ruleFieldRef.current ? ruleFieldRef.current === 'model' ? strings.settingsRuleModel : strings.settingsRuleCount
               : settingRowRef.current ? settingLabel(strings, settingRowRef.current.key) : strings.settingsViewTitle
     const input = boxed
       ? [composeTrayTop(trayTitle, size.columns), ...rawInput.map((line) => `${TRAY_V} ${line}`)]
@@ -2024,7 +2145,7 @@ export function App({
             ? strings.composeHint
             : mode === 'reason'
               ? strings.composeReasonHint
-              : ruleFieldRef.current ? strings.settingsFieldHint : settingConfirm ? strings.settingsConfirmHint
+              : labelFieldRef.current || ruleFieldRef.current ? strings.settingsFieldHint : settingConfirm ? strings.settingsConfirmHint
                 : isSecondsSetting(settingRowRef.current?.key ?? '') ? strings.settingsSecondsEditHint : strings.settingsEditHint,
         ]
       : []
@@ -2058,6 +2179,7 @@ export function App({
       settingsEditing: composing,
       settingsPage,
       limitsDraft,
+      labelSettings,
       settingsDetails,
       settingsFocus,
       settingsFilter,
@@ -2121,6 +2243,7 @@ export function App({
     settingsView,
     settingsPage,
     limitsDraft,
+    labelSettings,
     settingsDetails,
     settingsFocus,
     settingsFilter,
@@ -2198,12 +2321,14 @@ export function App({
     // Preserve the last drawn selection before either path replaces its data.
     if (!fromProps && (last === fresh || frameSignature(last) === frameSignature(fresh))) return
     const block = fresh.blocks?.board
-    if (pageRef.current === 4) retainBoardFocus(block)
-    const old = boardViewRef.current
-    const view = effectiveBoardView(block, old)
-    if (view.label !== old.label || view.priority !== old.priority) {
-      boardViewRef.current = view
-      setBoardView(view)
+    if (!fresh.boardLabelRefresh) {
+      if (pageRef.current === 4) retainBoardFocus(block)
+      const old = boardViewRef.current
+      const view = effectiveBoardView(block, old)
+      if (view.label !== old.label || view.priority !== old.priority) {
+        boardViewRef.current = view
+        setBoardView(view)
+      }
     }
     if (boardPickerRef.current && !boardCatalog(block).length) {
       boardPickerRef.current = null
@@ -2486,6 +2611,7 @@ export function App({
         return
       }
       if (settingsViewRef.current && !composing) {
+        if (labelSettingsPage(settingsPageRef.current) && sendingRef.current) return
         if (key.escape) {
           closeSettingsView()
           return
@@ -2494,7 +2620,7 @@ export function App({
           moveSettingsFocus(key.upArrow ? -1 : 1)
           return
         }
-        if (input === '/') {
+        if (input === '/' && settingsCanFilter(settingsPageRef.current)) {
           openCompose('filter')
           return
         }

@@ -20,6 +20,7 @@
 // table columns / abbreviates states. Blocks whose source has no data collapse and yield the space.
 
 import { MODEL_SETTINGS, CHECK_SETTINGS, COMMAND_SETTINGS, effectiveSetting, isSecondsSetting, settingTiming, settingsPageTitle, limitsTokens, limitFields, limitsValue, limitsDisplay } from './project-settings.js'
+import { LABEL_FIELDS, labelColorName, labelFieldName, labelNotice, type LabelDefinition, type LabelField, type LabelSettings } from './task-label-settings.js'
 import { fmtAge, fmtMB, GLYPH, clockOf, shortBranch, sparkline } from './format.js'
 import { markdownMemo } from './markdown.js'
 import { fill, keyLabel, OVERLAY_LABEL_W } from './strings/index.js'
@@ -1250,15 +1251,17 @@ function boardControls(ctx: Ctx, board: BoardProjection): PlacedLine[] {
 function kanbanBlock(ctx: Ctx): Block | null {
   const { s, blocks, deg } = ctx
   const board = blocks.board
-  if (!board) return null
+  const refresh = ctx.input.boardLabelRefresh
+  if (!board && !refresh) return null
   const one = (lines: PlacedLine[]): Block => ({
     id: 'kanban',
     full: true,
     priority: 1,
     separator: 'none',
     lines,
-    summary: { line: truncLine(ln(seg(` ${s.boardHeadingCount}`.replace('{n}', String(board.total ?? 0)), 'heading')), ctx.width) },
+    summary: { line: truncLine(ln(seg(` ${s.boardHeadingCount}`.replace('{n}', String(board?.total ?? 0)), 'heading')), ctx.width) },
   })
+  if (refresh) return one([{ line: truncLine(ln(seg(` ${refresh === 'pending' ? s.settingsLabelBoardPending : s.settingsLabelBoardFailed}`, refresh === 'pending' ? 'dim' : 'warn')), ctx.width) }])
   if (deg.has('board')) return one([{ line: truncLine(ln(seg(` ${s.dash}`, 'dim')), ctx.width) }])
   const projected = ctx.kanban
   if (!projected) return null
@@ -1680,7 +1683,8 @@ export type SettingsRow =
   | { kind: 'category'; category: SettingsCategory }
   | { kind: 'assignment'; assignment: SettingsAssignment }
   | { kind: 'pm-launch'; launch: SettingsPmLaunch }
-  | { kind: 'nav'; page: 'commands' | 'records'; label: string }
+  | { kind: 'nav'; page: 'commands' | 'records' | 'labels'; label: string }
+  | { kind: 'label'; action: LabelField | 'add' | 'edit' | 'save' | 'cancel' | 'delete' | 'confirm' | 'reload'; label: string; value?: string; rgb?: string; definition?: LabelDefinition }
   | { kind: 'info'; text: string }
   | { kind: 'rule'; action: 'select' | 'add' | 'save' | 'model' | 'count' | 'delete'; index: number; label: string; value: string }
 
@@ -1692,13 +1696,52 @@ export function settingsSourceLabel(s: Strings, source: string): string {
   return source || s.dash
 }
 
+export const labelSettingsPage = (page?: SettingsPage): boolean => page === 'labels' || page === 'label-form' || page === 'label-delete'
+export const settingsCanFilter = (page?: SettingsPage): boolean => page !== 'label-form' && page !== 'label-delete'
+
+function labelSettingsRows(s: Strings, page: SettingsPage, state: LabelSettings, match: (...parts: string[]) => boolean): SettingsRow[] {
+  const { draft, catalog, notice } = state
+  const canWrite = catalog.state === 'ready'
+  const reload: SettingsRow[] = catalog.state === 'failed' ? [{ kind: 'label', action: 'reload', label: s.settingsLabelReload }] : []
+  if (page === 'labels') {
+    if (!canWrite) return reload
+    return [
+      ...(match(s.settingsLabelAdd) ? [{ kind: 'label', action: 'add', label: s.settingsLabelAdd } as const] : []),
+      ...catalog.rows.filter((d) => match(d.name, labelColorName(s, d.color), d.weight))
+        .map((d) => ({ kind: 'label' as const, action: 'edit' as const, label: d.name, definition: d,
+          value: `${labelColorName(s, d.color)}  ${d.weight}`, rgb: d.color })),
+    ]
+  }
+  if (!draft) return []
+  const cancel = { kind: 'label', action: 'cancel', label: s.settingsLabelCancel } as const
+  if (page === 'label-delete') return [
+    { kind: 'info', text: draft.original?.name ?? '' },
+    ...(canWrite ? [{ kind: 'label', action: 'confirm', label: s.settingsLabelDeleteAction } as const] : reload), cancel,
+  ]
+  const rows: SettingsRow[] = LABEL_FIELDS.map((field) => ({ kind: 'label', action: field, label: labelFieldName(s, field),
+    value: (field === 'color' ? labelColorName(s, draft.value.color) : draft.value[field]) || s.settingsUnfilled,
+    ...(field === 'color' && draft.value.color ? { rgb: draft.value.color } : {}) }))
+  if (canWrite) rows.push({ kind: 'label', action: 'save', label: s.settingsSave })
+  rows.push(cancel)
+  if (draft.original && canWrite) rows.push({ kind: 'label', action: 'delete', label: s.settingsLabelDelete })
+  rows.push(...reload)
+  if (notice && canWrite) {
+    const current = catalog.rows.filter((d) => d.name === draft.original?.name || d.name === draft.value.name)
+    rows.push({ kind: 'group', label: s.settingsLabelCurrent, tone: 'heading' },
+      ...(current.length ? current.map((d) => ({ kind: 'info' as const, text: `${d.name}  ·  ${labelColorName(s, d.color)}  ·  ${d.weight}` }))
+        : [{ kind: 'info' as const, text: s.settingsLabelNoCurrent }]))
+  }
+  return rows
+}
+
 export function settingsViewRows(block: SettingsBlock | undefined, filter: string, s: Strings,
-  page: SettingsPage = 'main', limits?: LimitsDraft | null, details?: string[] | null, detailWidth = 120): SettingsRow[] {
+  page: SettingsPage = 'main', limits?: LimitsDraft | null, details?: string[] | null, detailWidth = 120, labels?: LabelSettings): SettingsRow[] {
   if (details) return details.flatMap((line) => line.split('\n').flatMap((text) => diagnoseChunks(text, Math.max(1, detailWidth - 3), Infinity)).map((text) => ({ kind: 'info' as const, text })))
-  const out: SettingsRow[] = []
-  if (!block || !Array.isArray(block.keys)) return out
   const needle = filter.trim().toLowerCase()
   const match = (...parts: string[]): boolean => !needle || parts.some((p) => String(p ?? '').toLowerCase().includes(needle))
+  if (labelSettingsPage(page)) return labels ? labelSettingsRows(s, page, labels, match) : []
+  const out: SettingsRow[] = []
+  if (!block || !Array.isArray(block.keys)) return out
   const keys = (names: readonly string[]): SettingsRow[] => names.flatMap((name) => {
     const key = block.keys.find((k) => k.name === name)
     return key && match(keyLabel(s, name), name, effectiveSetting(key)) ? [{ kind: 'key' as const, key }] : []
@@ -1743,7 +1786,7 @@ export function settingsViewRows(block: SettingsBlock | undefined, filter: strin
       ...(block.models?.policy?.categories ?? []).filter((c) => match(c.category, c.model)).map((category) => ({ kind: 'category' as const, category })),
       ...keys(MODEL_SETTINGS)])
     group(s.settingsChecks, keys(CHECK_SETTINGS))
-    for (const [page, label] of [['commands', s.settingsCommands], ['records', s.settingsRecords]] as const)
+    for (const [page, label] of [['commands', s.settingsCommands], ['records', s.settingsRecords], ['labels', s.settingsLabelTitle]] as const)
       if (match(label)) out.push({ kind: 'nav', page, label })
   }
   // Errors are independent of filtering: hiding keys must not hide genuine diagnostics.
@@ -1898,18 +1941,20 @@ function settingsCliHint(s: Strings, rows: SettingsRow[], focus: number): string
 function settingsBlock(ctx: Ctx): Block | null {
   const { s, blocks, deg } = ctx
   const width = blockInnerW(ctx)
+  const page = ctx.view.settingsPage ?? 'main'
+  const labels = labelSettingsPage(page) && !ctx.view.settingsDetails ? ctx.view.labelSettings : undefined
   const one = (lines: PlacedLine[], settings?: SettingsWindow): Block => ({
     id: 'settings',
     full: true,
     priority: 1,
     separator: 'none',
-    title: settingsPageTitle(s, ctx.view.settingsPage ?? 'main'),
+    title: page === 'label-form' && labels?.draft && !labels.draft.original ? s.settingsLabelAdd : settingsPageTitle(s, page),
     lines,
     settings,
     summary: { line: truncLine(ln(seg(` ${s.settingsViewTitle}`, 'heading')), ctx.width) },
   })
   const block = blocks.settings
-  if (deg.has('settings') || !block || !Array.isArray(block.keys) || !block.keys.length) {
+  if (!labelSettingsPage(page) && (deg.has('settings') || !block || !Array.isArray(block.keys) || !block.keys.length)) {
     return one([
       placedWithHits(
         truncLine(ln(seg(` ${s.settingsViewTitle}`, 'heading'), seg('  '), seg(s.dash, 'dim')), width),
@@ -1918,7 +1963,7 @@ function settingsBlock(ctx: Ctx): Block | null {
       ),
     ])
   }
-  const rows = settingsViewRows(block, ctx.view.settingsFilter ?? '', s, ctx.view.settingsPage, ctx.view.limitsDraft, ctx.view.settingsDetails, width)
+  const rows = settingsViewRows(block, ctx.view.settingsFilter ?? '', s, ctx.view.settingsPage, ctx.view.limitsDraft, ctx.view.settingsDetails, width, ctx.view.labelSettings)
   let count = 0
   for (const r of rows) if (settingsRowFocusable(r)) count += 1
   // P32: the block's budget is the **lines** it may draw below the card frame — the assembly hands
@@ -1931,8 +1976,14 @@ function settingsBlock(ctx: Ctx): Block | null {
   // P232: the command's own policy diagnosis (missing/retired keys, an unmapped category map) is
   // part of the view: a legacy contract must say so, with the CLI route the command itself names.
   const focusedRow = rows.filter(settingsRowFocusable)[focus]
-  const selectedHint = focusedRow?.kind === 'assignment' || focusedRow?.kind === 'pm-launch'
-    ? settingsRecordDetails(focusedRow, s).join('\n') : settingsCliHint(s, rows, focus)
+  const labelNotes = labels ? [
+    labels.notice ? labelNotice(s, labels.notice) : '',
+    labels.catalog.state === 'failed' ? s.settingsLabelReadFailed : labels.catalog.state === 'loading' ? s.settingsLabelReading
+      : page === 'labels' && !labels.catalog.rows.length ? s.settingsLabelEmpty : '',
+  ] : []
+  const selectedHint = labels ? [...new Set(labelNotes)].join('\n')
+    : focusedRow?.kind === 'assignment' || focusedRow?.kind === 'pm-launch'
+      ? settingsRecordDetails(focusedRow, s).join('\n') : settingsCliHint(s, rows, focus)
   const hintLines = selectedHint.split('\n').filter(Boolean).flatMap((text) => diagnoseChunks(text, Math.max(8, width - 3), Infinity))
   const shownHint = hintLines.slice(0, Math.max(0, room - 5))
   const tailLines = shownHint.length
@@ -2022,6 +2073,7 @@ function settingsBlock(ctx: Ctx): Block | null {
     const lines: PlacedLine[] = []
     const put = (line: Line): void => { lines.push({ line: truncLine(line, width) }) }
     const entryLabel = (e: SettingsChoiceEntry): string => {
+      if (choice.labelColor) return e.kind === 'current' ? s.settingsLabelKeepColor : labelColorName(s, e.value)
       const base =
         e.kind === 'keep-unset'
           ? choice.entries.some((entry) => entry.kind === 'default') ? s.settingsChoiceKeepUnset : s.settingsKeepEmpty
@@ -2053,14 +2105,15 @@ function settingsBlock(ctx: Ctx): Block | null {
       )
     }
     const list = choiceList(ctx, entries, choice.index, width, Math.max(1, room - SETTINGS_TAIL_ROWS - 6),
-      (e, selected) => ln(seg(entryLabel(e), selected ? 'selected' : e.kind === 'value' || e.kind === 'current' || e.kind === 'default' ? 'text' : 'dim')))
+      (e, selected) => ln(choice.labelColor ? swatch(e.value) : null, choice.labelColor ? ' ' : null,
+        seg(entryLabel(e), selected ? 'selected' : e.kind === 'value' || e.kind === 'current' || e.kind === 'default' ? 'text' : 'dim')))
     lines.push(...list.lines)
     put(ln(seg('')))
     put(ln(seg(` ${choice.category ? s.settingsCategoryPickerHint : s.settingsChoiceHint}`, 'dim')))
     // P32: a picker covers the row list, so what its own entries do not use stays inside the card
     // (the fill rule below); a short picker must not leave the pane half blank either.
     while (lines.length < room) put(ln(seg('')))
-    return { ...one(lines, { focus: list.index, offset: list.offset, visible: list.visible, count: entries.length, width }), title: choice.ruleField ? s.settingsRuleModel : choice.category ? choice.key : keyLabel(s, choice.key) }
+    return { ...one(lines, { focus: list.index, offset: list.offset, visible: list.visible, count: entries.length, width }), title: choice.labelColor ? s.settingsLabelColor : choice.ruleField ? s.settingsRuleModel : choice.category ? choice.key : keyLabel(s, choice.key) }
   }
 
   const lines: PlacedLine[] = []
@@ -2085,6 +2138,9 @@ function settingsBlock(ctx: Ctx): Block | null {
             : r.kind === 'assignment'
               ? settingsAssignmentLine(ctx, r.assignment, focused, width)
               : r.kind === 'pm-launch' ? settingsPmLaunchLine(ctx, r.launch, focused, width)
+                : r.kind === 'label' ? { line: ln(seg(`${focused ? s.settingsCursor : ' '} `, 'accent'),
+                    seg(r.definition ? truncateW(r.label, Math.max(1, width - dispWidth(r.value ?? '') - 8)) : r.label, focused ? 'selected' : 'text'),
+                    r.value ? '  ' : null, r.rgb ? swatch(r.rgb) : null, r.rgb ? ' ' : null, seg(r.value ?? '')) }
                 : { line: ln(seg(`${focused ? s.settingsCursor : ' '} `, 'accent'),
                     seg(r.kind === 'info' ? r.text : r.label, focused ? 'selected' : 'text'),
                     seg(r.kind === 'nav' ? '  ›' : r.kind === 'rule' && r.value ? '  ' + r.value : '', 'text')) }
@@ -2492,8 +2548,8 @@ function keyBandBlock(ctx: Ctx, rowsAvailable = true): Block {
       : [
           { text: s.keySettingsBack, action: { kind: 'settings-close' } },
           { text: s.keyRows, action: { kind: 'settings-scroll', delta: 1 } },
-          { text: settingsViewRows(ctx.blocks.settings, ctx.view.settingsFilter ?? '', s, ctx.view.settingsPage, ctx.view.limitsDraft, ctx.view.settingsDetails).filter(settingsRowFocusable)[ctx.view.settingsFocus ?? 0]?.kind === 'nav' ? s.keyOpen : s.keyCategoryPick, action: { kind: 'settings-open', index: -1 } },
-          { text: s.keyFilter, action: { kind: 'settings-filter' } },
+          { text: labelSettingsPage(ctx.view.settingsPage) || settingsViewRows(ctx.blocks.settings, ctx.view.settingsFilter ?? '', s, ctx.view.settingsPage, ctx.view.limitsDraft, ctx.view.settingsDetails).filter(settingsRowFocusable)[ctx.view.settingsFocus ?? 0]?.kind === 'nav' ? s.keyOpen : s.keyCategoryPick, action: { kind: 'settings-open', index: -1 } },
+          ...(settingsCanFilter(ctx.view.settingsPage) ? [{ text: s.keyFilter, action: { kind: 'settings-filter' as const } }] : []),
         ]
     : ctx.view.boardPicker ? [
         { text: s.keySettingsBack, action: { kind: 'choice-close' } },

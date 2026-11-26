@@ -205,7 +205,7 @@ cmd.task.arg.--agent	这份任务书给哪个席位；不写就用名册里的�
 cmd.task.arg.--deps	这个任务依赖的 id，空格分隔。
 cmd.task.arg.--issue	这个任务对应的 forge issue 号（如果有）。
 cmd.board.title	读和写看板的行
-cmd.board.what	管理看板任务与项目标签。默认列出 Markdown 看板，也可按标签筛选或按优先级排序。标签名以连字符开头时，用 `--` 将它与选项分开。
+cmd.board.what	管理看板任务与项目标签。默认列出 Markdown 看板，也可按标签筛选或按优先级排序。标签名以连字符开头时，用 `--` 将它与选项分开。`board label define`、`edit`、`delete` 加 `--json` 后会在标准输出返回结构化结果。
 cmd.board.when	任务在阶段之间移动时用它，想一眼看完整块看板时用它，某一行要更正时也用它。
 cmd.board.example	team board set P1 wip
 cmd.board.read	看板

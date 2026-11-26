@@ -17,6 +17,7 @@ export function settingTiming(s: Strings, key: string, category?: string): strin
 }
 export function settingsPageTitle(s: Strings, page: SettingsPage): string {
   return page === 'commands' ? s.settingsCommands : page === 'records' ? s.settingsRecords
+    : page === 'labels' ? s.settingsLabelTitle : page === 'label-form' ? s.settingsLabelEdit : page === 'label-delete' ? s.settingsLabelConfirmDelete
     : page === 'limits' ? s.label_TEAM_MODEL_LIMITS : page === 'rule' ? s.settingsRuleEdit : s.settingsViewTitle
 }
 // Keep every token, including repeated expressions, in its original position. The writer owns
