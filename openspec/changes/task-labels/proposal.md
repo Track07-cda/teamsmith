@@ -8,7 +8,7 @@ Six board states say where a task stands, not what kind of work it is or what sh
 
 - Add `team board label` to define, list, edit or delete project labels and attach or detach several names on one board task. Keep names, colors, weights and associations in one file beside `BOARD.md`; a project that has never used labels needs no migration or new file.
 - Keep plain `team board ls` as the current Markdown inspection. Filtering and priority sorting require explicit options. Priority is the sum of distinct attached labels' weights; ties keep file order.
-- On Pulse's board page, add read-only label and order choices; show labels and priority in the existing task detail on either owning page. Keep board order and the existing newest history window by default. Explicit priority changes order within each state, not state or task identity.
+- On Pulse's board page, add read-only label and order choices; show labels and priority in the existing task detail on either owning page. Keep the board’s existing recent-first order by default, including its order for rows without an update time. A label filter can narrow either view. Only choosing priority changes the order within a state; ties follow the original board file, not the update time.
 
 ## Capabilities
 

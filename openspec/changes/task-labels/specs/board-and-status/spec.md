@@ -71,7 +71,7 @@
 
 - **GIVEN** a board with an extra `Issue` column, a placeholder, a separate risk table and a historical duplicate ID, and the pre-label outputs for plain `board ls` and `board row`
 - **WHEN** the same reads run with no label file, then with a label file that is invalid, and the ordinary task, status and assignment writes run on the old supported layout
-- **THEN** the reads still produce their prior rows and warnings; the added row follows the existing column count, each edit changes only its owning column, and none of the commands writes the label file
+- **THEN** the reads still produce their prior rows and warnings; the added row and edits preserve the existing business column positions, including a blank Issue cell, and use the existing optional task-time rules; untargeted rows stay unchanged and none of the commands writes the label file
 
 #### Scenario: Files provide the tie-break, not id or selected label order
 
