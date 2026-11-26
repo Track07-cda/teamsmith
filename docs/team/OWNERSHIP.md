@@ -27,6 +27,7 @@
 | `docs/team/reports/V201-verify.md` | agent:verify（V201 临时） | 只审待命方案，原 V196 分支、会话文件及证据保留，在本任务不写 |
 | `docs/team/reports/P505-dev3.md` | PM（P505 已接受） | 现行及标签候选的连续键读数 |
 | `docs/team/tasks/P509-panel-board-batched-keys-fix.md` 中的局部看板导航、生成构建及原场景断言、`docs/team/reports/P509-dev3.md` | agent:dev3（P509 临时） | 现行主线只修已有看板快速方向键，不写 P497/V196 或工作页 |
+| `docs/team/reports/V202-verify.md`、`docs/team/reviews/{P509.md,P509-verify.log}` | agent:verify（V202 临时，排在 V201 后） | 仅独立私有实景短验，中央两份仅由 `team review` 生成 |
 | `docs/team/reports/P506-dev2.md` | PM（P506 已接受） | 项目设置的标签操作与唯一写入入口探索 |
 | `openspec/changes/project-label-management/**`、`docs/team/reports/P507-dev2.md` | agent:dev2（P507 临时） | 正式方案及必要变更条款；不写产品或被暂停的标签候选 |
 | `docs/team/reviews/P461.md`、`docs/team/reviews/P461-verify.log` | PM（V167已接受关闭） | verifier实际记录已收存；仅PM接受与结案，不再授权新执行 |
