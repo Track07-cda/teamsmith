@@ -1269,11 +1269,9 @@ BTIMES
   bframe dup-detail '' '' '' 'Board body M39 proof' || return
   keys Escape
   bframe dup-back "$dup_re" "$reordered" '› · M39 第二条' || return
-  keys Down
-  bframe dup-next "$dup_re" "$reordered" '› · M39 第一条' || return
-  keys Down
+  keys Down Down
   bframe dup-3 "$dup_re" "$reordered" '› · M48 第三条' || return
-  ok '同 ID 是两个停靠点：等时按文件序；刷新上移后第二行仍唯一选中；打开/返回不串行'
+  ok '同 ID 是两个停靠点：等时按文件序；刷新上移后第二行仍唯一选中；打开/返回不串行；连按两次 ↓ 到第三条'
   board_at 6 set M48 blocked && board_at 7 set M48 blocked || return
   assert_eq '缺时间的 M48 实际改状态才补时间，重复 set 保留第六秒' \
     "$("$board_cli" board row M48 | awk -F'|' '{gsub(/[ \t]/, "", $7); gsub(/[ \t]/, "", $8); print $7 "," $8}')" 'blocked,2026-01-02T00:00:06Z'

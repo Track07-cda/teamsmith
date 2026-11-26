@@ -182,8 +182,8 @@ The committed artifact at the time of writing:
 
 ```
 file:   skills/teamsmith/scripts/panel/panel.js
-size:   975138 bytes
-sha256: d654596f29c8572d7742f523d147193478e0e155feaa3d366fc1ba7daf797e06
+size:   975249 bytes
+sha256: 215a8f9106745664a44e21251c6b0c1c266fe3637e9c8142a8a0de9a2ed9d8be
 pins:   ink 7.1.1 · react 19.3.0 · runtime floor: node >= 20 | bun >= 1.3
 ```
 

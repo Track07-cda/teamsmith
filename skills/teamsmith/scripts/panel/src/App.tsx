@@ -926,6 +926,12 @@ export function App({
     [laneFoldedNow, saveSettings],
   )
 
+  const selectBoardRow = useCallback((next: FocusRef) => {
+    // The next key in the same Ink read must see this row before React draws it.
+    focusRef.current = next
+    setFocus(next)
+  }, [])
+
   const moveFocus = useCallback(
     (laneDelta: number, cardDelta: number) => {
       const board = renderedBoardRef.current
@@ -940,7 +946,7 @@ export function App({
           i = (i + laneDelta + lanes.length) % lanes.length
           const card = board.lanes.get(lanes[i])?.[0]
           if (card) {
-            setFocus(focusRefOf(board, card))
+            selectBoardRow(focusRefOf(board, card))
             setLaneOffset((prev) => ({ ...prev, [lanes[i]]: 0 }))
             return
           }
@@ -954,14 +960,16 @@ export function App({
       const index = inLane.indexOf(row) + cardDelta
       const next = inLane[index]
       if (!next || next === row) return
-      setFocus(focusRefOf(board, next))
+      selectBoardRow(focusRefOf(board, next))
       const win = lanesRef.current.find((w) => w.lane === current.lane)
       if (win?.visible) {
-        const start = boardWindowStart(index, win.offset, win.visible, win.count)
-        setLaneOffset((prev) => ({ ...prev, [current.lane]: start }))
+        setLaneOffset((prev) => ({
+          ...prev,
+          [current.lane]: boardWindowStart(index, prev[current.lane] ?? win.offset, win.visible, win.count),
+        }))
       }
     },
-    [laneFoldedNow],
+    [laneFoldedNow, selectBoardRow],
   )
 
   /**
@@ -1788,9 +1796,12 @@ export function App({
         case 'queue-list':
           setViewEntry(null)
           return
-        case 'focus':
-          setFocus({ lane: action.lane, id: action.id, nth: action.nth ?? 0 })
+        case 'focus': {
+          const row = { lane: action.lane, id: action.id, nth: action.nth ?? 0 }
+          if (renderedBoardRef.current) selectBoardRow(row)
+          else setFocus(row)
           return
+        }
         case 'reply-click': {
           // One action, two behaviours (the kanban's rule): a click on an unfocused row focuses it,
           // a click on the already focused row opens its body.
@@ -1835,7 +1846,7 @@ export function App({
         case 'open-focused':
           if (pageRef.current === 2) openWorkFocused()
           else if (action.row) {
-            setFocus(action.row)
+            selectBoardRow(action.row)
             openDetail(action.row.id)
           } else openBoardFocused()
           return
@@ -1897,7 +1908,7 @@ export function App({
           return
       }
     },
-    [chooseChoiceOption, closeChoicePicker, closeSettingsView, collapse, cyclePref, goPage, moveBoardFocus, moveChoicePicker, moveDetailTab, moveFocus, moveSettingsFocus, openBoardFocused, openCompose, openDetail, openSettingsRow, openSettingsView, openWorkFocused, runAction, scrollDetail, scrollLane, scrollSettings, toggleLaneFold, updateScroll],
+    [chooseChoiceOption, closeChoicePicker, closeSettingsView, collapse, cyclePref, goPage, moveBoardFocus, moveChoicePicker, moveDetailTab, moveFocus, moveSettingsFocus, openBoardFocused, openCompose, openDetail, openSettingsRow, openSettingsView, openWorkFocused, runAction, scrollDetail, scrollLane, scrollSettings, selectBoardRow, toggleLaneFold, updateScroll],
   )
 
   const effectiveActivity = activityPinned ? data.activity : settings.activity
