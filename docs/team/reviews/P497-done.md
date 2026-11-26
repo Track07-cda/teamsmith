@@ -1,0 +1,1 @@
+- 2026-11-26T03:10:02Z · `team close P497 --status done` · OK：复验记录 docs/team/reviews/P497.md（判定 PASS）

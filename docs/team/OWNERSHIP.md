@@ -13,8 +13,8 @@
 | `docs/team/reports/**`、`docs/team/threads/**` | agent:* | 报告与线程（只写自己的报告文件） |
 | `docs/team/reports/P495-dev2.md`、`docs/team/reviews/P495.md` | PM（P495 已接受） | 保留探索记录，无后续写权 |
 | `openspec/changes/task-labels/**`（除实施任务勾选）、`docs/team/reports/{P496-dev2,V195-dev3,V205-dev3}.md` | PM（原范围和兼容修订均已接受） | 保留原方案、修订 `f36d1e51` 和独立回执，规划只读 |
-| `docs/team/tasks/P497-task-labels-apply.md` 明授的标签 CLI、Pulse 看板、相关测试及实施勾选范围，`docs/team/reports/P497-dev.md` | agent:dev（P497 恢复） | 只把原标签接入已有最近更新、连续方向键和时间布局；不得改设置、巡检或其它项目 |
-| `docs/team/reports/V196-verify.md`、`docs/team/reviews/P497.md` 与 `P497-verify.log` | agent:verify（V196 临时） | 候选已接受，合并 `c9fbb5e7` 仅做一致性与公开排序短核；中央两份证据只由原生 `team review` 生成，产品只读 |
+| `docs/team/reports/{P497-dev,V196-verify}.md`、`docs/team/reviews/P497.md` 与 `P497-verify.log` | PM（P497/V196 已接受） | 候选和合并记录已分别保全，临时写权收回 |
+| `openspec/changes/task-labels/**`、原生唯一归档目录、`openspec/specs/{board-and-status,panel}/spec.md` 的五个目标条款、`docs/team/reports/A20-dev2.md` | agent:dev2（A20 临时） | 只同步既定条款、原样移入六文件；不写项目设置变更、产品或实际运行状态 |
 | `docs/team/reports/P498-dev2.md`、`docs/team/reviews/P498.md` | PM（探索接受） | 仅保留探索及接入裁定 |
 | `docs/team/reports/{P499-dev2,V197-dev3}.md` | PM（方案接受） | 已接受的初始化方案审阅记录，收回原写权 |
 | `docs/team/reports/P500-dev-bob.md`、`docs/team/reports/V198-dev3.md`、`docs/team/reviews/P500.md` 与 `P500-verify.log` | PM（候选与合并证据接受） | P500/V198 已完成，收回产品与中央记录暂时写权 |
@@ -29,7 +29,8 @@
 | `docs/team/reports/P505-dev3.md` | PM（P505 已接受） | 现行及标签候选的连续键读数 |
 | `docs/team/reports/{P509-dev3,V202-verify}.md`、`docs/team/reviews/{P509.md,P509-verify.log}` | PM（P509/V202 已接受） | 候选与合并的实际帧结论已核，产品/测试和中央验证临时写权撤回 |
 | `docs/team/reports/P506-dev2.md` | PM（P506 已接受） | 项目设置的标签操作与唯一写入入口探索 |
-| `openspec/changes/project-label-management/**`、`docs/team/reports/{P507-dev2,V203-dev3}.md` | PM（方案已接受） | 等原标签独立验收合并并核接口；尚不开放产品写入 |
+| `docs/team/reports/{P507-dev2,V203-dev3}.md`、`openspec/changes/project-label-management/` 方案及需求正文 | PM（受审方案） | 项目设置原方案已独立接受，不改受审范围 |
+| `docs/team/tasks/P511-project-label-management-apply.md` 明授的标签定义命令、面板、一个现有设置测试、清单和报告 | agent:dev-bob（P511 临时） | 只实现项目设置入口与同一写入结果，不写正式规格、标签看板行为、巡检、当前项目或发布 |
 | `docs/team/reviews/P461.md`、`docs/team/reviews/P461-verify.log` | PM（V167已接受关闭） | verifier实际记录已收存；仅PM接受与结案，不再授权新执行 |
 | `docs/team/reviews/P465.md`、`docs/team/reviews/P465-verify.log` | PM（V170已接受关闭） | 两阶段实际记录由dev3执行，已接受merged证据；临时工具写权收回 |
 | `docs/team/reviews/P466.md`、`docs/team/reviews/P466-verify.log` | PM（V171已接受关闭） | 两阶段实际记录由verify执行，已接受merged证据；临时工具写权收回 |

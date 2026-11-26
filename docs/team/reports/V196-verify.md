@@ -1,10 +1,10 @@
 # V196 · 任务标签与看板独立验证
 
-agent: verify   status: CANDIDATE PASS / MERGED SHA PENDING   time: 2026-11-26T03:00:54Z
+agent: verify   status: CANDIDATE PASS / MERGED PASS   time: 2026-11-26T03:05:56Z
 
 branch: `task/V196-task-labels-behaviour-verify`   PR/MR: -
 
-**冻结候选 `f9bb3f3512e1efc96f2f21a5b5d36ce7bc77f9d8` 的 V196 独立验收通过，待 PM 接受后核对合并版本。** 真实终端 46 项通过、0 项失败；此前未到达的英文 59 列鼠标选择、草稿编辑、选择不写入项目与偏好，以及筛选刷新后焦点与 Enter 读到正确任务，均有本次原画面和回执。前四轮正式 FAIL 保留；未把候选结果当成合并版本或全量发布检查通过。
+**V196 候选和合并后短核均通过。** 候选 `f9bb3f35` 的真实终端 46 项通过、0 项失败；合并提交 `c9fbb5e7` 的技能文件和面板产物与候选逐字一致，私有项目实跑公开优先级排序，`T2=8` 且六条输出和候选前已保存的原始输出逐字一致。前四轮正式 FAIL 保留；本次未在合并版重跑终端或全量发布检查。
 
 ## 首轮 `6ce75ccf` 历史结果
 
@@ -225,4 +225,31 @@ TEAM_B3_KEEP=1 bash skills/teamsmith/tests/panel-b3.sh board </dev/null
 | 普通／草稿 `Ctrl+o`，选择不写入 | 普通看板按键前后 `en-priority.txt` 和 `en-plain-only.txt` 离线 `cmp` 退出 0；画面未打开选择器或跳页。草稿 `en-compose.txt` 显示 `Enter send`，`root/.pi/team/state/editor.receipt` 保存同一项目的 `root/.pi/team/state/draft.md`，未发送。实际场景在后续故意改标签前，已用两次 `cmp` 确认选项使用前后的 `task-labels.tsv` 和 `panel.conf` 逐字相同；配置原件另比对 SHA-256 `4f7b691342621627f84f7a22de464e74a4a26883d12e0e2ec1899d96d95d7f3f` 相同。 |
 | 删除最后一条匹配同号后，焦点和 Enter | `fallback-before.txt` 唯一焦点 `M39 First`，同时能看到 `M39 Second` / `Inserted`，看不到 `Outside`。删除三个表内 M39 并刷新后，同一次请求回执 `live-labels/fallback-board-reply.json` 只剩 `M39 Outside`（`taskTable:false`、无 `labels`）；匹配的 `M48 Neighbor` 和 `M51 Other` 都还在。`fallback-focus.txt` 唯一焦点为 `M48 Neighbor`，不显示任何 M39；Enter 的 `fallback-detail.txt` 标题 `detail M48`、正文 `Label board M48 proof`，真实 `live-labels/detail.json` 的 `id=M48`、`files[0].path=docs/team/tasks/M48-board.md`。 |
 
-**验收边界：** 候选 `3.1` 的独立行为证据至此齐备，由 PM 接受并决定合并；合并版本尚未验证，`3.1` 未由 verifier 改勾。旧 CLI、缓存、机器和静态画面仍引用实际保存的记录；未新跑 §38、全套、模型、依赖安装、隔离重建或发布。候选检出前后均干净，不写真实项目。`/var/tmp/v196-r5.i7bCWF/` 保留 runner、完整 `pty.log`、退出值和 socket 路径，原终端夹具、帧与 JSON 保留。报告暂存后的 `ledger-ban.sh` 退出 0：`scope=published files=3065 hits=0 names=ok user=resolved`。
+**候选轮验收边界：** 候选 `3.1` 的独立行为证据至此齐备，PM 已接受；合并后另见下一节，`3.1` 未由 verifier 改勾。旧 CLI、缓存、机器和静态画面仍引用实际保存的记录；未新跑 §38、全套、模型、依赖安装、隔离重建或发布。候选检出前后均干净，不写真实项目。`/var/tmp/v196-r5.i7bCWF/` 保留 runner、完整 `pty.log`、退出值和 socket 路径，原终端夹具、帧与 JSON 保留。报告暂存后的 `ledger-ban.sh` 退出 0：`scope=published files=3065 hits=0 names=ok user=resolved`。
+
+## 合并后 · `c9fbb5e705e15763048c803adee9187ca18cfef5`
+
+**PASS，仅限同一实现和实际排序入口。** 固定检出 `/var/tmp/p497-merged.4qrHfV` 为 detached `HEAD`，前后干净；本地引用 `main` 和 `public/dev` 均包含该提交。该提交相对父提交有 24 个 `skills/teamsmith/` 路径变化；相对已验候选 `f9bb3f35`，同目录差异 **0 个路径**，目录对象均为 `4059942059c829ee6dbdb69635ee5fc8070aee93`。面板 `panel.js` 与候选和合并树分别 `cmp` 成功，SHA-256 `0dbbc61704aa1f9c960c8c9fad00964cf4ca1c57ea13af307098b0412a09108e`。
+
+```sh
+TEAM_GATES='bash /var/tmp/v196-merged.PgdJjV/run.sh' bash skills/teamsmith/scripts/team review P497 \
+  --dir /var/tmp/p497-merged.4qrHfV --branch c9fbb5e705e15763048c803adee9187ca18cfef5
+# 原生 review PASS（1 秒）；外层 rc=0
+bash /var/tmp/p497-merged.4qrHfV/skills/teamsmith/scripts/team \
+  --root /var/tmp/v196-merged.PgdJjV/repo board ls --sort priority
+# 原始 stdout 共 188 字节，stderr 0 字节，命令 rc=0
+```
+
+```text
+T8  wip      8  ["Security"]       Security
+T2  todo     8  ["Bug","Urgent"]  Offline drafts
+T6  blocked  5  ["Urgent"]         Urgent work
+T9  todo     3  ["Bug"]            Notifications
+T5  todo     0  ["Docs"]           Docs
+T1  done     0  []                 Unlabeled
+priority_expected_order=1 T2_score=8 prior_output_cmp=0 private_inputs_unchanged=1
+```
+
+原 stdout 是 TSV，SHA-256 `24c77e039e3680ed90014aecb51227dc093f7792d5743a60e711696c7de4a7a6`。只在一次性 `repo/` 里复制首轮 `board-six.md`、`catalog-six.tsv`，输入执行后 `cmp` 不变，输出和首轮 `priority-original.tsv` 逐字相同。仅实跑这一次；没重新跑算分反例、终端、构建或其他选段，也没动真实团队项目、勾任务或归档。
+
+**记录及限制：** 候选原生回执已单独存于 `.pi/team/state/evidence/P497/candidate/`；合并记录是本次 `docs/team/reviews/P497.md`、`P497-verify.log`。私有 runner 用 `cp … /dev/stdout` 记录 TSV 时覆盖了原生输出的开头，并留下 NUL 字节，`team review` 报了该日志格式警告；原生 `PASS`、实际 TSV 和后续断言行仍在，未重写原生输出或重跑排序。独立保留的 `priority.tsv`、`priority.stderr`、两份路径清单和 `artifact-check.log` 在 `/var/tmp/v196-merged.PgdJjV/`；后者仅只读比较固定提交和已保存原件，补齐日志开头缺失的文件同一性回执。
